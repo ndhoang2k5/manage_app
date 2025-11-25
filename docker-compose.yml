@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # 1. Database Service
+  database:
+    build: ./database
+    container_name: fashion_db
+    restart: always
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: manage_app_database
+      MYSQL_ROOT_PASSWORD: Nguyenduyhoang2005
+    ports:
+      - "3307:3306" # Map port ra ngoài máy host (3307) để tránh đụng MySQL có sẵn
+    volumes:
+      - db_data:/var/lib/mysql
+
+  # 2. Backend Service
+  backend:
+    build: ./backend
+    container_name: fashion_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      - database
+    environment:
+      - DB_HOST=database # Tên service database ở trên
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=Nguyenduyhoang2005
+      - DB_NAME=manage_app_database
+    volumes:
+      - ./backend:/app # Hot-reload: Sửa code máy thật -> container tự cập nhật
+
+volumes:
+  db_data:
