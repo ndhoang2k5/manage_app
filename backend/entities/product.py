@@ -1,17 +1,14 @@
-# backend/entities/product.py
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import List, Optional
 
-# Khuôn mẫu để tạo mới Variant (Input)
-class VariantCreateRequest(BaseModel):
-    product_name: str       # VD: "Cúc Áo" (sẽ tạo hoặc tìm trong bảng products)
+# --- 1. MODEL CHO NGUYÊN VẬT LIỆU LẺ ---
+class MaterialCreateRequest(BaseModel):
     sku: str                # VD: "H10001"
-    variant_name: str       # VD: "Cúc trắng 1cm"
-    attributes: str = ""    # VD: "Nhựa, trắng"
-    cost_price: float = 0
-    base_unit: str = "Cái"
+    name: str               # VD: "Cúc nhựa trắng"
+    unit: str = "Cái"       # Đơn vị
+    cost_price: float = 0   # Giá vốn
+    attributes: str = ""    # Ghi chú (VD: "Nhựa, 1cm")
 
-# Khuôn mẫu dữ liệu trả về (Output)
 class ProductVariantResponse(BaseModel):
     id: int
     sku: str
@@ -21,3 +18,14 @@ class ProductVariantResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# --- 2. MODEL CHO NHÓM NGUYÊN VẬT LIỆU (SET) ---
+class GroupItemRequest(BaseModel):
+    material_variant_id: int # ID của cái cúc/vải
+    quantity: float          # Số lượng trong set
+
+class MaterialGroupCreateRequest(BaseModel):
+    code: str                # VD: "SET-VEST-01"
+    name: str                # VD: "Bộ phụ kiện Vest Nam"
+    description: str = ""
+    items: List[GroupItemRequest] # Danh sách các món trong set

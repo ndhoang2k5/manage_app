@@ -1,0 +1,41 @@
+/* Import font chữ Inter (Google Fonts) - Rất hiện đại và dễ đọc cho Dashboard */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif !important;
+  background-color: #f0f2f5; /* Màu nền xám nhẹ chuẩn ERP */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tùy chỉnh thanh cuộn cho đẹp */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1; 
+}
+::-webkit-scrollbar-thumb {
+  background: #ccc; 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #888; 
+}
+
+/* Hiệu ứng kính mờ cho Header */
+.site-header {
+  background: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}

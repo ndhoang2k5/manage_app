@@ -33,5 +33,17 @@ services:
     volumes:
       - ./backend:/app # Hot-reload: Sửa code máy thật -> container tự cập nhật
 
+  frontend:
+    build: ./frontend
+    container_name: fashion_frontend
+    restart: always
+    ports:
+      - "3000:5173" # Map port 5173 trong docker ra 3000 máy thật
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Tránh xung đột thư viện giữa máy thật và docker
+    depends_on:
+      - backend
+
 volumes:
   db_data:
