@@ -15,6 +15,7 @@ class ProductVariantResponse(BaseModel):
     variant_name: str
     category_name: str
     quantity_on_hand: float
+    cost_price: float = 0 
     
     class Config:
         from_attributes = True

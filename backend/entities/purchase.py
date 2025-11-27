@@ -38,3 +38,18 @@ class PurchaseOrderCreateRequest(BaseModel):
                 ]
             }
         }
+
+class POItemRequest(BaseModel):
+    product_variant_id: int
+    quantity: float
+    unit_price: float
+
+class PurchaseOrderCreateRequest(BaseModel):
+    warehouse_id: int
+    po_code: str
+    order_date: Optional[date] = None
+    items: List[POItemRequest]
+    
+    # Cập nhật logic NCC: 1 trong 2 cái này phải có dữ liệu
+    supplier_id: Optional[int] = None       # Chọn NCC cũ
+    new_supplier_name: Optional[str] = None # Hoặc Nhập NCC mới

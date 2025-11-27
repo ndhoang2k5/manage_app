@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest
 
 router = APIRouter()
 
@@ -53,3 +53,12 @@ def list_orders(db: Session = Depends(get_db)):
 def list_boms(db: Session = Depends(get_db)):
     service = ProductionService(db)
     return service.get_all_boms()
+
+# 7. Tạo Lệnh SX Nhanh (Tạo sản phẩm + BOM + Lệnh)
+@router.post("/production/orders/create-quick")
+def create_quick_order(request: QuickProductionRequest, db: Session = Depends(get_db)):
+    service = ProductionService(db)
+    try:
+        return service.create_quick_order(request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

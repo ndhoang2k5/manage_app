@@ -91,18 +91,23 @@ class ProductService:
     def get_all_materials(self):
         query = text("""
             SELECT v.id, v.sku, v.variant_name, p.name as category_name, 
-                   IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand
+                   IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand,
+                   v.cost_price -- <--- QUAN TRỌNG: Lấy thêm cột này
             FROM product_variants v
             JOIN products p ON v.product_id = p.id
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
             WHERE p.type = 'material'
-            GROUP BY v.id, v.sku, v.variant_name, p.name
+            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price
             ORDER BY v.id DESC
         """)
         results = self.db.execute(query).fetchall()
         return [
             {
-                "id": row[0], "sku": row[1], "variant_name": row[2], 
-                "category_name": row[3], "quantity_on_hand": row[4]
+                "id": row[0], 
+                "sku": row[1], 
+                "variant_name": row[2], 
+                "category_name": row[3], 
+                "quantity_on_hand": row[4], 
+                "cost_price": row[5] # <--- Map dữ liệu ra
             } for row in results
         ]

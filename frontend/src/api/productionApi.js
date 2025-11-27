@@ -8,6 +8,7 @@ const productionApi = {
     // Orders (Lệnh SX)
     getOrders: () => axiosClient.get('/production/orders'),
     createOrder: (data) => axiosClient.post('/production/orders/create', data),
+    createQuickOrder: (data) => axiosClient.post('/production/orders/create-quick', data),
     
     // Hành động
     startOrder: (id) => axiosClient.post(`/production/orders/${id}/start`),

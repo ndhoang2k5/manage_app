@@ -32,3 +32,23 @@ class ProductionOrderCreateRequest(BaseModel):
     quantity_planned: int    # Số lượng (100 cái)
     start_date: date
     due_date: date
+
+
+# --- 3. YÊU CẦU TẠO SẢN PHẨM NHANH (TẠO MỚI SẢN PHẨM + TẠO BOM + TẠO LỆNH SX) ---
+class QuickProductionRequest(BaseModel):
+    # Thông tin sản phẩm mới
+    new_product_name: str     # VD: "Váy Dạ Hội 2025"
+    new_product_sku: str      # VD: "VAY-DH-01"
+    
+    # Thông tin Lệnh SX
+    order_code: str           # VD: "LSX-005"
+    warehouse_id: int         # Xưởng may
+    quantity_planned: int     # Số lượng may
+    start_date: date
+    due_date: date
+    
+    # Công thức (NVL đi kèm)
+    materials: List[BOMItemRequest] # Danh sách vải, cúc
+    
+    # Tùy chọn
+    auto_start: bool = False  # True: Tự động giữ kho (Trừ kho) ngay lập tức

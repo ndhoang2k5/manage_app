@@ -1,12 +1,7 @@
-# (Quản lý sản xuất)
-# Tạo lệnh sản xuất
-# Trừ nguyên liệu (xuất kho)
-# Tăng thành phẩm (nhập kho)
-# Đánh dấu hoàn thành
-
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest
+from sqlalchemy.exc import IntegrityError
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -15,12 +10,10 @@ class ProductionService:
     # 1. Tạo Công thức (BOM)
     def create_bom(self, data: BOMCreateRequest):
         try:
-            # Tạo Header BOM
             query_bom = text("INSERT INTO bom (product_variant_id, name) VALUES (:pid, :name)")
             self.db.execute(query_bom, {"pid": data.product_variant_id, "name": data.name})
             bom_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # Tạo chi tiết
             query_detail = text("""
                 INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed)
                 VALUES (:bid, :mid, :qty)
@@ -38,7 +31,7 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # 2. Tạo Lệnh Sản Xuất (Bước 1: Mới chỉ Lên kế hoạch - Status: Draft)
+    # 2. Tạo Lệnh Sản Xuất (Thường)
     def create_order(self, data: ProductionOrderCreateRequest):
         try:
             query = text("""
@@ -59,31 +52,97 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # 3. Bắt đầu sản xuất & Giữ chỗ nguyên liệu (Reservation) - QUAN TRỌNG
+    # 3. Tạo Lệnh Sản Xuất NHANH (Quick Production) - LOGIC MỚI
+    def create_quick_order(self, data: QuickProductionRequest):
+        try:
+            # BƯỚC 1: Tạo Sản phẩm Cha (Giả sử Category ID 3 là Thành phẩm)
+            # Lưu ý: Nếu database bạn chưa có category id 3, nó sẽ lỗi 400. 
+            # Đảm bảo bảng categories có ít nhất 3 dòng.
+            query_prod = text("INSERT INTO products (category_id, name, type, base_unit) VALUES (3, :name, 'finished_good', 'Cái')")
+            self.db.execute(query_prod, {"name": data.new_product_name})
+            pid = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+
+            # BƯỚC 2: Tạo Biến thể (Variant)
+            query_var = text("""
+                INSERT INTO product_variants (product_id, sku, variant_name, cost_price)
+                VALUES (:pid, :sku, :name, 0)
+            """)
+            self.db.execute(query_var, {"pid": pid, "sku": data.new_product_sku, "name": data.new_product_name})
+            product_variant_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+
+            # BƯỚC 3: Tạo Công thức (BOM)
+            query_bom = text("INSERT INTO bom (product_variant_id, name) VALUES (:pid, :name)")
+            self.db.execute(query_bom, {"pid": product_variant_id, "name": f"Công thức {data.new_product_name}"})
+            bom_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+
+            # Lưu chi tiết BOM
+            query_bom_detail = text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed) VALUES (:bid, :mid, :qty)")
+            
+            estimated_cost = 0
+            for item in data.materials:
+                self.db.execute(query_bom_detail, {"bid": bom_id, "mid": item.material_variant_id, "qty": item.quantity_needed})
+
+            # BƯỚC 4: Tạo Lệnh Sản Xuất
+            query_order = text("""
+                INSERT INTO production_orders (code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date)
+                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due)
+            """)
+            self.db.execute(query_order, {
+                "code": data.order_code,
+                "wid": data.warehouse_id,
+                "pid": product_variant_id,
+                "qty": data.quantity_planned,
+                "start": data.start_date,
+                "due": data.due_date
+            })
+            order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+
+            self.db.commit()
+
+            # BƯỚC 5: Auto Start (Quan trọng: Gọi hàm start_production ở bên dưới)
+            if data.auto_start:
+                return self.start_production(order_id) # Gọi hàm nội bộ và trả về kết quả luôn
+
+            return {"status": "success", "message": "Đã tạo Mẫu mới & Lệnh SX thành công!"}
+
+        except IntegrityError as e:
+            self.db.rollback()
+            # Kiểm tra xem có phải lỗi trùng lặp không
+            if "Duplicate entry" in str(e):
+                # Ném ra lỗi tiếng Việt dễ hiểu
+                raise Exception(f"Lỗi: Mã SKU '{data.new_product_sku}' đã tồn tại trong hệ thống! Vui lòng chọn mã khác.")
+            else:
+                raise Exception(str(e))
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    # 4. Bắt đầu SX & Giữ hàng
     def start_production(self, order_id: int):
         try:
-            # A. Lấy thông tin lệnh
+            # Lấy thông tin lệnh
             order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy lệnh SX")
             
-            # B. Lấy công thức (BOM) của sản phẩm này
+            # Lấy BOM
             bom_items = self.db.execute(text("""
                 SELECT bm.material_variant_id, bm.quantity_needed 
                 FROM bom_materials bm
                 JOIN bom b ON bm.bom_id = b.id
                 WHERE b.product_variant_id = :pid
                 LIMIT 1
-            """), {"pid": order[2]}).fetchall() # index 2 là product_variant_id
+            """), {"pid": order[3]}).fetchall() # index 3 là product_variant_id
 
             if not bom_items: raise Exception("Sản phẩm này chưa có công thức (BOM)!")
 
-            # C. Kiểm tra và Giữ hàng
+            # Kiểm tra và Giữ hàng
             for item in bom_items:
                 mat_id = item[0]
                 qty_needed_per_unit = item[1]
-                total_qty_needed = qty_needed_per_unit * order[4] # index 4 là quantity_planned
+                # index 4 là quantity_planned
+                total_qty_needed = qty_needed_per_unit * order[4] 
 
-                # Kiểm tra kho xem có đủ hàng không (Tồn thực - Đã giữ > Cần dùng)
+                # Check kho
                 stock = self.db.execute(text("""
                     SELECT quantity_on_hand, quantity_reserved 
                     FROM inventory_stocks 
@@ -95,24 +154,21 @@ class ProductionService:
                 available = current_stock - reserved_stock
 
                 if available < total_qty_needed:
-                    raise Exception(f"Kho không đủ nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {available}")
+                    raise Exception(f"Kho thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {available}")
 
-                # Nếu đủ -> Update tăng lượng giữ chỗ (Reservation)
+                # Update giữ chỗ
                 self.db.execute(text("""
-                    UPDATE inventory_stocks 
-                    SET quantity_reserved = quantity_reserved + :qty
+                    UPDATE inventory_stocks SET quantity_reserved = quantity_reserved + :qty
                     WHERE warehouse_id = :wid AND product_variant_id = :mid
                 """), {"qty": total_qty_needed, "wid": order[2], "mid": mat_id})
 
-                # Ghi log giữ chỗ
+                # Ghi log
                 self.db.execute(text("""
                     INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved)
                     VALUES (:oid, :mid, :qty)
                 """), {"oid": order_id, "mid": mat_id, "qty": total_qty_needed})
 
-            # D. Update trạng thái lệnh sang 'in_progress'
             self.db.execute(text("UPDATE production_orders SET status = 'in_progress' WHERE id = :id"), {"id": order_id})
-            
             self.db.commit()
             return {"status": "success", "message": "Đã giữ đủ nguyên liệu, bắt đầu sản xuất!"}
 
@@ -120,66 +176,54 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # 4. Hoàn thành sản xuất (Finish)
+    # 5. Hoàn thành SX
     def finish_production(self, order_id: int):
         try:
-            # A. Lấy lại thông tin các nguyên liệu đã giữ chỗ
             reservations = self.db.execute(text("""
-                SELECT material_variant_id, quantity_reserved 
-                FROM production_material_reservations 
-                WHERE production_order_id = :oid
+                SELECT material_variant_id, quantity_reserved FROM production_material_reservations WHERE production_order_id = :oid
             """), {"oid": order_id}).fetchall()
 
             order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             
-            # B. Trừ kho nguyên liệu thật sự
+            # Trừ kho NVL
             for res in reservations:
                 mat_id = res[0]
                 qty_used = res[1]
-
-                # Trừ cả on_hand và reserved
                 self.db.execute(text("""
-                    UPDATE inventory_stocks 
-                    SET quantity_on_hand = quantity_on_hand - :qty,
-                        quantity_reserved = quantity_reserved - :qty
+                    UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :qty, quantity_reserved = quantity_reserved - :qty
                     WHERE warehouse_id = :wid AND product_variant_id = :mid
                 """), {"qty": qty_used, "wid": order[2], "mid": mat_id})
 
-                # Ghi log xuất kho SX
                 self.db.execute(text("""
                     INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id)
                     VALUES (:wid, :mid, 'production_out', :qty, :ref)
                 """), {"wid": order[2], "mid": mat_id, "qty": -qty_used, "ref": order_id})
 
-            # C. Cộng kho thành phẩm (Quần/Áo)
+            # Cộng kho Thành phẩm
             finished_product_id = order[3]
             qty_finished = order[4]
 
-            # Upsert thành phẩm
             self.db.execute(text("""
                 INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
                 VALUES (:wid, :pid, :qty)
                 ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty
             """), {"wid": order[2], "pid": finished_product_id, "qty": qty_finished})
 
-            # Ghi log nhập kho thành phẩm
             self.db.execute(text("""
                 INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id)
                 VALUES (:wid, :pid, 'production_in', :qty, :ref)
             """), {"wid": order[2], "pid": finished_product_id, "qty": qty_finished, "ref": order_id})
 
-            # D. Đổi trạng thái -> Completed
             self.db.execute(text("UPDATE production_orders SET status = 'completed', quantity_finished = :qty WHERE id = :id"), 
                             {"qty": qty_finished, "id": order_id})
 
             self.db.commit()
-            return {"status": "success", "message": "Sản xuất hoàn tất. Đã nhập kho thành phẩm."}
-
+            return {"status": "success", "message": "Sản xuất hoàn tất."}
         except Exception as e:
             self.db.rollback()
             raise e
-        
-    # 5. Lấy danh sách lệnh sản xuất    
+
+    # 6. API Lấy danh sách
     def get_all_orders(self):
         query = text("""
             SELECT po.id, po.code, w.name as warehouse_name, p.variant_name as product_name,
@@ -198,7 +242,6 @@ class ProductionService:
             } for r in results
         ]
 
-    # 6. Lấy danh sách BOM (Công thức)
     def get_all_boms(self):
         query = text("""
             SELECT b.id, b.name, p.variant_name as product_name

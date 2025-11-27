@@ -1,7 +1,7 @@
 # backend/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware # <--- Thêm dòng này
-from api import products, warehouses, purchases, production
+from api import products, warehouses, purchases, production, reports
 
 app = FastAPI(title="Fashion WMS API")
 
@@ -25,7 +25,7 @@ app.include_router(products.router, prefix="/api/v1", tags=["Products"])
 app.include_router(warehouses.router, prefix="/api/v1", tags=["Warehouses"])
 app.include_router(purchases.router, prefix="/api/v1", tags=["Purchasing"])
 app.include_router(production.router, prefix="/api/v1", tags=["Production"])
-
+app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 @app.get("/")
 def health_check():
     return {"status": "ok", "system": "Fashion WMS Backend"}
