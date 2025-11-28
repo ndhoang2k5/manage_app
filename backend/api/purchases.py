@@ -28,3 +28,9 @@ def create_purchase_order(request: PurchaseOrderCreateRequest, db: Session = Dep
         return service.create_purchase_order(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+# 2. Lấy danh sách Đơn nhập hàng
+@router.get("/purchases")
+def list_purchase_orders(db: Session = Depends(get_db)):
+    service = PurchaseService(db)
+    return service.get_all_orders()

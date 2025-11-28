@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio, Tag } from 'antd';
+import { PlusOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
@@ -10,30 +10,33 @@ const PurchasePage = () => {
     const [suppliers, setSuppliers] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
     const [products, setProducts] = useState([]);
+    const [orders, setOrders] = useState([]); // <--- Danh sách phiếu nhập
     
     // State giao diện
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [loading, setLoading] = useState(false);
-    
-    // State kiểm soát chế độ nhập Nhà cung cấp ('select' = chọn cũ, 'create' = nhập mới)
     const [supplierMode, setSupplierMode] = useState('select'); 
 
     const [form] = Form.useForm();
 
-    // 1. Tải dữ liệu ban đầu (Dropdown list)
+    // 1. Tải dữ liệu ban đầu
     const fetchInitialData = async () => {
+        setLoading(true);
         try {
-            const [suppRes, wareRes, prodRes] = await Promise.all([
+            const [suppRes, wareRes, prodRes, orderRes] = await Promise.all([
                 purchaseApi.getAllSuppliers(),
                 warehouseApi.getAllWarehouses(),
-                productApi.getAll()
+                productApi.getAll(),
+                purchaseApi.getAllPOs() // <--- Gọi thêm API lấy danh sách PO
             ]);
             setSuppliers(suppRes.data);
             setWarehouses(wareRes.data);
             setProducts(prodRes.data);
+            setOrders(orderRes.data); // Lưu vào state
         } catch (error) {
             message.error("Lỗi tải dữ liệu!");
         }
+        setLoading(false);
     };
 
     useEffect(() => {
@@ -44,16 +47,12 @@ const PurchasePage = () => {
     const handleCreatePO = async (values) => {
         setLoading(true);
         try {
-            // Chuẩn bị payload gửi xuống Backend
             const payload = {
                 warehouse_id: values.warehouse_id,
                 po_code: values.po_code,
                 order_date: values.order_date.format('YYYY-MM-DD'),
-                
-                // LOGIC QUAN TRỌNG: Gửi ID hoặc Tên mới tùy theo chế độ
                 supplier_id: supplierMode === 'select' ? values.supplier_id : null,
                 new_supplier_name: supplierMode === 'create' ? values.new_supplier_name : null,
-
                 items: values.items.map(item => ({
                     product_variant_id: item.product_variant_id,
                     quantity: item.quantity,
@@ -64,12 +63,11 @@ const PurchasePage = () => {
             await purchaseApi.createPO(payload);
             message.success(`Nhập hàng thành công! Mã: ${values.po_code}`);
             
-            // Reset form và đóng modal
             setIsModalOpen(false);
             form.resetFields();
-            setSupplierMode('select'); // Reset về mặc định
+            setSupplierMode('select');
 
-            // Tải lại danh sách NCC (để nếu vừa tạo mới thì nó hiện ra luôn cho lần sau)
+            // Reload lại dữ liệu để cập nhật bảng và danh sách NCC
             fetchInitialData();
 
         } catch (error) {
@@ -78,18 +76,50 @@ const PurchasePage = () => {
         setLoading(false);
     };
 
+    // --- CẤU HÌNH CỘT BẢNG LỊCH SỬ ---
+    const columns = [
+        { 
+            title: 'Mã Phiếu', 
+            dataIndex: 'po_code', 
+            key: 'code',
+            render: t => <b>{t}</b> 
+        },
+        { title: 'Nhà Cung Cấp', dataIndex: 'supplier_name', key: 'supplier' },
+        { title: 'Nhập Kho', dataIndex: 'warehouse_name', key: 'warehouse' },
+        { title: 'Ngày Nhập', dataIndex: 'order_date', key: 'date' },
+        { 
+            title: 'Tổng Tiền', 
+            dataIndex: 'total_amount', 
+            key: 'amount',
+            align: 'right',
+            render: val => <span style={{color: '#3f8600', fontWeight: 500}}>
+                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)}
+            </span>
+        },
+        { 
+            title: 'Trạng thái', 
+            dataIndex: 'status', 
+            key: 'status',
+            render: s => <Tag color="success">{s.toUpperCase()}</Tag>
+        }
+    ];
+
     return (
-        <div style={{ padding: 0 }}> 
-            {/* Lưu ý: Padding để 0 vì App.jsx đã căn lề rồi, hoặc để div trống */}
+        <div>
             <Card 
-                title="Quản Lý Nhập Hàng" 
+                title="Lịch Sử Nhập Hàng" 
                 bordered={false}
                 style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-                extra={<Button type="primary" onClick={() => setIsModalOpen(true)}>+ Tạo Phiếu Nhập</Button>}
+                extra={<Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Tạo Phiếu Nhập</Button>}
             >
-                <div style={{ textAlign: 'center', color: '#888', padding: 20 }}>
-                    Danh sách lịch sử nhập hàng sẽ được hiển thị ở đây (Table)
-                </div>
+                {/* THAY THẾ DÒNG CHỮ CŨ BẰNG BẢNG DỮ LIỆU */}
+                <Table 
+                    dataSource={orders} 
+                    columns={columns} 
+                    rowKey="id" 
+                    loading={loading}
+                    pagination={{ pageSize: 10 }}
+                />
             </Card>
 
             {/* MODAL TẠO PHIẾU NHẬP */}
@@ -103,7 +133,6 @@ const PurchasePage = () => {
             >
                 <Form layout="vertical" form={form} onFinish={handleCreatePO}>
                     
-                    {/* Hàng 1: Mã và Ngày */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                         <Form.Item label="Mã Phiếu (PO Code)" name="po_code" rules={[{ required: true }]}>
                             <Input placeholder="VD: PO-2025-11-01" />
@@ -113,7 +142,6 @@ const PurchasePage = () => {
                         </Form.Item>
                     </div>
 
-                    {/* Hàng 2: Nhà Cung Cấp (Logic Phức tạp) */}
                     <div style={{ background: '#f5f5f5', padding: '12px 16px', borderRadius: 8, marginBottom: 16 }}>
                         <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <span style={{ fontWeight: 500 }}>Nhà Cung Cấp:</span>
@@ -141,7 +169,6 @@ const PurchasePage = () => {
                         )}
                     </div>
 
-                    {/* Hàng 3: Kho nhập */}
                     <Form.Item label="Nhập vào Kho" name="warehouse_id" rules={[{ required: true }]}>
                         <Select placeholder="Chọn Kho">
                             {warehouses.map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
@@ -150,7 +177,6 @@ const PurchasePage = () => {
 
                     <Divider orientation="left" style={{ borderColor: '#d9d9d9' }}>Chi tiết hàng hóa</Divider>
 
-                    {/* DYNAMIC FORM LIST (Danh sách hàng hóa) */}
                     <Form.List name="items" initialValue={[{}]}>
                         {(fields, { add, remove }) => (
                             <div style={{ background: '#fafafa', padding: 10, borderRadius: 6 }}>

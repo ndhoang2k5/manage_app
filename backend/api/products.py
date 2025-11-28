@@ -29,3 +29,9 @@ def create_group(request: MaterialGroupCreateRequest, db: Session = Depends(get_
 def get_materials(db: Session = Depends(get_db)):
     service = ProductService(db)
     return service.get_all_materials()
+
+# 4. API Lấy danh sách Nhóm NVL
+@router.get("/materials/groups")
+def get_material_groups(db: Session = Depends(get_db)):
+    service = ProductService(db)
+    return service.get_all_groups()

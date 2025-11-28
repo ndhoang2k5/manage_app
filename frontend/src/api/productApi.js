@@ -7,6 +7,7 @@ const productApi = {
     create: (data) => {
         return axiosClient.post('/materials/create', data);
     },
+    getAllGroups: () => axiosClient.get('/materials/groups'),
     createGroup: (data) => {
         return axiosClient.post('/materials/groups/create', data);
     }

@@ -5,13 +5,13 @@ from datetime import date
 # --- 1. NHÀ CUNG CẤP (SUPPLIER) ---
 class SupplierCreateRequest(BaseModel):
     name: str
-    phone: str = ""
-    address: str = ""
+    phone: Optional[str] = None # <--- Cho phép None
+    address: Optional[str] = None # <--- Cho phép None (phòng hờ luôn)
 
 class SupplierResponse(BaseModel):
     id: int
     name: str
-    phone: str
+    phone: Optional[str] = None
 
 # --- 2. PHIẾU NHẬP (PURCHASE ORDER) ---
 class POItemRequest(BaseModel):

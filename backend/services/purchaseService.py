@@ -138,3 +138,27 @@ class PurchaseService:
         except Exception as e:
             self.db.rollback()
             raise Exception(f"Lỗi nhập hàng: {str(e)}")
+    
+    # 3. Lấy danh sách Đơn nhập hàng
+    def get_all_orders(self):
+        query = text("""
+            SELECT po.id, po.po_code, s.name as supplier_name, w.name as warehouse_name, 
+                   po.order_date, po.total_amount, po.status
+            FROM purchase_orders po
+            LEFT JOIN suppliers s ON po.supplier_id = s.id
+            LEFT JOIN warehouses w ON po.warehouse_id = w.id
+            ORDER BY po.id DESC
+        """)
+        results = self.db.execute(query).fetchall()
+        
+        return [
+            {
+                "id": r[0],
+                "po_code": r[1],
+                "supplier_name": r[2],
+                "warehouse_name": r[3],
+                "order_date": r[4],
+                "total_amount": r[5],
+                "status": r[6]
+            } for r in results
+        ]
