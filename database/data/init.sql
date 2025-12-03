@@ -1,6 +1,6 @@
 -- ==========================================================
--- FILE: init.sql (FULL VERSION)
--- Bao gồm: Cấu trúc bảng đầy đủ + Dữ liệu mẫu Brand X
+-- FILE: init.sql (FULL VERSION - FINAL)
+-- Hỗ trợ: Đa Size, Nhập hàng từng đợt, Ghi chú giao dịch
 -- ==========================================================
 
 USE manage_app_database;
@@ -161,7 +161,18 @@ CREATE TABLE production_material_reservations (
     FOREIGN KEY (material_variant_id) REFERENCES product_variants(id)
 );
 
--- 16. Lịch sử giao dịch
+-- 16. Chi tiết Size Lệnh Sản Xuất (QUAN TRỌNG)
+CREATE TABLE production_order_items (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    production_order_id INT,
+    size_label VARCHAR(50), -- Ví dụ: "0-3m", "3-6m"
+    quantity_planned INT DEFAULT 0, -- Số lượng đặt
+    quantity_finished INT DEFAULT 0, -- Số lượng đã trả
+    note TEXT,
+    FOREIGN KEY (production_order_id) REFERENCES production_orders(id)
+);
+
+-- 17. Lịch sử giao dịch
 CREATE TABLE inventory_transactions (
     id INT PRIMARY KEY AUTO_INCREMENT,
     warehouse_id INT,
@@ -169,12 +180,13 @@ CREATE TABLE inventory_transactions (
     transaction_type ENUM('purchase_in', 'production_out', 'production_in', 'transfer_in', 'transfer_out', 'sale_out'),
     quantity DECIMAL(15, 2), 
     reference_id INT, 
+    note TEXT, -- Cột ghi chú
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
     FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
 );
 
--- 17. Khách hàng (Mới thêm cho Bán hàng)
+-- 18. Khách hàng
 CREATE TABLE customers (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(200) NOT NULL,
@@ -183,7 +195,7 @@ CREATE TABLE customers (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 18. Đơn Bán Hàng (Sales Orders - Mới thêm)
+-- 19. Đơn Bán Hàng
 CREATE TABLE sales_orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     order_code VARCHAR(50) UNIQUE, 
@@ -196,7 +208,7 @@ CREATE TABLE sales_orders (
     FOREIGN KEY (customer_id) REFERENCES customers(id)
 );
 
--- 19. Chi tiết Đơn bán (Mới thêm)
+-- 20. Chi tiết Đơn bán
 CREATE TABLE sales_order_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     sales_order_id INT,
@@ -208,7 +220,7 @@ CREATE TABLE sales_order_items (
     FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
 );
 
--- 20. Phiếu Kiểm Kê (Inventory Adjustment - Mới thêm)
+-- 21. Phiếu Kiểm Kê
 CREATE TABLE inventory_adjustments (
     id INT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(50) UNIQUE, 
@@ -220,7 +232,7 @@ CREATE TABLE inventory_adjustments (
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
 );
 
--- 21. Chi tiết Kiểm kê (Mới thêm)
+-- 22. Chi tiết Kiểm kê
 CREATE TABLE inventory_adjustment_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     adjustment_id INT,
@@ -282,10 +294,10 @@ INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand
 (1, 3, 2500);
 
 -- Ghi log nhập
-INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id) VALUES
-(1, 1, 'purchase_in', 400, 1),
-(1, 2, 'purchase_in', 100, 1),
-(1, 3, 'purchase_in', 2500, 1);
+INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES
+(1, 1, 'purchase_in', 400, 1, 'Nhập hàng đầu kỳ'),
+(1, 2, 'purchase_in', 100, 1, 'Nhập hàng đầu kỳ'),
+(1, 3, 'purchase_in', 2500, 1, 'Nhập hàng đầu kỳ');
 
 -- E. Điều chuyển 1 ít hàng sang Xưởng May A (ID 2) để chuẩn bị SX
 -- Chuyển 100m Vải Trắng + 500 Cúc

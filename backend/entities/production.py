@@ -34,21 +34,35 @@ class ProductionOrderCreateRequest(BaseModel):
     due_date: date
 
 
-# --- 3. YÊU CẦU TẠO SẢN PHẨM NHANH (TẠO MỚI SẢN PHẨM + TẠO BOM + TẠO LỆNH SX) ---
+# --- MỚI THÊM: YÊU CẦU THEO SIZE VÀ SỐ LƯỢNG ---
+class SizeQuantityRequest(BaseModel):
+    size: str           # VD: "0-3m"
+    quantity: int       # VD: 100
+    note: Optional[str] = ""
+
+
+
+# --- 4. YÊU CẦU TẠO SẢN PHẨM NHANH (TẠO MỚI SẢN PHẨM + TẠO BOM + TẠO LỆNH SX) ---
 class QuickProductionRequest(BaseModel):
-    # Thông tin sản phẩm mới
-    new_product_name: str     # VD: "Váy Dạ Hội 2025"
-    new_product_sku: str      # VD: "VAY-DH-01"
+    new_product_name: str
+    new_product_sku: str
     
-    # Thông tin Lệnh SX
-    order_code: str           # VD: "LSX-005"
-    warehouse_id: int         # Xưởng may
-    quantity_planned: int     # Số lượng may
+    order_code: str
+    warehouse_id: int
+    # quantity_planned: int  <-- XÓA CÁI NÀY (Vì tổng sẽ tự tính từ list size)
+    
     start_date: date
     due_date: date
     
-    # Công thức (NVL đi kèm)
-    materials: List[BOMItemRequest] # Danh sách vải, cúc
+    materials: List[BOMItemRequest]
     
-    # Tùy chọn
-    auto_start: bool = False  # True: Tự động giữ kho (Trừ kho) ngay lập tức
+    # --- MỚI THÊM: DANH SÁCH SIZE ---
+    size_breakdown: List[SizeQuantityRequest] 
+    
+    auto_start: bool = False
+
+
+# Request cho việc Nhập kho thành phẩm từng đợt (Trả hàng)
+class ReceiveGoodsRequest(BaseModel):
+    # Danh sách các size được trả trong đợt này
+    items: List[SizeQuantityRequest]

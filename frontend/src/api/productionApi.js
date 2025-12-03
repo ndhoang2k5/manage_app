@@ -1,3 +1,4 @@
+// frontend/src/api/productionApi.js
 import axiosClient from './axiosClient';
 
 const productionApi = {
@@ -10,9 +11,19 @@ const productionApi = {
     createOrder: (data) => axiosClient.post('/production/orders/create', data),
     createQuickOrder: (data) => axiosClient.post('/production/orders/create-quick', data),
     
-    // Hành động
+    // 1. Lấy chi tiết size (Hàm này đang bị thiếu gây lỗi)
+    getOrderDetails: (id) => axiosClient.get(`/production/orders/${id}/details`),
+    
+    // 2. Nhập kho (Trả hàng)
+    receiveGoods: (id, data) => axiosClient.post(`/production/orders/${id}/receive`, data),
+    forceFinish: (id) => axiosClient.post(`/production/orders/${id}/force-finish`),
+    
     startOrder: (id) => axiosClient.post(`/production/orders/${id}/start`),
+    
     finishOrder: (id) => axiosClient.post(`/production/orders/${id}/complete`),
+
+    // In lệnh sản xuất
+    getPrintData: (id) => axiosClient.get(`/production/orders/${id}/print`),
 };
 
 export default productionApi;
