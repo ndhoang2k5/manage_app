@@ -1,9 +1,14 @@
 # backend/main.py
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware # <--- Thêm dòng này
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from api import products, warehouses, purchases, production, reports
+import os 
 
 app = FastAPI(title="Fashion WMS API")
+
+os.makedirs("static/images", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- CẤU HÌNH CORS (CHO PHÉP FRONTEND GỌI VÀO) ---
 origins = [

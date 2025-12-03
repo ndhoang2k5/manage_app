@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
 # Import đầy đủ các Request Model
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest
+import shutil
+import uuid
 
 router = APIRouter()
 
@@ -85,3 +87,19 @@ def force_finish(order_id: int, db: Session = Depends(get_db)):
 def get_order_print_data(order_id: int, db: Session = Depends(get_db)):
     service = ProductionService(db)
     return service.get_order_print_data(order_id)
+
+@router.post("/production/upload")
+def upload_image(file: UploadFile = File(...)):
+    try:
+        # Tạo tên file độc nhất để không trùng
+        file_extension = file.filename.split(".")[-1]
+        new_filename = f"{uuid.uuid4()}.{file_extension}"
+        file_path = f"static/images/{new_filename}"
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Trả về đường dẫn ảnh để Frontend lưu vào list
+        return {"url": f"/static/images/{new_filename}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi upload: {str(e)}")

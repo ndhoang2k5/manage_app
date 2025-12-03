@@ -24,6 +24,11 @@ const productionApi = {
 
     // In lệnh sản xuất
     getPrintData: (id) => axiosClient.get(`/production/orders/${id}/print`),
+
+    // Tải lên hình ảnh
+    uploadImage: (formData) => axiosClient.post('/production/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }),
 };
 
 export default productionApi;

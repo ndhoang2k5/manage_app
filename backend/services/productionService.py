@@ -112,6 +112,12 @@ class ProductionService:
                         "note": item.note if item.note else "" # Lưu ghi chú
                     })
 
+            # Bước 6: Lưu hình ảnh (nếu có)
+            if hasattr(data, 'image_urls') and data.image_urls:
+                query_img = text("INSERT INTO production_order_images (production_order_id, image_url) VALUES (:oid, :url)")
+                for url in data.image_urls:
+                    self.db.execute(query_img, {"oid": order_id, "url": url})
+
             self.db.commit()
 
             # BƯỚC 6: Auto Start
@@ -340,6 +346,12 @@ class ProductionService:
                 "usage_per_unit": m[2], 
                 "total_needed": total_needed
             })
+        
+        # D. Lấy danh sách ảnh
+        query_imgs = text("SELECT image_url FROM production_order_images WHERE production_order_id = :oid")
+        imgs = self.db.execute(query_imgs, {"oid": order_id}).fetchall()
+        list_imgs = [r[0] for r in imgs]
+
 
         return {
             "code": header[0],
@@ -351,5 +363,6 @@ class ProductionService:
             "start_date": header[6],
             "due_date": header[7],
             "sizes": list_sizes,
-            "materials": list_materials
+            "materials": list_materials,
+            "images": list_imgs
         }

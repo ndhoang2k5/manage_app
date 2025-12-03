@@ -244,6 +244,19 @@ CREATE TABLE inventory_adjustment_items (
     FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
 );
 
+
+-- 23. Thêm ảnh vào order sản phẩm
+CREATE TABLE production_order_images (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    production_order_id INT,
+    image_url TEXT, -- Đường dẫn file ảnh
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (production_order_id) REFERENCES production_orders(id)
+);
+
+
+
+
 -- ==========================================================
 -- 2. DỮ LIỆU MẪU (TEST DATA) - Kịch bản "Brand X"
 -- ==========================================================

@@ -58,8 +58,8 @@ class QuickProductionRequest(BaseModel):
     
     # --- MỚI THÊM: DANH SÁCH SIZE ---
     size_breakdown: List[SizeQuantityRequest] 
-    
     auto_start: bool = False
+    image_urls: List[str] = []
 
 
 # Request cho việc Nhập kho thành phẩm từng đợt (Trả hàng)
