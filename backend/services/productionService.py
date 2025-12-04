@@ -55,7 +55,7 @@ class ProductionService:
     # 3. Tạo Lệnh Sản Xuất NHANH (Hỗ trợ Size Breakdown)
     def create_quick_order(self, data: QuickProductionRequest):
         try:
-            # Tính tổng số lượng từ danh sách size (nếu có)
+            # Tính tổng số lượng từ danh sách size
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
                 total_planned = sum(item.quantity for item in data.size_breakdown)
             else:
@@ -66,7 +66,7 @@ class ProductionService:
             self.db.execute(query_prod, {"name": data.new_product_name})
             pid = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # BƯỚC 2: Tạo Biến thể (Variant)
+            # BƯỚC 2: Tạo Biến thể
             query_var = text("""
                 INSERT INTO product_variants (product_id, sku, variant_name, cost_price)
                 VALUES (:pid, :sku, :name, 0)
@@ -83,7 +83,7 @@ class ProductionService:
             for item in data.materials:
                 self.db.execute(query_bom_detail, {"bid": bom_id, "mid": item.material_variant_id, "qty": item.quantity_needed})
 
-            # BƯỚC 4: Tạo Lệnh SX (Header)
+            # BƯỚC 4: Tạo Lệnh SX
             query_order = text("""
                 INSERT INTO production_orders (code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date)
                 VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due)
@@ -98,7 +98,7 @@ class ProductionService:
             })
             order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # BƯỚC 5: Lưu Chi tiết Size (Vào bảng production_order_items)
+            # BƯỚC 5: Lưu Chi tiết Size (CÓ GHI CHÚ)
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
                 query_size = text("""
                     INSERT INTO production_order_items (production_order_id, size_label, quantity_planned, quantity_finished, note)
@@ -109,10 +109,10 @@ class ProductionService:
                         "oid": order_id,
                         "size": item.size,
                         "qty": item.quantity,
-                        "note": item.note if item.note else "" # Lưu ghi chú
+                        "note": item.note if item.note else ""
                     })
 
-            # Bước 6: Lưu hình ảnh (nếu có)
+            # BƯỚC 6: Lưu Ảnh (NẾU CÓ)
             if hasattr(data, 'image_urls') and data.image_urls:
                 query_img = text("INSERT INTO production_order_images (production_order_id, image_url) VALUES (:oid, :url)")
                 for url in data.image_urls:
@@ -120,11 +120,11 @@ class ProductionService:
 
             self.db.commit()
 
-            # BƯỚC 6: Auto Start
+            # BƯỚC 7: Auto Start
             if data.auto_start:
                 return self.start_production(order_id)
 
-            return {"status": "success", "message": "Đã tạo Mẫu mới & Lệnh SX (kèm Size) thành công!"}
+            return {"status": "success", "message": "Đã tạo Mẫu mới & Lệnh SX thành công!"}
 
         except IntegrityError as e:
             self.db.rollback()
@@ -202,27 +202,31 @@ class ProductionService:
     # 5. NHẬP KHO THÀNH PHẨM TỪNG ĐỢT (Receive Goods)
     def receive_goods(self, order_id: int, data: ReceiveGoodsRequest):
         try:
-            # Lấy thông tin lệnh
+            # ... (Phần lấy thông tin lệnh giữ nguyên) ...
             order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy lệnh")
             
             pid = order[3]
             wid = order[2]
-            
             total_received_now = 0
 
-            # Duyệt qua từng size được trả
             for item in data.items:
                 if item.quantity <= 0: continue
 
-                # A. Cập nhật số lượng đã xong trong bảng chi tiết size
-                self.db.execute(text("""
-                    UPDATE production_order_items 
-                    SET quantity_finished = quantity_finished + :qty
-                    WHERE production_order_id = :oid AND size_label = :size
-                """), {"qty": item.quantity, "oid": order_id, "size": item.size})
+                # A. Update số lượng đã xong (Giữ nguyên)
+                if item.id:
+                    self.db.execute(text("UPDATE production_order_items SET quantity_finished = quantity_finished + :qty WHERE id = :item_id"), {"qty": item.quantity, "item_id": item.id})
+                    
+                    # --- MỚI: GHI LOG LỊCH SỬ ---
+                    self.db.execute(text("""
+                        INSERT INTO production_receive_logs (production_order_id, production_order_item_id, quantity)
+                        VALUES (:oid, :item_id, :qty)
+                    """), {"oid": order_id, "item_id": item.id, "qty": item.quantity})
+                    # ---------------------------
+                else:
+                    raise Exception("Thiếu ID dòng size")
 
-                # B. Cộng kho thành phẩm (Kho thực tế tăng lên)
+                # B. Cộng kho thành phẩm (Giữ nguyên)
                 self.db.execute(text("""
                     INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
                     VALUES (:wid, :pid, :qty)
@@ -231,28 +235,44 @@ class ProductionService:
 
                 total_received_now += item.quantity
 
-            # C. Cập nhật tổng số lượng đã xong ở bảng Header
-            self.db.execute(text("""
-                UPDATE production_orders 
-                SET quantity_finished = quantity_finished + :qty 
-                WHERE id = :id
-            """), {"qty": total_received_now, "id": order_id})
-
-            # D. Ghi log giao dịch
+            # C. Update Header & Ghi Transaction (Giữ nguyên)
+            self.db.execute(text("UPDATE production_orders SET quantity_finished = quantity_finished + :qty WHERE id = :id"), {"qty": total_received_now, "id": order_id})
+            
             self.db.execute(text("""
                 INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
                 VALUES (:wid, :pid, 'production_in', :qty, :ref, :note)
-            """), {
-                "wid": wid, "pid": pid, "qty": total_received_now, "ref": order_id,
-                "note": f"Nhập kho thành phẩm đợt: {total_received_now} cái"
-            })
+            """), {"wid": wid, "pid": pid, "qty": total_received_now, "ref": order_id, "note": f"Trả hàng đợt: {total_received_now}"})
 
             self.db.commit()
-            return {"status": "success", "message": f"Đã nhập kho thêm {total_received_now} sản phẩm."}
+            return {"status": "success", "message": f"Đã nhập {total_received_now} SP và lưu lịch sử."}
 
         except Exception as e:
             self.db.rollback()
             raise e
+
+    # --- HÀM MỚI: LẤY LỊCH SỬ TRẢ HÀNG ---
+    def get_receive_history(self, order_id: int):
+        query = text("""
+            SELECT 
+                l.received_at,
+                i.size_label,
+                i.note as size_note,
+                l.quantity
+            FROM production_receive_logs l
+            JOIN production_order_items i ON l.production_order_item_id = i.id
+            WHERE l.production_order_id = :oid
+            ORDER BY l.received_at DESC
+        """)
+        results = self.db.execute(query, {"oid": order_id}).fetchall()
+        
+        return [
+            {
+                "date": r[0].strftime("%Y-%m-%d %H:%M"), # Format ngày giờ đẹp
+                "size": r[1],
+                "note": r[2],
+                "quantity": r[3]
+            } for r in results
+        ]
 
     # 6. HÀM CHỐT ĐƠN (Force Finish)
     def force_finish_order(self, order_id: int):

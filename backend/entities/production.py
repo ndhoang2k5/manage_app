@@ -36,6 +36,7 @@ class ProductionOrderCreateRequest(BaseModel):
 
 # --- MỚI THÊM: YÊU CẦU THEO SIZE VÀ SỐ LƯỢNG ---
 class SizeQuantityRequest(BaseModel):
+    id: Optional[int] = None
     size: str           # VD: "0-3m"
     quantity: int       # VD: 100
     note: Optional[str] = ""

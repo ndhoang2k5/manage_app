@@ -255,6 +255,18 @@ CREATE TABLE production_order_images (
 );
 
 
+-- 24. Nhật ký trả hàng sản xuất (lưu từng đợt trả)
+CREATE TABLE production_receive_logs (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    production_order_id INT,
+    production_order_item_id INT, -- Link tới dòng size cụ thể
+    quantity DECIMAL(15, 2),      -- Số lượng trả đợt này
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Thời gian trả
+    FOREIGN KEY (production_order_id) REFERENCES production_orders(id),
+    FOREIGN KEY (production_order_item_id) REFERENCES production_order_items(id)
+);
+
+
 
 
 -- ==========================================================

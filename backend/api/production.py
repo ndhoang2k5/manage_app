@@ -103,3 +103,9 @@ def upload_image(file: UploadFile = File(...)):
         return {"url": f"/static/images/{new_filename}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi upload: {str(e)}")
+    
+# 4. API Lấy lịch sử nhập hàng theo đợt
+@router.get("/production/orders/{order_id}/history")
+def get_receive_history(order_id: int, db: Session = Depends(get_db)):
+    service = ProductionService(db)
+    return service.get_receive_history(order_id)

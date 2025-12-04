@@ -25,6 +25,10 @@ const productionApi = {
     // In lệnh sản xuất
     getPrintData: (id) => axiosClient.get(`/production/orders/${id}/print`),
 
+    // 3. Lấy lịch sử nhập hàng theo đợt
+    getReceiveHistory: (id) => axiosClient.get(`/production/orders/${id}/history`),
+
+
     // Tải lên hình ảnh
     uploadImage: (formData) => axiosClient.post('/production/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
