@@ -55,18 +55,17 @@ class ProductionService:
     # 3. Tạo Lệnh Sản Xuất NHANH (Hỗ trợ Size Breakdown)
     def create_quick_order(self, data: QuickProductionRequest):
         try:
-            # Tính tổng số lượng từ danh sách size
+            # Tính tổng số lượng
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
                 total_planned = sum(item.quantity for item in data.size_breakdown)
             else:
                 total_planned = data.quantity_planned
 
-            # BƯỚC 1: Tạo Sản phẩm Cha
+            # BƯỚC 1, 2, 3: Tạo SP, Variant, BOM (GIỮ NGUYÊN)
             query_prod = text("INSERT INTO products (category_id, name, type, base_unit) VALUES (3, :name, 'finished_good', 'Cái')")
             self.db.execute(query_prod, {"name": data.new_product_name})
             pid = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # BƯỚC 2: Tạo Biến thể
             query_var = text("""
                 INSERT INTO product_variants (product_id, sku, variant_name, cost_price)
                 VALUES (:pid, :sku, :name, 0)
@@ -74,7 +73,6 @@ class ProductionService:
             self.db.execute(query_var, {"pid": pid, "sku": data.new_product_sku, "name": data.new_product_name})
             product_variant_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # BƯỚC 3: Tạo BOM
             query_bom = text("INSERT INTO bom (product_variant_id, name) VALUES (:pid, :name)")
             self.db.execute(query_bom, {"pid": product_variant_id, "name": f"Công thức {data.new_product_name}"})
             bom_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
@@ -83,10 +81,10 @@ class ProductionService:
             for item in data.materials:
                 self.db.execute(query_bom_detail, {"bid": bom_id, "mid": item.material_variant_id, "qty": item.quantity_needed})
 
-            # BƯỚC 4: Tạo Lệnh SX
+            # BƯỚC 4: Tạo Lệnh SX (CẬP NHẬT: Thêm shipping_fee, other_fee)
             query_order = text("""
-                INSERT INTO production_orders (code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date)
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due)
+                INSERT INTO production_orders (code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date, shipping_fee, other_fee)
+                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other)
             """)
             self.db.execute(query_order, {
                 "code": data.order_code,
@@ -94,11 +92,13 @@ class ProductionService:
                 "pid": product_variant_id,
                 "qty": total_planned,
                 "start": data.start_date,
-                "due": data.due_date
+                "due": data.due_date,
+                "ship": data.shipping_fee, # Mới
+                "other": data.other_fee    # Mới
             })
             order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # BƯỚC 5: Lưu Chi tiết Size (CÓ GHI CHÚ)
+            # BƯỚC 5: Lưu Size (GIỮ NGUYÊN)
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
                 query_size = text("""
                     INSERT INTO production_order_items (production_order_id, size_label, quantity_planned, quantity_finished, note)
@@ -106,13 +106,10 @@ class ProductionService:
                 """)
                 for item in data.size_breakdown:
                     self.db.execute(query_size, {
-                        "oid": order_id,
-                        "size": item.size,
-                        "qty": item.quantity,
-                        "note": item.note if item.note else ""
+                        "oid": order_id, "size": item.size, "qty": item.quantity, "note": item.note if item.note else ""
                     })
 
-            # BƯỚC 6: Lưu Ảnh (NẾU CÓ)
+            # BƯỚC 6: Lưu Ảnh (GIỮ NGUYÊN)
             if hasattr(data, 'image_urls') and data.image_urls:
                 query_img = text("INSERT INTO production_order_images (production_order_id, image_url) VALUES (:oid, :url)")
                 for url in data.image_urls:
@@ -120,16 +117,15 @@ class ProductionService:
 
             self.db.commit()
 
-            # BƯỚC 7: Auto Start
             if data.auto_start:
                 return self.start_production(order_id)
 
-            return {"status": "success", "message": "Đã tạo Mẫu mới & Lệnh SX thành công!"}
+            return {"status": "success", "message": "Đã tạo Mẫu & Lệnh SX thành công!"}
 
         except IntegrityError as e:
             self.db.rollback()
             if "Duplicate entry" in str(e):
-                raise Exception(f"Lỗi: Mã SKU '{data.new_product_sku}' hoặc Mã lệnh đã tồn tại!")
+                raise Exception(f"Lỗi: Mã SKU hoặc Mã lệnh đã tồn tại!")
             raise Exception(str(e))
         except Exception as e:
             self.db.rollback()
@@ -322,12 +318,13 @@ class ProductionService:
 
     # 8. LẤY DỮ LIỆU ĐỂ IN LỆNH SẢN XUẤT (Full Detail)
     def get_order_print_data(self, order_id: int):
-        # A. Lấy thông tin chung (Header)
+        # A. Header (Thêm shipping_fee, other_fee)
         query_header = text("""
             SELECT po.code, w.name as warehouse_name, w.address as warehouse_address,
                    pv.variant_name as product_name, pv.sku as product_sku,
                    po.quantity_planned, po.start_date, po.due_date,
-                   po.product_variant_id
+                   po.product_variant_id,
+                   po.shipping_fee, po.other_fee  -- Lấy thêm 2 cột này
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id
@@ -336,7 +333,7 @@ class ProductionService:
         header = self.db.execute(query_header, {"oid": order_id}).fetchone()
         if not header: raise Exception("Không tìm thấy lệnh")
 
-        # B. Lấy chi tiết Size
+        # B. Size & Note (GIỮ NGUYÊN)
         query_sizes = text("""
             SELECT size_label, quantity_planned, note 
             FROM production_order_items 
@@ -345,33 +342,40 @@ class ProductionService:
         """)
         sizes = self.db.execute(query_sizes, {"oid": order_id}).fetchall()
         list_sizes = [{"size": s[0], "qty": s[1], "note": s[2]} for s in sizes]
-        # C. Lấy chi tiết NVL cần dùng (BOM)
-        # Tìm BOM dựa trên product_variant_id của lệnh
+
+        # C. Materials (Cần lấy thêm giá cost_price để tính tổng tiền trên phiếu in)
         query_materials = text("""
-            SELECT m.sku, m.variant_name, bm.quantity_needed, m.id
+            SELECT m.sku, m.variant_name, bm.quantity_needed, m.cost_price
             FROM bom b
             JOIN bom_materials bm ON b.id = bm.bom_id
             JOIN product_variants m ON bm.material_variant_id = m.id
             WHERE b.product_variant_id = :pid
-            LIMIT 20
         """)
         materials = self.db.execute(query_materials, {"pid": header[8]}).fetchall()
         
         list_materials = []
+        total_material_cost = 0 # Tổng tiền nguyên liệu
+
         for m in materials:
-            # Tính tổng lượng cần = Định mức * Tổng SL lệnh
-            total_needed = m[2] * header[5]
+            usage = m[2]
+            total_needed = usage * header[5]
+            unit_cost = m[3] if m[3] else 0
+            total_cost_mat = total_needed * unit_cost
+            
+            total_material_cost += total_cost_mat
+
             list_materials.append({
                 "sku": m[0], "name": m[1], 
-                "usage_per_unit": m[2], 
-                "total_needed": total_needed
+                "usage_per_unit": usage, 
+                "total_needed": total_needed,
+                "unit_cost": unit_cost,
+                "total_cost": total_cost_mat
             })
-        
-        # D. Lấy danh sách ảnh
+
+        # D. Ảnh (GIỮ NGUYÊN)
         query_imgs = text("SELECT image_url FROM production_order_images WHERE production_order_id = :oid")
         imgs = self.db.execute(query_imgs, {"oid": order_id}).fetchall()
         list_imgs = [r[0] for r in imgs]
-
 
         return {
             "code": header[0],
@@ -382,6 +386,12 @@ class ProductionService:
             "total_qty": header[5],
             "start_date": header[6],
             "due_date": header[7],
+            
+            # Thông tin tài chính
+            "shipping_fee": header[9],
+            "other_fee": header[10],
+            "total_material_cost": total_material_cost,
+            
             "sizes": list_sizes,
             "materials": list_materials,
             "images": list_imgs

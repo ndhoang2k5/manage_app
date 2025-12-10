@@ -61,6 +61,7 @@ CREATE TABLE product_variants (
     attributes TEXT,
     cost_price DECIMAL(15, 2) DEFAULT 0,
     sale_price DECIMAL(15, 2) DEFAULT 0,
+    -- note TEXT,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
 
@@ -145,6 +146,8 @@ CREATE TABLE production_orders (
     quantity_planned INT, 
     quantity_finished INT DEFAULT 0, 
     status ENUM('draft', 'waiting_material', 'in_progress', 'completed', 'cancelled'),
+    shipping_fee DECIMAL(15, 2) DEFAULT 0,
+    other_fee DECIMAL(15, 2) DEFAULT 0,
     start_date DATE,
     due_date DATE,
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
