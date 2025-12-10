@@ -61,7 +61,7 @@ CREATE TABLE product_variants (
     attributes TEXT,
     cost_price DECIMAL(15, 2) DEFAULT 0,
     sale_price DECIMAL(15, 2) DEFAULT 0,
-    -- note TEXT,
+    note TEXT,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
 

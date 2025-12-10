@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Row, Col, Statistic, Table, Tag, Button, Spin, Typography, Tabs } from 'antd';
-import { ArrowLeftOutlined, SkinOutlined, GoldOutlined, ShopOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, GoldOutlined, ShopOutlined } from '@ant-design/icons';
 import reportApi from '../api/reportApi';
 
 const { Title } = Typography;
@@ -28,10 +28,20 @@ const WorkshopDetail = () => {
     if (loading) return <div style={{textAlign: 'center', marginTop: 50}}><Spin size="large"/></div>;
     if (!data) return <div>Không tìm thấy dữ liệu</div>;
 
-    // Cột bảng Tồn kho
+    // Cột bảng Tồn kho (Đã thêm Ghi chú)
     const stockColumns = [
         { title: 'Mã SKU', dataIndex: 'sku', key: 'sku' },
         { title: 'Tên Vật Tư / Sản Phẩm', dataIndex: 'name', key: 'name', render: t => <b>{t}</b> },
+        
+        // --- CỘT GHI CHÚ MỚI ---
+        { 
+            title: 'Ghi chú', 
+            dataIndex: 'note', 
+            key: 'note',
+            render: (t) => t ? <span style={{color: '#888', fontSize: 12, fontStyle: 'italic'}}>{t}</span> : '-'
+        },
+        // -----------------------
+
         { 
             title: 'Loại', 
             dataIndex: 'type', 

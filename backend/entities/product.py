@@ -8,6 +8,7 @@ class MaterialCreateRequest(BaseModel):
     unit: str = "Cái"       # Đơn vị
     cost_price: float = 0   # Giá vốn
     attributes: str = ""    # Ghi chú (VD: "Nhựa, 1cm")
+    note: Optional[str] = ""  # Ghi chú thêm
 
 class ProductVariantResponse(BaseModel):
     id: int
@@ -16,6 +17,7 @@ class ProductVariantResponse(BaseModel):
     category_name: str
     quantity_on_hand: float
     cost_price: float = 0 
+    note: Optional[str] = ""
     
     class Config:
         from_attributes = True

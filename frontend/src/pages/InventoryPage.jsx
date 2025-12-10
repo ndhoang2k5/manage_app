@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider } from 'antd';
-import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
 
 const InventoryPage = () => {
@@ -12,6 +12,7 @@ const InventoryPage = () => {
     const [loading, setLoading] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false); // Modal tạo lẻ
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false); // Modal tạo nhóm
+    const [searchText, setSearchText] = useState(''); // State tìm kiếm
     
     const [form] = Form.useForm();
     const [groupForm] = Form.useForm();
@@ -36,6 +37,16 @@ const InventoryPage = () => {
         fetchData();
     }, []);
 
+    // --- LOGIC LỌC TÌM KIẾM ---
+    const filteredMaterials = materials.filter(item => {
+        const text = searchText.toLowerCase();
+        return (
+            (item.variant_name && item.variant_name.toLowerCase().includes(text)) ||
+            (item.sku && item.sku.toLowerCase().includes(text)) ||
+            (item.note && item.note.toLowerCase().includes(text))
+        );
+    });
+
     // --- XỬ LÝ TẠO VẬT TƯ LẺ ---
     const handleCreateMaterial = async (values) => {
         try {
@@ -52,13 +63,12 @@ const InventoryPage = () => {
     // --- XỬ LÝ TẠO NHÓM (SET) ---
     const handleCreateGroup = async (values) => {
         try {
-            // LOGIC MỚI: Tự động gán quantity = 1 cho mỗi item vì giao diện đã bỏ ô nhập
-            // Điều này để thỏa mãn yêu cầu của Backend (nếu Backend bắt buộc có field quantity)
+            // Tự động gán quantity = 1 vì giao diện đã bỏ ô nhập
             const payload = {
                 ...values,
                 items: values.items.map(item => ({
                     material_variant_id: item.material_variant_id,
-                    quantity: 1 // Mặc định là 1 (Đánh dấu là có mặt trong nhóm)
+                    quantity: 1 
                 }))
             };
 
@@ -75,8 +85,17 @@ const InventoryPage = () => {
     // --- CẤU HÌNH CỘT BẢNG VẬT TƯ LẺ ---
     const materialColumns = [
         { title: 'ID', dataIndex: 'id', width: 60, align: 'center', render: t => <span style={{color:'#888'}}>#{t}</span> },
-        { title: 'Mã SKU', dataIndex: 'sku', render: t => <Tag color="blue">{t}</Tag> },
+        { title: 'Mã SKU', dataIndex: 'sku', render: t => <Tag color="geekblue">{t}</Tag> },
         { title: 'Tên Vật Tư', dataIndex: 'variant_name', render: t => <b>{t}</b> },
+        
+        // CỘT GHI CHÚ MỚI
+        { 
+            title: 'Ghi chú', 
+            dataIndex: 'note', 
+            key: 'note',
+            render: (t) => t ? <span style={{color: '#666', fontStyle: 'italic'}}>{t}</span> : <span style={{color:'#ccc'}}>-</span>
+        },
+        
         { title: 'Giá Vốn', dataIndex: 'cost_price', align: 'right', render: v => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v || 0) },
         { title: 'Tồn kho', dataIndex: 'quantity_on_hand', align: 'center', render: q => <Tag color={q > 0 ? 'success' : 'error'}>{q > 0 ? q : 'Hết'}</Tag> },
     ];
@@ -85,7 +104,7 @@ const InventoryPage = () => {
     const groupColumns = [
         { title: 'Mã Nhóm', dataIndex: 'code', width: 150, render: t => <Tag color="purple" style={{fontSize: 14}}>{t}</Tag> },
         { title: 'Tên Nhóm / Bộ', dataIndex: 'name', width: 250, render: t => <b>{t}</b> },
-        { title: 'Thành phần', dataIndex: 'items_summary', render: t => <span style={{color: '#666'}}>{t}</span> }, // Backend trả về tên (x1)
+        { title: 'Thành phần', dataIndex: 'items_summary', render: t => <span style={{color: '#666'}}>{t}</span> }, 
         { title: 'Ghi chú', dataIndex: 'description' },
     ];
 
@@ -98,10 +117,26 @@ const InventoryPage = () => {
                         label: <span><AppstoreOutlined /> Kho Vật Tư Lẻ</span>,
                         children: (
                             <>
-                                <div style={{marginBottom: 16, textAlign: 'right'}}>
+                                <div style={{marginBottom: 16, display: 'flex', justifyContent: 'space-between'}}>
+                                    {/* THANH TÌM KIẾM */}
+                                    <Input 
+                                        placeholder="Tìm theo Tên, SKU hoặc Ghi chú..." 
+                                        prefix={<SearchOutlined />} 
+                                        style={{ width: 400 }}
+                                        value={searchText}
+                                        onChange={e => setSearchText(e.target.value)}
+                                        allowClear
+                                    />
+                                    
                                     <Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Nhập Vật Tư Mới</Button>
                                 </div>
-                                <Table dataSource={materials} columns={materialColumns} rowKey="id" loading={loading} pagination={{ pageSize: 8 }} />
+                                <Table 
+                                    dataSource={filteredMaterials} 
+                                    columns={materialColumns} 
+                                    rowKey="id" 
+                                    loading={loading} 
+                                    pagination={{ pageSize: 10 }} 
+                                />
                             </>
                         )
                     },
@@ -129,6 +164,12 @@ const InventoryPage = () => {
                     <Form.Item label="Tên Vật tư" name="name" rules={[{ required: true }]}>
                         <Input placeholder="VD: Vải Lụa Đỏ" />
                     </Form.Item>
+                    
+                    {/* Ô NHẬP GHI CHÚ */}
+                    <Form.Item label="Ghi chú" name="note">
+                        <Input.TextArea placeholder="VD: Hàng loại 1, dễ nhăn..." rows={2} />
+                    </Form.Item>
+
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                         <Form.Item label="Đơn vị tính" name="unit" initialValue="Cái">
                             <Input />
@@ -141,7 +182,7 @@ const InventoryPage = () => {
                 </Form>
             </Modal>
 
-            {/* MODAL 2: TẠO NHÓM/SET VẬT TƯ (ĐÃ SỬA GIAO DIỆN) */}
+            {/* MODAL 2: TẠO NHÓM/SET VẬT TƯ */}
             <Modal title="Tạo Nhóm Vật Tư (Gộp nhiều chi tiết)" open={isGroupModalOpen} onCancel={() => setIsGroupModalOpen(false)} footer={null} width={700}>
                 <Form layout="vertical" onFinish={handleCreateGroup} form={groupForm}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -163,24 +204,20 @@ const InventoryPage = () => {
                             <>
                                 {fields.map(({ key, name, ...restField }) => (
                                     <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-                                        {/* Ô Chọn Vật Tư - Kéo dài ra 100% */}
                                         <Form.Item 
                                             {...restField} 
                                             name={[name, 'material_variant_id']} 
                                             rules={[{ required: true, message: 'Chọn vật tư' }]} 
-                                            style={{ width: 450 }} // Tăng chiều rộng
+                                            style={{ width: 450 }} 
                                         >
                                             <Select placeholder="Chọn vật tư con..." showSearch optionFilterProp="children">
                                                 {materials.map(m => (
                                                     <Select.Option key={m.id} value={m.id}>
-                                                        {/* Hiển thị rõ Tên và Tồn kho hiện tại */}
                                                         {m.sku} - {m.variant_name} (Tồn: {m.quantity_on_hand})
                                                     </Select.Option>
                                                 ))}
                                             </Select>
                                         </Form.Item>
-                                        
-                                        {/* Đã XÓA ô nhập Số lượng (SL) ở đây */}
                                         
                                         <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} />
                                     </Space>

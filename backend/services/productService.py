@@ -32,18 +32,20 @@ class ProductService:
 
             # 2. Tạo Variant (Chi tiết cụ thể - H10001)
             query_variant = text("""
-                INSERT INTO product_variants (product_id, sku, variant_name, attributes, cost_price)
-                VALUES (:pid, :sku, :vname, :attrs, :cost)
+                INSERT INTO product_variants (product_id, sku, variant_name, attributes, cost_price, note)
+                VALUES (:pid, :sku, :vname, :attrs, :cost, :note)
             """)
             self.db.execute(query_variant, {
                 "pid": parent_id,
                 "sku": data.sku,
-                "vname": data.name, # Tên variant lấy theo tên nhập
+                "vname": data.name, 
                 "attrs": data.attributes,
-                "cost": data.cost_price
+                "cost": data.cost_price,
+                "note": data.note # <--- Mới
             })
+            
             self.db.commit()
-            return {"status": "success", "message": f"Đã tạo NVL: {data.sku} - {data.name}"}
+            return {"status": "success", "message": f"Đã tạo NVL: {data.sku}"}
         
         except Exception as e:
             self.db.rollback()
@@ -106,23 +108,20 @@ class ProductService:
         query = text("""
             SELECT v.id, v.sku, v.variant_name, p.name as category_name, 
                    IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand,
-                   v.cost_price -- <--- QUAN TRỌNG: Lấy thêm cột này
+                   v.cost_price, v.note -- <--- Lấy thêm note
             FROM product_variants v
             JOIN products p ON v.product_id = p.id
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
             WHERE p.type = 'material'
-            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price
+            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price, v.note
             ORDER BY v.id DESC
         """)
         results = self.db.execute(query).fetchall()
         return [
             {
-                "id": row[0], 
-                "sku": row[1], 
-                "variant_name": row[2], 
-                "category_name": row[3], 
-                "quantity_on_hand": row[4], 
-                "cost_price": row[5] # <--- Map dữ liệu ra
+                "id": row[0], "sku": row[1], "variant_name": row[2], 
+                "category_name": row[3], "quantity_on_hand": row[4], 
+                "cost_price": row[5], "note": row[6] # <--- Map ra
             } for row in results
         ]
     
@@ -153,3 +152,20 @@ class ProductService:
             })
             
         return result
+    
+    # USE CASE 4: Lấy danh sách tất cả sản phẩm (để chọn khi tạo lệnh sản xuất)
+    def get_all(self):
+        query = text("""
+            SELECT v.id, v.sku, v.variant_name, v.cost_price, 
+                   IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand, v.note
+            FROM product_variants v
+            LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
+            GROUP BY v.id, v.sku, v.variant_name, v.cost_price, v.note
+        """)
+        results = self.db.execute(query).fetchall()
+        return [
+            {
+                "id": r[0], "sku": r[1], "variant_name": r[2], 
+                "cost_price": r[3], "quantity_on_hand": r[4], "note": r[5]
+            } for r in results
+        ]

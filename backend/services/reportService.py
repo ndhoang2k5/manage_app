@@ -39,13 +39,14 @@ class ReportService:
         query_total_stock = text("""
             SELECT pv.sku, pv.variant_name, p.base_unit,
                    SUM(s.quantity_on_hand) as total_qty,
-                   SUM(s.quantity_on_hand * pv.cost_price) as total_value
+                   SUM(s.quantity_on_hand * pv.cost_price) as total_value,
+                   pv.note -- <--- Thêm note
             FROM inventory_stocks s
             JOIN warehouses w ON s.warehouse_id = w.id
             JOIN product_variants pv ON s.product_variant_id = pv.id
             JOIN products p ON pv.product_id = p.id
             WHERE w.brand_id = :bid 
-            GROUP BY pv.id, pv.sku, pv.variant_name, p.base_unit
+            GROUP BY pv.id, pv.sku, pv.variant_name, p.base_unit, pv.note -- Group by cả note
             HAVING total_qty > 0
         """)
         stocks = self.db.execute(query_total_stock, {"bid": brand_id}).fetchall()
@@ -55,7 +56,8 @@ class ReportService:
                 "name": r[1], 
                 "unit": r[2], 
                 "total_quantity": r[3], 
-                "total_value": r[4]
+                "total_value": r[4],
+                "note": r[5]  # <--- Lấy note
             } for r in stocks
         ]
 
@@ -123,7 +125,7 @@ class ReportService:
             SELECT pv.sku, pv.variant_name, p.base_unit, 
                    s.quantity_on_hand, 
                    (s.quantity_on_hand * pv.cost_price) as total_value,
-                   p.type -- Để biết là NVL hay Thành phẩm
+                   p.type, pv.note -- <--- Thêm note
             FROM inventory_stocks s
             JOIN product_variants pv ON s.product_variant_id = pv.id
             JOIN products p ON pv.product_id = p.id
@@ -134,7 +136,7 @@ class ReportService:
         
         list_stocks = [{
             "sku": r[0], "name": r[1], "unit": r[2], 
-            "qty": r[3], "value": r[4], "type": r[5]
+            "qty": r[3], "value": r[4], "type": r[5], "note": r[6]
         } for r in stocks]
 
         # C. Các đơn hàng đang may tại xưởng này
