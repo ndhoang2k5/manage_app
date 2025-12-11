@@ -27,8 +27,18 @@ class GroupItemRequest(BaseModel):
     material_variant_id: int # ID của cái cúc/vải
     quantity: float          # Số lượng trong set
 
+# --- 3. REQUEST TẠO NHÓM NGUYÊN VẬT LIỆU ---
 class MaterialGroupCreateRequest(BaseModel):
     code: str                # VD: "SET-VEST-01"
     name: str                # VD: "Bộ phụ kiện Vest Nam"
     description: str = ""
     items: List[GroupItemRequest] # Danh sách các món trong set
+
+
+# --- 4. REQUEST CẬP NHẬT NGUYÊN VẬT LIỆU ---
+class MaterialUpdateRequest(BaseModel):
+    sku: str
+    name: str
+    unit: str
+    attributes: Optional[str] = ""
+    note: Optional[str] = ""

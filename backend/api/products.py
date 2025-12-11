@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productService import ProductService
-from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse
+from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse, MaterialUpdateRequest
 
 router = APIRouter()
 
@@ -35,3 +35,12 @@ def get_materials(db: Session = Depends(get_db)):
 def get_material_groups(db: Session = Depends(get_db)):
     service = ProductService(db)
     return service.get_all_groups()
+
+# 5. API cập nhật NVL
+@router.put("/materials/{material_id}")
+def update_material(material_id: int, request: MaterialUpdateRequest, db: Session = Depends(get_db)):
+    service = ProductService(db)
+    try:
+        return service.update_material(material_id, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

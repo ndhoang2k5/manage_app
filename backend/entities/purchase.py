@@ -53,3 +53,14 @@ class PurchaseOrderCreateRequest(BaseModel):
     # Cập nhật logic NCC: 1 trong 2 cái này phải có dữ liệu
     supplier_id: Optional[int] = None       # Chọn NCC cũ
     new_supplier_name: Optional[str] = None # Hoặc Nhập NCC mới
+
+class POItemUpdateRequest(BaseModel):
+    id: int         # Cần ID để biết sửa dòng nào
+    unit_price: float
+    quantity: float # Cho phép sửa số lượng
+
+class PurchaseUpdateRequest(BaseModel):
+    po_code: str
+    supplier_id: int
+    order_date: date
+    items: List[POItemUpdateRequest]

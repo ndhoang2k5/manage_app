@@ -6,6 +6,8 @@ const purchaseApi = {
     
     createPO: (data) => axiosClient.post('/purchases/create', data),
     getAllPOs: () => axiosClient.get('/purchases'), 
+    getDetail: (id) => axiosClient.get(`/purchases/${id}`),
+    update: (id, data) => axiosClient.put(`/purchases/${id}`, data),
 };
 
 export default purchaseApi;
