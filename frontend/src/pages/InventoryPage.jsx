@@ -1,23 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider } from 'antd';
-import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider, Tooltip } from 'antd';
+import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
 
 const InventoryPage = () => {
     // Data States
-    const [materials, setMaterials] = useState([]); // Vật tư lẻ
-    const [groups, setGroups] = useState([]);       // Nhóm vật tư
+    const [materials, setMaterials] = useState([]);
+    const [groups, setGroups] = useState([]);
     
     // UI States
     const [loading, setLoading] = useState(false);
-    const [isModalOpen, setIsModalOpen] = useState(false); // Modal tạo lẻ
-    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false); // Modal tạo nhóm
-    const [searchText, setSearchText] = useState(''); // State tìm kiếm
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+    const [searchText, setSearchText] = useState('');
     
+    // Edit State
+    const [editingItem, setEditingItem] = useState(null); // Lưu item đang sửa
+
     const [form] = Form.useForm();
     const [groupForm] = Form.useForm();
 
-    // Load dữ liệu
     const fetchData = async () => {
         setLoading(true);
         try {
@@ -37,7 +39,6 @@ const InventoryPage = () => {
         fetchData();
     }, []);
 
-    // --- LOGIC LỌC TÌM KIẾM ---
     const filteredMaterials = materials.filter(item => {
         const text = searchText.toLowerCase();
         return (
@@ -47,23 +48,50 @@ const InventoryPage = () => {
         );
     });
 
-    // --- XỬ LÝ TẠO VẬT TƯ LẺ ---
-    const handleCreateMaterial = async (values) => {
+    // --- MỞ MODAL TẠO MỚI ---
+    const openCreateModal = () => {
+        setEditingItem(null); // Reset chế độ sửa
+        form.resetFields();
+        setIsModalOpen(true);
+    };
+
+    // --- MỞ MODAL SỬA ---
+    const openEditModal = (record) => {
+        setEditingItem(record); // Gán item đang sửa
+        // Điền dữ liệu cũ vào form
+        form.setFieldsValue({
+            sku: record.sku,
+            name: record.variant_name,
+            unit: record.category_name, // Backend trả về unit ở field category_name (do query join) - Cần lưu ý mapping này
+            cost_price: record.cost_price,
+            attributes: "", // Nếu backend chưa trả về attr thì để trống
+            note: record.note
+        });
+        setIsModalOpen(true);
+    };
+
+    // --- XỬ LÝ LƯU (TẠO HOẶC SỬA) ---
+    const handleSaveMaterial = async (values) => {
         try {
-            await productApi.create(values);
-            message.success("Tạo vật tư thành công!");
+            if (editingItem) {
+                // Logic SỬA
+                await productApi.update(editingItem.id, values);
+                message.success("Cập nhật thành công!");
+            } else {
+                // Logic TẠO MỚI
+                await productApi.create(values);
+                message.success("Tạo vật tư thành công!");
+            }
             setIsModalOpen(false);
             form.resetFields();
             fetchData();
         } catch (error) {
-            message.error("Lỗi: " + (error.response?.data?.detail || "Không thể tạo"));
+            message.error("Lỗi: " + (error.response?.data?.detail || "Thất bại"));
         }
     };
 
-    // --- XỬ LÝ TẠO NHÓM (SET) ---
     const handleCreateGroup = async (values) => {
         try {
-            // Tự động gán quantity = 1 vì giao diện đã bỏ ô nhập
             const payload = {
                 ...values,
                 items: values.items.map(item => ({
@@ -71,9 +99,8 @@ const InventoryPage = () => {
                     quantity: 1 
                 }))
             };
-
             await productApi.createGroup(payload);
-            message.success("Tạo nhóm vật tư thành công!");
+            message.success("Tạo nhóm thành công!");
             setIsGroupModalOpen(false);
             groupForm.resetFields();
             fetchData();
@@ -82,25 +109,30 @@ const InventoryPage = () => {
         }
     };
 
-    // --- CẤU HÌNH CỘT BẢNG VẬT TƯ LẺ ---
     const materialColumns = [
         { title: 'ID', dataIndex: 'id', width: 60, align: 'center', render: t => <span style={{color:'#888'}}>#{t}</span> },
         { title: 'Mã SKU', dataIndex: 'sku', render: t => <Tag color="geekblue">{t}</Tag> },
         { title: 'Tên Vật Tư', dataIndex: 'variant_name', render: t => <b>{t}</b> },
-        
-        // CỘT GHI CHÚ MỚI
-        { 
-            title: 'Ghi chú', 
-            dataIndex: 'note', 
-            key: 'note',
-            render: (t) => t ? <span style={{color: '#666', fontStyle: 'italic'}}>{t}</span> : <span style={{color:'#ccc'}}>-</span>
-        },
-        
+        { title: 'Ghi chú', dataIndex: 'note', render: (t) => t ? <span style={{color: '#666', fontStyle: 'italic'}}>{t}</span> : '-' },
         { title: 'Giá Vốn', dataIndex: 'cost_price', align: 'right', render: v => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v || 0) },
         { title: 'Tồn kho', dataIndex: 'quantity_on_hand', align: 'center', render: q => <Tag color={q > 0 ? 'success' : 'error'}>{q > 0 ? q : 'Hết'}</Tag> },
+        
+        // CỘT HÀNH ĐỘNG MỚI
+        {
+            title: '',
+            key: 'action',
+            width: 50,
+            render: (_, record) => (
+                <Button 
+                    type="text" 
+                    icon={<EditOutlined />} 
+                    onClick={() => openEditModal(record)} 
+                    style={{color: '#1677ff'}}
+                />
+            )
+        }
     ];
 
-    // --- CẤU HÌNH CỘT BẢNG NHÓM ---
     const groupColumns = [
         { title: 'Mã Nhóm', dataIndex: 'code', width: 150, render: t => <Tag color="purple" style={{fontSize: 14}}>{t}</Tag> },
         { title: 'Tên Nhóm / Bộ', dataIndex: 'name', width: 250, render: t => <b>{t}</b> },
@@ -118,7 +150,6 @@ const InventoryPage = () => {
                         children: (
                             <>
                                 <div style={{marginBottom: 16, display: 'flex', justifyContent: 'space-between'}}>
-                                    {/* THANH TÌM KIẾM */}
                                     <Input 
                                         placeholder="Tìm theo Tên, SKU hoặc Ghi chú..." 
                                         prefix={<SearchOutlined />} 
@@ -127,16 +158,9 @@ const InventoryPage = () => {
                                         onChange={e => setSearchText(e.target.value)}
                                         allowClear
                                     />
-                                    
-                                    <Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Nhập Vật Tư Mới</Button>
+                                    <Button type="primary" onClick={openCreateModal} icon={<PlusOutlined />}>Nhập Vật Tư Mới</Button>
                                 </div>
-                                <Table 
-                                    dataSource={filteredMaterials} 
-                                    columns={materialColumns} 
-                                    rowKey="id" 
-                                    loading={loading} 
-                                    pagination={{ pageSize: 10 }} 
-                                />
+                                <Table dataSource={filteredMaterials} columns={materialColumns} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
                             </>
                         )
                     },
@@ -155,80 +179,64 @@ const InventoryPage = () => {
                 ]} />
             </Card>
 
-            {/* MODAL 1: TẠO VẬT TƯ LẺ */}
-            <Modal title="Thêm Vật Tư Mới (Nhập tay)" open={isModalOpen} onCancel={() => setIsModalOpen(false)} footer={null}>
-                <Form layout="vertical" onFinish={handleCreateMaterial} form={form}>
-                    <Form.Item label="Mã SKU (Tự đặt)" name="sku" rules={[{ required: true }]}>
-                        <Input placeholder="VD: VAI-001" />
+            {/* MODAL TẠO / SỬA */}
+            <Modal 
+                title={editingItem ? "Sửa Thông Tin Vật Tư" : "Thêm Vật Tư Mới"} 
+                open={isModalOpen} 
+                onCancel={() => setIsModalOpen(false)} 
+                footer={null}
+            >
+                <Form layout="vertical" onFinish={handleSaveMaterial} form={form}>
+                    <Form.Item label="Mã SKU" name="sku" rules={[{ required: true }]}>
+                        <Input />
                     </Form.Item>
                     <Form.Item label="Tên Vật tư" name="name" rules={[{ required: true }]}>
-                        <Input placeholder="VD: Vải Lụa Đỏ" />
+                        <Input />
                     </Form.Item>
-                    
-                    {/* Ô NHẬP GHI CHÚ */}
                     <Form.Item label="Ghi chú" name="note">
-                        <Input.TextArea placeholder="VD: Hàng loại 1, dễ nhăn..." rows={2} />
+                        <Input.TextArea rows={2} />
                     </Form.Item>
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                         <Form.Item label="Đơn vị tính" name="unit" initialValue="Cái">
                             <Input />
                         </Form.Item>
-                        <Form.Item label="Giá vốn (VNĐ)" name="cost_price" initialValue={0}>
-                            <InputNumber style={{ width: '100%' }} formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
-                        </Form.Item>
+                        
+                        {/* LOGIC KHÓA GIÁ VỐN KHI SỬA */}
+                        <Tooltip title={editingItem ? "Không thể sửa trực tiếp. Hãy sửa phiếu nhập nếu giá sai." : "Giá vốn khởi tạo"}>
+                            <Form.Item label="Giá vốn (VNĐ)" name="cost_price">
+                                <InputNumber 
+                                    style={{ width: '100%' }} 
+                                    formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                                    disabled={!!editingItem} // Disabled nếu đang sửa
+                                    className={editingItem ? 'input-disabled-black' : ''}
+                                />
+                            </Form.Item>
+                        </Tooltip>
                     </div>
-                    <Button type="primary" htmlType="submit" block>Lưu Vật Tư</Button>
+                    
+                    {editingItem && (
+                        <div style={{marginBottom: 16, fontSize: 12, color: '#faad14'}}>
+                            * Lưu ý: Giá vốn được tính bình quân từ các đơn nhập hàng. Không sửa trực tiếp tại đây.
+                        </div>
+                    )}
+
+                    <Button type="primary" htmlType="submit" block>
+                        {editingItem ? "Cập nhật" : "Lưu Vật Tư"}
+                    </Button>
                 </Form>
             </Modal>
 
-            {/* MODAL 2: TẠO NHÓM/SET VẬT TƯ */}
-            <Modal title="Tạo Nhóm Vật Tư (Gộp nhiều chi tiết)" open={isGroupModalOpen} onCancel={() => setIsGroupModalOpen(false)} footer={null} width={700}>
+            {/* MODAL TẠO NHÓM (Giữ nguyên) */}
+            <Modal title="Tạo Nhóm Vật Tư" open={isGroupModalOpen} onCancel={() => setIsGroupModalOpen(false)} footer={null} width={700}>
                 <Form layout="vertical" onFinish={handleCreateGroup} form={groupForm}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                        <Form.Item label="Mã Nhóm" name="code" rules={[{ required: true }]}>
-                            <Input placeholder="VD: SET-VEST-01" />
-                        </Form.Item>
-                        <Form.Item label="Tên Nhóm" name="name" rules={[{ required: true }]}>
-                            <Input placeholder="VD: Bộ phụ kiện Vest Nam" />
-                        </Form.Item>
+                        <Form.Item label="Mã Nhóm" name="code" rules={[{ required: true }]}><Input /></Form.Item>
+                        <Form.Item label="Tên Nhóm" name="name" rules={[{ required: true }]}><Input /></Form.Item>
                     </div>
-                    <Form.Item label="Mô tả" name="description">
-                        <Input.TextArea rows={1} />
-                    </Form.Item>
-
+                    <Form.Item label="Mô tả" name="description"><Input.TextArea rows={1} /></Form.Item>
                     <Divider orientation="left">Chi tiết trong nhóm</Divider>
-
-                    <Form.List name="items">
-                        {(fields, { add, remove }) => (
-                            <>
-                                {fields.map(({ key, name, ...restField }) => (
-                                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-                                        <Form.Item 
-                                            {...restField} 
-                                            name={[name, 'material_variant_id']} 
-                                            rules={[{ required: true, message: 'Chọn vật tư' }]} 
-                                            style={{ width: 450 }} 
-                                        >
-                                            <Select placeholder="Chọn vật tư con..." showSearch optionFilterProp="children">
-                                                {materials.map(m => (
-                                                    <Select.Option key={m.id} value={m.id}>
-                                                        {m.sku} - {m.variant_name} (Tồn: {m.quantity_on_hand})
-                                                    </Select.Option>
-                                                ))}
-                                            </Select>
-                                        </Form.Item>
-                                        
-                                        <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} />
-                                    </Space>
-                                ))}
-                                <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
-                                    Thêm dòng vật tư con
-                                </Button>
-                            </>
-                        )}
-                    </Form.List>
-
+                    <Form.List name="items">{(fields, { add, remove }) => (<>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline"><Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true }]} style={{ width: 450 }}><Select placeholder="Chọn vật tư...">{materials.map(m => <Select.Option key={m.id} value={m.id}>{m.sku} - {m.variant_name}</Select.Option>)}</Select></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} /></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm dòng vật tư con</Button></>)}</Form.List>
                     <Button type="primary" htmlType="submit" block style={{marginTop: 20}}>Lưu Nhóm Vật Tư</Button>
                 </Form>
             </Modal>

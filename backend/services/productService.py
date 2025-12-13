@@ -1,21 +1,17 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest
+from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, MaterialUpdateRequest, ProductVariantResponse
+
 
 class ProductService:
     def __init__(self, db: Session):
         self.db = db
 
-    # USE CASE 1: Tạo Nguyên vật liệu lẻ (Nhập tay SKU)
     def create_material(self, data: MaterialCreateRequest):
         try:
-            # 1. Tìm hoặc tạo Product cha (Gom nhóm theo tên)
-            # Logic: Nếu tên là "Cúc nhựa trắng" -> Product cha là "Cúc nhựa trắng" (Category mặc định 2: Phụ liệu)
-            # Để đơn giản hóa, ta tạo Product cha dựa trên tên người dùng nhập
-            
-            # Kiểm tra Product cha đã tồn tại chưa
-            query_parent = text("SELECT id FROM products WHERE name = :name LIMIT 1")
-            parent = self.db.execute(query_parent, {"name": data.name}).fetchone()
+            # 1. Tìm hoặc Tạo Product cha
+            query_check_parent = text("SELECT id FROM products WHERE name = :name LIMIT 1")
+            parent = self.db.execute(query_check_parent, {"name": data.name}).fetchone()
 
             if parent:
                 parent_id = parent[0]
@@ -24,35 +20,41 @@ class ProductService:
                 query_insert_parent = text("""
                     INSERT INTO products (category_id, name, type, base_unit) 
                     VALUES (2, :name, 'material', :unit)
-                """) # Mặc định category_id = 2 (Phụ liệu) cho nhanh
+                """)
                 self.db.execute(query_insert_parent, {"name": data.name, "unit": data.unit})
-                self.db.commit()
-                # Lấy ID vừa tạo
-                parent_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+                
+                # --- FIX: Flush để đẩy dữ liệu vào DB tạm thời ---
+                self.db.flush() 
+                
+                # --- FIX: Lấy ID bằng cách tìm lại theo Tên (Chắc chắn 100%) ---
+                # Thay vì tin tưởng LAST_INSERT_ID(), ta tìm chính xác bản ghi vừa tạo
+                parent_id_row = self.db.execute(query_check_parent, {"name": data.name}).fetchone()
+                if not parent_id_row:
+                    raise Exception("Lỗi hệ thống: Không lấy được ID sản phẩm vừa tạo.")
+                parent_id = parent_id_row[0]
 
-            # 2. Tạo Variant (Chi tiết cụ thể - H10001)
+            # 2. Tạo Variant con
             query_variant = text("""
                 INSERT INTO product_variants (product_id, sku, variant_name, attributes, cost_price, note)
                 VALUES (:pid, :sku, :vname, :attrs, :cost, :note)
             """)
             self.db.execute(query_variant, {
-                "pid": parent_id,
+                "pid": parent_id, # ID này giờ chắc chắn đúng
                 "sku": data.sku,
                 "vname": data.name, 
                 "attrs": data.attributes,
                 "cost": data.cost_price,
-                "note": data.note # <--- Mới
+                "note": data.note
             })
             
             self.db.commit()
-            return {"status": "success", "message": f"Đã tạo NVL: {data.sku}"}
+            return {"status": "success", "message": f"Đã tạo NVL: {data.sku} - {data.name}"}
         
         except Exception as e:
             self.db.rollback()
+            if "Duplicate entry" in str(e):
+                 raise Exception(f"Mã SKU '{data.sku}' đã tồn tại! Vui lòng kiểm tra lại.")
             raise Exception(f"Lỗi tạo NVL: {str(e)}")
-
-    # ... (Các phần trên giữ nguyên) ...
-
     # USE CASE 2: Tạo Nhóm Nguyên vật liệu (Set) - ĐÃ SỬA LỖI ID=0
     def create_material_group(self, data: MaterialGroupCreateRequest):
         try:
@@ -169,3 +171,37 @@ class ProductService:
                 "cost_price": r[3], "quantity_on_hand": r[4], "note": r[5]
             } for r in results
         ]
+    
+
+    # USE CASE 5: Cập nhật thông tin NVL
+    def update_material(self, material_id: int, data: MaterialUpdateRequest):
+        try:
+            # A. Lấy thông tin cũ để biết product_id (Cha)
+            current = self.db.execute(text("SELECT product_id FROM product_variants WHERE id = :id"), {"id": material_id}).fetchone()
+            if not current: raise Exception("Vật tư không tồn tại")
+            parent_id = current[0]
+
+            # B. Cập nhật bảng Variants (Con)
+            query_var = text("""
+                UPDATE product_variants 
+                SET sku = :sku, variant_name = :name, attributes = :attrs, note = :note
+                WHERE id = :id
+            """)
+            self.db.execute(query_var, {
+                "sku": data.sku, "name": data.name, 
+                "attrs": data.attributes, "note": data.note, 
+                "id": material_id
+            })
+
+            # C. Cập nhật bảng Products (Cha) - Để sửa Đơn vị tính
+            query_prod = text("UPDATE products SET base_unit = :unit WHERE id = :pid")
+            self.db.execute(query_prod, {"unit": data.unit, "pid": parent_id})
+
+            self.db.commit()
+            return {"status": "success", "message": "Cập nhật thành công!"}
+
+        except Exception as e:
+            self.db.rollback()
+            if "Duplicate entry" in str(e):
+                raise Exception(f"Mã SKU '{data.sku}' đã tồn tại ở sản phẩm khác!")
+            raise e
