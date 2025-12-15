@@ -50,8 +50,7 @@ class QuickProductionRequest(BaseModel):
     
     order_code: str
     warehouse_id: int
-    quantity_planned: int = 0  # <-- XÓA CÁI NÀY (Vì tổng sẽ tự tính từ list size)
-    
+    quantity_planned: int = 0
     start_date: date
     due_date: date
     
@@ -65,8 +64,22 @@ class QuickProductionRequest(BaseModel):
     shipping_fee: float = 0
     other_fee: float = 0
 
+    labor_fee: float = 0
+    marketing_fee: float = 0
+    packaging_fee: float = 0
+
 
 # Request cho việc Nhập kho thành phẩm từng đợt (Trả hàng)
 class ReceiveGoodsRequest(BaseModel):
     # Danh sách các size được trả trong đợt này
     items: List[SizeQuantityRequest]
+
+class ProductionUpdateRequest(BaseModel):
+    shipping_fee: float = 0
+    other_fee: float = 0
+    labor_fee: float = 0
+    marketing_fee: float = 0
+    packaging_fee: float = 0
+    start_date: Optional[date] = None
+    due_date: Optional[date] = None
+    new_sku: Optional[str] = None

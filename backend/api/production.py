@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
 # Import đầy đủ các Request Model
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest
 import shutil
 import uuid
 
@@ -109,3 +109,21 @@ def upload_image(file: UploadFile = File(...)):
 def get_receive_history(order_id: int, db: Session = Depends(get_db)):
     service = ProductionService(db)
     return service.get_receive_history(order_id)
+
+# 5. API Cập nhật thông tin lệnh sản xuất (Chi phí và ngày tháng)
+@router.put("/production/orders/{order_id}")
+def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = Depends(get_db)):
+    service = ProductionService(db)
+    try:
+        return service.update_production_order(order_id, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# 6. API Xóa Đơn Hàng
+@router.delete("/production/orders/{order_id}")
+def delete_order(order_id: int, db: Session = Depends(get_db)):
+    service = ProductionService(db)
+    try:
+        return service.delete_production_order(order_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

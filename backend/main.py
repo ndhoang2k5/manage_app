@@ -31,6 +31,7 @@ app.include_router(warehouses.router, prefix="/api/v1", tags=["Warehouses"])
 app.include_router(purchases.router, prefix="/api/v1", tags=["Purchasing"])
 app.include_router(production.router, prefix="/api/v1", tags=["Production"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+# app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
 @app.get("/")
 def health_check():
     return {"status": "ok", "system": "Fashion WMS Backend"}

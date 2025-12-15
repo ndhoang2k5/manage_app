@@ -28,11 +28,16 @@ const productionApi = {
     // 3. Lấy lịch sử nhập hàng theo đợt
     getReceiveHistory: (id) => axiosClient.get(`/production/orders/${id}/history`),
 
+    // 4. Cập nhật thông tin lệnh sản xuất (Chi phí và ngày tháng)
+    updateOrder: (id, data) => axiosClient.put(`/production/orders/${id}`, data),
 
-    // Tải lên hình ảnh
+    // 5.Tải lên hình ảnh
     uploadImage: (formData) => axiosClient.post('/production/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
+
+    // 6. Xóa đơn hàng & hoàn kho
+    deleteOrder: (id) => axiosClient.delete(`/production/orders/${id}`),
 };
 
 export default productionApi;

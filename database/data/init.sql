@@ -148,6 +148,9 @@ CREATE TABLE production_orders (
     status ENUM('draft', 'waiting_material', 'in_progress', 'completed', 'cancelled'),
     shipping_fee DECIMAL(15, 2) DEFAULT 0,
     other_fee DECIMAL(15, 2) DEFAULT 0,
+    labor_fee DECIMAL(15, 2) DEFAULT 0,
+    marketing_fee DECIMAL(15, 2) DEFAULT 0,
+    packaging_fee DECIMAL(15, 2) DEFAULT 0,
     start_date DATE,
     due_date DATE,
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
@@ -269,7 +272,15 @@ CREATE TABLE production_receive_logs (
     FOREIGN KEY (production_order_item_id) REFERENCES production_order_items(id)
 );
 
-
+-- 25. Người dùng hệ thống
+CREATE TABLE users (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL, -- Lưu pass đã mã hóa (Hash)
+    full_name VARCHAR(100),
+    role ENUM('admin', 'staff', 'manager') DEFAULT 'staff',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 
 -- ==========================================================
@@ -335,3 +346,10 @@ UPDATE inventory_stocks SET quantity_on_hand = 2000 WHERE warehouse_id = 1 AND p
 INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES
 (2, 1, 100), -- Xưởng A có 100m Vải
 (2, 3, 500); -- Xưởng A có 500 Cúc
+
+
+INSERT INTO users (username, password, full_name, role) 
+VALUES ('admin', '123456', 'Quản Trị Viên', 'admin');
+
+INSERT INTO users (username, password, full_name, role) 
+VALUES ('kho1', '123456', 'Thủ Kho Tổng', 'staff');

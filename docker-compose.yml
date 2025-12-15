@@ -25,23 +25,23 @@ services:
     depends_on:
       - database
     environment:
-      - DB_HOST=database # Tên service database ở trên
+      - DB_HOST=database
       - DB_PORT=3306
       - DB_USER=root
       - DB_PASSWORD=Nguyenduyhoang2005
       - DB_NAME=manage_app_database
     volumes:
-      - ./backend:/app # Hot-reload: Sửa code máy thật -> container tự cập nhật
+      - ./backend:/app 
 
   frontend:
     build: ./frontend
     container_name: fashion_frontend
     restart: always
     ports:
-      - "3000:5173" # Map port 5173 trong docker ra 3000 máy thật
+      - "3000:5173"
     volumes:
       - ./frontend:/app
-      - /app/node_modules # Tránh xung đột thư viện giữa máy thật và docker
+      - /app/node_modules
     depends_on:
       - backend
 
