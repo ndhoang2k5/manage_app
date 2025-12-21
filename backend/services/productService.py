@@ -1,3 +1,4 @@
+from sqlite3 import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, MaterialUpdateRequest, ProductVariantResponse
@@ -7,54 +8,59 @@ class ProductService:
     def __init__(self, db: Session):
         self.db = db
 
+     # USE CASE 1: Tạo Vật tư với Nhiều Màu
     def create_material(self, data: MaterialCreateRequest):
         try:
-            # 1. Tìm hoặc Tạo Product cha
+            # 1. Tạo Product Cha (Nếu chưa có)
+            # (Logic cũ: Tìm theo tên, nếu không có thì tạo)
             query_check_parent = text("SELECT id FROM products WHERE name = :name LIMIT 1")
             parent = self.db.execute(query_check_parent, {"name": data.name}).fetchone()
 
             if parent:
                 parent_id = parent[0]
             else:
-                # Tạo mới Product cha
                 query_insert_parent = text("""
                     INSERT INTO products (category_id, name, type, base_unit) 
                     VALUES (2, :name, 'material', :unit)
                 """)
                 self.db.execute(query_insert_parent, {"name": data.name, "unit": data.unit})
+                self.db.flush()
                 
-                # --- FIX: Flush để đẩy dữ liệu vào DB tạm thời ---
-                self.db.flush() 
-                
-                # --- FIX: Lấy ID bằng cách tìm lại theo Tên (Chắc chắn 100%) ---
-                # Thay vì tin tưởng LAST_INSERT_ID(), ta tìm chính xác bản ghi vừa tạo
-                parent_id_row = self.db.execute(query_check_parent, {"name": data.name}).fetchone()
-                if not parent_id_row:
-                    raise Exception("Lỗi hệ thống: Không lấy được ID sản phẩm vừa tạo.")
-                parent_id = parent_id_row[0]
+                # Lấy lại ID
+                parent_row = self.db.execute(query_check_parent, {"name": data.name}).fetchone()
+                parent_id = parent_row[0]
 
-            # 2. Tạo Variant con
+            # 2. Tạo từng Biến thể (Màu)
             query_variant = text("""
-                INSERT INTO product_variants (product_id, sku, variant_name, attributes, cost_price, note)
-                VALUES (:pid, :sku, :vname, :attrs, :cost, :note)
+                INSERT INTO product_variants (product_id, sku, variant_name, color, cost_price, note)
+                VALUES (:pid, :sku, :vname, :color, :cost, :note)
             """)
-            self.db.execute(query_variant, {
-                "pid": parent_id, # ID này giờ chắc chắn đúng
-                "sku": data.sku,
-                "vname": data.name, 
-                "attrs": data.attributes,
-                "cost": data.cost_price,
-                "note": data.note
-            })
+
+            for variant in data.variants:
+                # Tự động ghép tên: "Vải Linen" + " - " + "Trắng"
+                full_name = f"{data.name} - {variant.color_name}"
+                
+                self.db.execute(query_variant, {
+                    "pid": parent_id,
+                    "sku": variant.sku,
+                    "vname": full_name, # Tên hiển thị đầy đủ
+                    "color": variant.color_name,
+                    "cost": variant.cost_price,
+                    "note": variant.note
+                })
             
             self.db.commit()
-            return {"status": "success", "message": f"Đã tạo NVL: {data.sku} - {data.name}"}
-        
+            return {"status": "success", "message": f"Đã tạo vật tư '{data.name}' với {len(data.variants)} màu."}
+            
+        except IntegrityError as e:
+            self.db.rollback()
+            raise Exception("Lỗi: Mã SKU bị trùng lặp!")
         except Exception as e:
             self.db.rollback()
-            if "Duplicate entry" in str(e):
-                 raise Exception(f"Mã SKU '{data.sku}' đã tồn tại! Vui lòng kiểm tra lại.")
             raise Exception(f"Lỗi tạo NVL: {str(e)}")
+        
+
+
     # USE CASE 2: Tạo Nhóm Nguyên vật liệu (Set) - ĐÃ SỬA LỖI ID=0
     def create_material_group(self, data: MaterialGroupCreateRequest):
         try:
@@ -110,12 +116,12 @@ class ProductService:
         query = text("""
             SELECT v.id, v.sku, v.variant_name, p.name as category_name, 
                    IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand,
-                   v.cost_price, v.note -- <--- Lấy thêm note
+                   v.cost_price, v.note, v.color
             FROM product_variants v
             JOIN products p ON v.product_id = p.id
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
             WHERE p.type = 'material'
-            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price, v.note
+            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price, v.note, v.color
             ORDER BY v.id DESC
         """)
         results = self.db.execute(query).fetchall()
@@ -123,7 +129,7 @@ class ProductService:
             {
                 "id": row[0], "sku": row[1], "variant_name": row[2], 
                 "category_name": row[3], "quantity_on_hand": row[4], 
-                "cost_price": row[5], "note": row[6] # <--- Map ra
+                "cost_price": row[5], "note": row[6], "color": row[7] # Map color
             } for row in results
         ]
     

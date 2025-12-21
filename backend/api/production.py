@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from security import get_current_user, require_admin
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
-# Import đầy đủ các Request Model
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest
 import shutil
 import uuid
@@ -11,17 +11,25 @@ router = APIRouter()
 
 # --- CÁC API CŨ ---
 @router.get("/production/orders")
-def list_orders(db: Session = Depends(get_db)):
+def list_orders(
+    db: Session = Depends(get_db), 
+    user: dict = Depends(get_current_user)
+    ):
     service = ProductionService(db)
     return service.get_all_orders()
 
+
+
 @router.get("/production/boms")
-def list_boms(db: Session = Depends(get_db)):
+def list_boms(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+    ):
     service = ProductionService(db)
     return service.get_all_boms()
 
 @router.post("/production/bom/create")
-def create_bom(request: BOMCreateRequest, db: Session = Depends(get_db)):
+def create_bom(request: BOMCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.create_bom(request)
@@ -29,7 +37,7 @@ def create_bom(request: BOMCreateRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/production/orders/create")
-def create_order(request: ProductionOrderCreateRequest, db: Session = Depends(get_db)):
+def create_order(request: ProductionOrderCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.create_order(request)
@@ -37,7 +45,7 @@ def create_order(request: ProductionOrderCreateRequest, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/production/orders/create-quick")
-def create_quick_order(request: QuickProductionRequest, db: Session = Depends(get_db)):
+def create_quick_order(request: QuickProductionRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.create_quick_order(request)
@@ -45,7 +53,7 @@ def create_quick_order(request: QuickProductionRequest, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/production/orders/{order_id}/start")
-def start_production(order_id: int, db: Session = Depends(get_db)):
+def start_production(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.start_production(order_id)
@@ -53,7 +61,7 @@ def start_production(order_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/production/orders/{order_id}/complete")
-def finish_production(order_id: int, db: Session = Depends(get_db)):
+def finish_production(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.finish_production(order_id)
@@ -64,13 +72,13 @@ def finish_production(order_id: int, db: Session = Depends(get_db)):
 
 # 1. API Lấy chi tiết Size (Nguyên nhân gây lỗi nếu thiếu cái này)
 @router.get("/production/orders/{order_id}/details")
-def get_order_details(order_id: int, db: Session = Depends(get_db)):
+def get_order_details(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     return service.get_order_details(order_id)
 
 # 2. API Nhập hàng từng đợt
 @router.post("/production/orders/{order_id}/receive")
-def receive_goods(order_id: int, request: ReceiveGoodsRequest, db: Session = Depends(get_db)):
+def receive_goods(order_id: int, request: ReceiveGoodsRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.receive_goods(order_id, request)
@@ -79,12 +87,12 @@ def receive_goods(order_id: int, request: ReceiveGoodsRequest, db: Session = Dep
 
 # 3. API Chốt đơn
 @router.post("/production/orders/{order_id}/force-finish")
-def force_finish(order_id: int, db: Session = Depends(get_db)):
+def force_finish(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     return service.force_finish_order(order_id)
 
 @router.get("/production/orders/{order_id}/print")
-def get_order_print_data(order_id: int, db: Session = Depends(get_db)):
+def get_order_print_data(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     return service.get_order_print_data(order_id)
 
@@ -106,13 +114,13 @@ def upload_image(file: UploadFile = File(...)):
     
 # 4. API Lấy lịch sử nhập hàng theo đợt
 @router.get("/production/orders/{order_id}/history")
-def get_receive_history(order_id: int, db: Session = Depends(get_db)):
+def get_receive_history(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     return service.get_receive_history(order_id)
 
 # 5. API Cập nhật thông tin lệnh sản xuất (Chi phí và ngày tháng)
 @router.put("/production/orders/{order_id}")
-def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = Depends(get_db)):
+def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
     service = ProductionService(db)
     try:
         return service.update_production_order(order_id, request)
@@ -121,7 +129,7 @@ def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = 
     
 # 6. API Xóa Đơn Hàng
 @router.delete("/production/orders/{order_id}")
-def delete_order(order_id: int, db: Session = Depends(get_db)):
+def delete_order(order_id: int, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
     service = ProductionService(db)
     try:
         return service.delete_production_order(order_id)

@@ -1,43 +1,55 @@
-# from sqlalchemy.orm import Session
-# from sqlalchemy import text
-# from datetime import datetime, timedelta
-# from jose import jwt
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from security import create_access_token
+# Không cần import verify_password nữa để tránh lỗi loằng ngoằng
 
-# # Cấu hình bảo mật
-# SECRET_KEY = "FASHION_WMS_SECRET_KEY_2025" # Chuỗi bí mật, không được lộ
-# ALGORITHM = "HS256"
-# ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Token sống 7 ngày
+class AuthService:
+    def __init__(self, db: Session):
+        self.db = db
 
-# class AuthService:
-#     def __init__(self, db: Session):
-#         self.db = db
+    def login(self, username, password):
+        # 1. Cắt khoảng trắng thừa (An toàn)
+        username = username.strip()
+        password = password.strip()
 
-#     def login(self, username, password):
-#         # 1. Tìm user trong DB
-#         # (Lưu ý: Để đơn giản tôi đang so sánh pass thô, thực tế nên dùng verify hash)
-#         query = text("SELECT id, username, full_name, role FROM users WHERE username = :u AND password = :p")
-#         user = self.db.execute(query, {"u": username, "p": password}).fetchone()
+        # 2. Tìm user trong DB
+        query = text("SELECT id, username, full_name, role, warehouse_id, password FROM users WHERE username = :u")
+        user = self.db.execute(query, {"u": username}).fetchone()
 
-#         if not user:
-#             return None # Sai thông tin
+        # 3. DEBUG LOG (Để yên tâm)
+        if user:
+            print(f"LOG: Input='{password}' | DB='{user[5]}'")
+        else:
+            print(f"LOG: User '{username}' not found")
+
+        # 4. KIỂM TRA ĐĂNG NHẬP (LOGIC TRỰC TIẾP)
+        if not user:
+            return None 
         
-#         # 2. Tạo Token
-#         token_data = {
-#             "sub": user[1],         # username
-#             "id": user[0],          # user_id
-#             "role": user[3],        # role
-#             "name": user[2],        # Full name
-#             "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-#         }
+        db_password = user[5] # Cột password trong DB
+
+        if password != db_password:
+            print("LOG: Sai mật khẩu!")
+            return None 
         
-#         token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+        print("LOG: Đăng nhập thành công! Đang tạo Token...")
         
-#         return {
-#             "access_token": token,
-#             "token_type": "bearer",
-#             "user_info": {
-#                 "id": user[0],
-#                 "name": user[2],
-#                 "role": user[3]
-#             }
-#         }
+        token_data = {
+            "sub": user[1],
+            "id": user[0],
+            "role": user[3],
+            "wid": user[4]
+        }
+        token = create_access_token(token_data)
+        
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user_info": {
+                "id": user[0],
+                "username": user[1],
+                "name": user[2],
+                "role": user[3],
+                "warehouse_id": user[4]
+            }
+        }
