@@ -16,6 +16,8 @@ origins = [
     "http://localhost:5173", # Port mặc định khác của Vite
     "http://45.117.177.181",      # <--- THÊM DÒNG NÀY (IP VPS - Frontend chạy port 80)
     "http://45.117.177.181:3000", # <--- THÊM DÒNG NÀY
+    "http://ranbeevn.com",       # <--- THÊM
+    "http://www.ranbeevn.com",   # <--- THÊM
     "*"                      # Hoặc để "*" để cho phép tất cả (chỉ dùng khi dev)
 ]
 
