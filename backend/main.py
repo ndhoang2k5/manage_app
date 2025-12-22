@@ -14,6 +14,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 origins = [
     "http://localhost:3000", # Port mặc định của React/Vite
     "http://localhost:5173", # Port mặc định khác của Vite
+    "http://45.117.177.181",      # <--- THÊM DÒNG NÀY (IP VPS - Frontend chạy port 80)
+    "http://45.117.177.181:3000", # <--- THÊM DÒNG NÀY
     "*"                      # Hoặc để "*" để cho phép tất cả (chỉ dùng khi dev)
 ]
 

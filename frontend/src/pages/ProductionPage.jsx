@@ -16,7 +16,7 @@ import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
 
 // Cấu hình URL backend để hiển thị ảnh
-const BASE_URL = 'http://localhost:8000'; 
+const BASE_URL = 'http://45.117.177.181:8000'; 
 
 const ProductionPage = () => {
     // 1. Data States
