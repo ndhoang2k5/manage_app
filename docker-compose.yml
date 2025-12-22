@@ -7,14 +7,10 @@ services:
     restart: always
     environment:
       MYSQL_DATABASE: manage_app_database
-      MYSQL_ROOT_PASSWORD: mat_khau_database_manh # <-- Đặt pass mạnh vào nhé
+      MYSQL_ROOT_PASSWORD: Nguyenduyhoang2005# <--- Đặt mật khẩu khó vào nhé
       TZ: Asia/Ho_Chi_Minh
     volumes:
       - db_data:/var/lib/mysql
-    # Trên VPS production không cần mở cổng 3307 ra ngoài internet cho an toàn
-    # Nhưng nếu bạn muốn debug từ xa thì cứ để, nhớ đổi pass mạnh.
-    ports:
-      - "3307:3306"
 
   backend:
     build: ./backend
@@ -24,21 +20,18 @@ services:
       - DB_HOST=database
       - DB_PORT=3306
       - DB_USER=root
-      - DB_PASSWORD=mat_khau_database_manh # <-- Khớp với ở trên
+      - DB_PASSWORD=Nguyenduyhoang2005 # <--- Phải khớp với password database ở trên
       - DB_NAME=manage_app_database
       - TZ=Asia/Ho_Chi_Minh
     depends_on:
       - database
-    # Backend không cần mở cổng ra ngoài, Frontend (Nginx) sẽ gọi nội bộ
-    # expose:
-    #   - "8000"
 
   frontend:
     build: ./frontend
     container_name: fashion_frontend
     restart: always
     ports:
-      - "80:80" # Chạy cổng 80 (Web mặc định)
+      - "80:80" # Chạy thẳng cổng Web
     depends_on:
       - backend
 

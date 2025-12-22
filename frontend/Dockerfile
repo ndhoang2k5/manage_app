@@ -1,19 +1,32 @@
-# --- STAGE 1: Build React ---
+# Stage 1: Build React
 FROM node:20-alpine as build
 WORKDIR /app
 COPY package.json ./
-# Cài đặt thư viện
 RUN npm install
-# Copy code và Build ra file tĩnh
 COPY . .
 RUN npm run build
 
-# --- STAGE 2: Chạy Nginx ---
+# Stage 2: Chạy Web bằng Nginx
 FROM nginx:alpine
-# Copy file build từ Stage 1 sang folder của Nginx
 COPY --from=build /app/dist /usr/share/nginx/html
-# Copy file cấu hình Nginx mình vừa tạo
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Tạo cấu hình Nginx để điều hướng API và React Router
+RUN echo 'server { \
+    listen 80; \
+    location / { \
+        root /usr/share/nginx/html; \
+        index index.html index.htm; \
+        try_files $uri $uri/ /index.html; \
+    } \
+    location /api { \
+        proxy_pass http://backend:8000; \
+        proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
+    } \
+    location /static { \
+        proxy_pass http://backend:8000/static; \
+    } \
+}' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
