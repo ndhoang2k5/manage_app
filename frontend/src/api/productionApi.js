@@ -7,7 +7,7 @@ const productionApi = {
     createBOM: (data) => axiosClient.post('/production/bom/create', data),
 
     // Orders (Lệnh SX)
-    getOrders: () => axiosClient.get('/production/orders'),
+    getOrders: (params) => axiosClient.get('/production/orders', { params }),
     createOrder: (data) => axiosClient.post('/production/orders/create', data),
     createQuickOrder: (data) => axiosClient.post('/production/orders/create-quick', data),
     

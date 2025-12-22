@@ -6,19 +6,21 @@ from services.productionService import ProductionService
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest
 import shutil
 import uuid
+from typing import Optional
 
 router = APIRouter()
 
-# --- CÁC API CŨ ---
 @router.get("/production/orders")
 def list_orders(
+    page: int = 1, 
+    limit: int = 10, 
+    search: Optional[str] = None, 
+    warehouse: Optional[str] = None,
     db: Session = Depends(get_db), 
     user: dict = Depends(get_current_user)
-    ):
+):
     service = ProductionService(db)
-    return service.get_all_orders()
-
-
+    return service.get_all_orders(page, limit, search, warehouse)
 
 @router.get("/production/boms")
 def list_boms(
@@ -29,7 +31,11 @@ def list_boms(
     return service.get_all_boms()
 
 @router.post("/production/bom/create")
-def create_bom(request: BOMCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+def create_bom(
+    request: BOMCreateRequest, 
+    db: Session = Depends(get_db), 
+    user: dict = Depends(get_current_user)
+    ):
     service = ProductionService(db)
     try:
         return service.create_bom(request)
@@ -68,7 +74,6 @@ def finish_production(order_id: int, db: Session = Depends(get_db), user: dict =
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# --- CÁC API MỚI (QUAN TRỌNG ĐỂ SỬA LỖI CỦA BẠN) ---
 
 # 1. API Lấy chi tiết Size (Nguyên nhân gây lỗi nếu thiếu cái này)
 @router.get("/production/orders/{order_id}/details")
@@ -99,7 +104,6 @@ def get_order_print_data(order_id: int, db: Session = Depends(get_db), user: dic
 @router.post("/production/upload")
 def upload_image(file: UploadFile = File(...)):
     try:
-        # Tạo tên file độc nhất để không trùng
         file_extension = file.filename.split(".")[-1]
         new_filename = f"{uuid.uuid4()}.{file_extension}"
         file_path = f"static/images/{new_filename}"
@@ -107,7 +111,6 @@ def upload_image(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Trả về đường dẫn ảnh để Frontend lưu vào list
         return {"url": f"/static/images/{new_filename}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi upload: {str(e)}")

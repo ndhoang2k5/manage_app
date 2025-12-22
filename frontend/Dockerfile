@@ -1,18 +1,19 @@
-# frontend/Dockerfile
-# Sử dụng Node image nhẹ
-FROM node:20-alpine
-
+# --- STAGE 1: Build React ---
+FROM node:20-alpine as build
 WORKDIR /app
-
-# Copy file package để cài thư viện trước (tận dụng cache)
-COPY package.json  ./
+COPY package.json ./
+# Cài đặt thư viện
 RUN npm install
-
-# Copy toàn bộ code vào
+# Copy code và Build ra file tĩnh
 COPY . .
+RUN npm run build
 
-# Mở port 5173 (Port mặc định của Vite)
-EXPOSE 5173
+# --- STAGE 2: Chạy Nginx ---
+FROM nginx:alpine
+# Copy file build từ Stage 1 sang folder của Nginx
+COPY --from=build /app/dist /usr/share/nginx/html
+# Copy file cấu hình Nginx mình vừa tạo
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Chạy server development
-CMD ["npm", "run", "dev", "--", "--host"]
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

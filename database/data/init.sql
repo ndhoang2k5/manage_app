@@ -321,26 +321,24 @@ INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantit
 (1, 2, 100, 125000, 12500000), 
 (1, 3, 2500, 200, 500000);     
 
--- Cập nhật Tồn kho
+
 INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (1, 1, 400), (1, 2, 100), (1, 3, 2500);
 INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (1, 1, 'purchase_in', 400, 1, 'Nhập đầu kỳ'), (1, 2, 'purchase_in', 100, 1, 'Nhập đầu kỳ'), (1, 3, 'purchase_in', 2500, 1, 'Nhập đầu kỳ');
 
--- E. Điều chuyển
+
 UPDATE inventory_stocks SET quantity_on_hand = 300 WHERE warehouse_id = 1 AND product_variant_id = 1; 
 UPDATE inventory_stocks SET quantity_on_hand = 2000 WHERE warehouse_id = 1 AND product_variant_id = 3; 
 
 INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (2, 1, 100), (2, 3, 500);
 
--- F. Tạo User (Pass: 123456)
+
 INSERT INTO users (username, password, full_name, role, warehouse_id) 
 VALUES ('admin', '123456', 'Quản Trị Viên', 'admin', NULL);
 
 INSERT INTO users (username, password, full_name, role, warehouse_id) 
 VALUES ('user', '123456', 'Trưởng Xưởng A', 'staff', 2);
 
--- ==========================================================
--- 3. TẠO INDEX (TỐI ƯU HIỆU NĂNG)
--- ==========================================================
+
 CREATE INDEX idx_product_name ON product_variants(variant_name);
 CREATE INDEX idx_production_warehouse ON production_orders(warehouse_id);
 CREATE INDEX idx_production_status ON production_orders(status);

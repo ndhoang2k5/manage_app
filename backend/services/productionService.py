@@ -316,24 +316,62 @@ class ProductionService:
         """), {"oid": order_id}).fetchall()
         return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
 
-    # API Lấy danh sách lệnh
-    def get_all_orders(self):
-        query = text("""
-            SELECT po.id, po.code, w.name as warehouse_name, p.variant_name as product_name,
+# 6. Lấy danh sách Lệnh SX (Phân trang + Tìm kiếm + Lọc)
+    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None):
+        offset = (page - 1) * limit
+        
+        # Xây dựng câu điều kiện WHERE động
+        conditions = []
+        params = {"limit": limit, "offset": offset}
+
+        # Lưu ý: Alias 'pv' là product_variants
+        if search:
+            conditions.append("(po.code LIKE :search OR pv.variant_name LIKE :search)")
+            params["search"] = f"%{search}%"
+        
+        if warehouse_name:
+            conditions.append("w.name = :wname")
+            params["wname"] = warehouse_name
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        # A. Query Đếm (Sửa JOIN products -> product_variants)
+        count_sql = text(f"""
+            SELECT COUNT(*)
+            FROM production_orders po
+            JOIN warehouses w ON po.warehouse_id = w.id
+            JOIN product_variants pv ON po.product_variant_id = pv.id 
+            {where_clause}
+        """)
+        total_records = self.db.execute(count_sql, params).scalar()
+
+        # B. Query Lấy dữ liệu (Sửa JOIN products -> product_variants)
+        data_sql = text(f"""
+            SELECT po.id, po.code, w.name as warehouse_name, pv.variant_name as product_name,
                    po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
-            JOIN product_variants p ON po.product_variant_id = p.id
+            JOIN product_variants pv ON po.product_variant_id = pv.id 
+            {where_clause}
             ORDER BY po.id DESC
+            LIMIT :limit OFFSET :offset
         """)
-        results = self.db.execute(query).fetchall()
-        return [
-            {
-                "id": r[0], "code": r[1], "warehouse_name": r[2], "product_name": r[3],
-                "quantity_planned": r[4], "quantity_finished": r[5], "status": r[6],
-                "start_date": r[7], "due_date": r[8]
-            } for r in results
-        ]
+        results = self.db.execute(data_sql, params).fetchall()
+
+        return {
+            "data": [
+                {
+                    "id": r[0], "code": r[1], "warehouse_name": r[2], "product_name": r[3],
+                    "quantity_planned": r[4], "quantity_finished": r[5], "status": r[6],
+                    "start_date": r[7], "due_date": r[8]
+                } for r in results
+            ],
+            "total": total_records,
+            "page": page,
+            "limit": limit
+        }
+    
+    
 
     def get_all_boms(self):
         query = text("""

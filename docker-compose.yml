@@ -1,47 +1,44 @@
 version: '3.8'
 
 services:
-  # 1. Database Service
   database:
-    build: ./database
-    container_name: fashion_db
-    restart: always
+    image: mysql:8.0
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    restart: always
     environment:
       MYSQL_DATABASE: manage_app_database
-      MYSQL_ROOT_PASSWORD: Nguyenduyhoang2005
-    ports:
-      - "3307:3306" # Map port ra ngoài máy host (3307) để tránh đụng MySQL có sẵn
+      MYSQL_ROOT_PASSWORD: mat_khau_database_manh # <-- Đặt pass mạnh vào nhé
+      TZ: Asia/Ho_Chi_Minh
     volumes:
       - db_data:/var/lib/mysql
+    # Trên VPS production không cần mở cổng 3307 ra ngoài internet cho an toàn
+    # Nhưng nếu bạn muốn debug từ xa thì cứ để, nhớ đổi pass mạnh.
+    ports:
+      - "3307:3306"
 
-  # 2. Backend Service
   backend:
     build: ./backend
     container_name: fashion_backend
     restart: always
-    ports:
-      - "8000:8000"
-    depends_on:
-      - database
     environment:
       - DB_HOST=database
       - DB_PORT=3306
       - DB_USER=root
-      - DB_PASSWORD=Nguyenduyhoang2005
+      - DB_PASSWORD=mat_khau_database_manh # <-- Khớp với ở trên
       - DB_NAME=manage_app_database
-    volumes:
-      - ./backend:/app 
+      - TZ=Asia/Ho_Chi_Minh
+    depends_on:
+      - database
+    # Backend không cần mở cổng ra ngoài, Frontend (Nginx) sẽ gọi nội bộ
+    # expose:
+    #   - "8000"
 
   frontend:
     build: ./frontend
     container_name: fashion_frontend
     restart: always
     ports:
-      - "3000:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - "80:80" # Chạy cổng 80 (Web mặc định)
     depends_on:
       - backend
 

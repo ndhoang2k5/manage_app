@@ -15,19 +15,25 @@ import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
 
+// Cấu hình URL backend để hiển thị ảnh
 const BASE_URL = 'http://localhost:8000'; 
 
 const ProductionPage = () => {
-    // Data States
+    // 1. Data States
     const [orders, setOrders] = useState([]);
     const [products, setProducts] = useState([]); 
     const [warehouses, setWarehouses] = useState([]);
-    
-    // Search States
+
+    // 2. Pagination & Filter States (QUAN TRỌNG CHO PHÂN TRANG)
+    const [pagination, setPagination] = useState({
+        current: 1,
+        pageSize: 10,
+        total: 0
+    });
     const [searchText, setSearchText] = useState('');
     const [filterWarehouse, setFilterWarehouse] = useState(null);
 
-    // Modal States
+    // 3. UI/Modal States
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
@@ -37,7 +43,7 @@ const ProductionPage = () => {
     const [loading, setLoading] = useState(false);
     const [estimatedCost, setEstimatedCost] = useState(0); 
     
-    // Detail States
+    // 4. Detail States
     const [currentOrder, setCurrentOrder] = useState(null);
     const [orderSizes, setOrderSizes] = useState([]); 
     const [printData, setPrintData] = useState(null);
@@ -49,65 +55,90 @@ const ProductionPage = () => {
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y"];
 
-    // 1. Load Dữ liệu
-    const fetchData = async () => {
+    // --- HÀM 1: LOAD DỮ LIỆU NỀN (Chỉ chạy 1 lần đầu) ---
+    useEffect(() => {
+        const fetchMasterData = async () => {
+            try {
+                const [prodRes, wareRes] = await Promise.all([
+                    productApi.getAll(),
+                    warehouseApi.getAllWarehouses()
+                ]);
+                setProducts(prodRes.data);
+                setWarehouses(wareRes.data);
+            } catch (error) {
+                console.error("Lỗi tải dữ liệu nền:", error);
+            }
+        };
+        fetchMasterData();
+        // Load trang 1 ngay khi vào
+        fetchData(1, 10, null, null);
+    }, []);
+
+    // --- HÀM 2: LOAD ĐƠN HÀNG (GỌI KHI CHUYỂN TRANG / TÌM KIẾM) ---
+    const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null) => {
         setLoading(true);
         try {
-            const [orderRes, prodRes, wareRes] = await Promise.all([
-                productionApi.getOrders(),
-                productApi.getAll(),
-                warehouseApi.getAllWarehouses()
-            ]);
-            setOrders(orderRes.data);
-            setProducts(prodRes.data);
-            setWarehouses(wareRes.data);
+            const params = {
+                page: page,
+                limit: pageSize,
+                search: search || undefined,
+                warehouse: warehouse || undefined
+            };
+            
+            // Gọi API phân trang từ Backend
+            const res = await productionApi.getOrders(params);
+            
+            // Cập nhật dữ liệu bảng
+            setOrders(res.data.data);
+            
+            // Cập nhật bộ đếm phân trang
+            setPagination({
+                current: page,
+                pageSize: pageSize,
+                total: res.data.total
+            });
+
         } catch (error) {
-            message.error("Lỗi tải dữ liệu!");
+            message.error("Lỗi tải danh sách đơn hàng!");
         }
         setLoading(false);
     };
 
-    useEffect(() => {
-        fetchData();
-    }, []);
+    // --- SỰ KIỆN TÌM KIẾM & LỌC ---
+    const handleSearch = () => {
+        // Khi bấm tìm kiếm -> Reset về trang 1
+        fetchData(1, pagination.pageSize, searchText, filterWarehouse);
+    };
 
-    // Logic Lọc
-    const filteredOrders = orders.filter(item => {
-        const matchText = 
-            (item.code && item.code.toLowerCase().includes(searchText.toLowerCase())) ||
-            (item.product_name && item.product_name.toLowerCase().includes(searchText.toLowerCase()));
-        const matchWarehouse = filterWarehouse ? item.warehouse_name === filterWarehouse : true;
-        return matchText && matchWarehouse;
-    });
+    const handleFilterWarehouse = (val) => {
+        setFilterWarehouse(val);
+        // Khi lọc -> Reset về trang 1
+        fetchData(1, pagination.pageSize, searchText, val);
+    };
 
-    // 2. TÍNH GIÁ VỐN (LOGIC MỚI: TỔNG CHI PHÍ / TỔNG SẢN PHẨM)
+    const handleTableChange = (newPagination) => {
+        // Khi bấm chuyển trang ở bảng
+        fetchData(newPagination.current, newPagination.pageSize, searchText, filterWarehouse);
+    };
+
+    // --- LOGIC TÍNH GIÁ VỐN ---
     const calculateCost = () => {
         const values = orderForm.getFieldsValue();
         const materials = values.materials || [];
         const sizeBreakdown = values.size_breakdown || [];
 
-        // A. Tính tổng tiền Nguyên liệu
         let totalMatCost = 0;
         materials.forEach(item => {
             if(item && item.quantity_needed && item.material_variant_id) {
                 const mat = products.find(p => p.id === item.material_variant_id);
-                // Lấy giá vốn từ DB, nếu không có tạm tính 0
                 const price = mat ? (mat.cost_price || 0) : 0;
                 totalMatCost += item.quantity_needed * price; 
             }
         });
 
-        // B. Tính tổng các loại phí
-        const totalFees = (values.shipping_fee || 0) + 
-                          (values.labor_fee || 0) + 
-                          (values.marketing_fee || 0) + 
-                          (values.packaging_fee || 0) + 
-                          (values.other_fee || 0);
-
-        // C. Tính tổng số lượng sản phẩm
+        const totalFees = (values.shipping_fee || 0) + (values.labor_fee || 0) + (values.marketing_fee || 0) + (values.packaging_fee || 0) + (values.other_fee || 0);
         const totalQty = sizeBreakdown.reduce((sum, i) => sum + (i.quantity || 0), 0);
 
-        // D. Chia đều
         if (totalQty > 0) {
             setEstimatedCost((totalMatCost + totalFees) / totalQty);
         } else {
@@ -115,11 +146,11 @@ const ProductionPage = () => {
         }
     };
 
-    // Lắng nghe thay đổi form để tính lại giá
     const onFormValuesChange = (changedValues, allValues) => {
         calculateCost();
     };
 
+    // --- CÁC HÀM XỬ LÝ (Upload, Create, Update, Delete...) ---
     const handleUpload = async ({ file, onSuccess, onError }) => {
         const formData = new FormData();
         formData.append('file', file);
@@ -127,24 +158,15 @@ const ProductionPage = () => {
             const res = await productionApi.uploadImage(formData);
             file.url = res.data.url; 
             onSuccess("ok");
-        } catch (err) {
-            console.error(err);
-            onError("Upload failed");
-        }
+        } catch (err) { onError("Upload failed"); }
     };
     const handleFileChange = ({ fileList: newFileList }) => { setFileList(newFileList); };
 
-    // 3. TẠO LỆNH SẢN XUẤT
     const handleCreateQuickOrder = async (values) => {
         setLoading(true);
         try {
             const sizeBreakdown = values.size_breakdown || [];
-            if (sizeBreakdown.length === 0) {
-                message.warning("Vui lòng nhập ít nhất 1 size!");
-                setLoading(false);
-                return;
-            }
-
+            if (sizeBreakdown.length === 0) { message.warning("Nhập ít nhất 1 size!"); setLoading(false); return; }
             const imageUrls = fileList.filter(f => f.status === 'done' && f.originFileObj.url).map(f => f.originFileObj.url);
 
             const payload = {
@@ -158,8 +180,6 @@ const ProductionPage = () => {
                 size_breakdown: sizeBreakdown, 
                 image_urls: imageUrls, 
                 auto_start: values.auto_start,
-                
-                // 5 loại phí
                 shipping_fee: values.shipping_fee || 0,
                 other_fee: values.other_fee || 0,
                 labor_fee: values.labor_fee || 0,
@@ -168,30 +188,29 @@ const ProductionPage = () => {
             };
 
             await productionApi.createQuickOrder(payload);
-            message.success("Thành công! Đã tạo Lệnh SX.");
+            message.success("Thành công!");
             setIsOrderModalOpen(false);
             orderForm.resetFields();
             setFileList([]); 
             setEstimatedCost(0);
-            fetchData();
+            
+            // Reload lại trang 1 sau khi tạo mới
+            fetchData(1, pagination.pageSize, searchText, filterWarehouse);
         } catch (error) {
             message.error("Lỗi: " + (error.response?.data?.detail || "Lỗi tạo lệnh"));
         }
         setLoading(false);
     };
 
-    // 4. MỞ MODAL SỬA (LẤY DỮ LIỆU CŨ)
     const openEditModal = (record) => {
         setCurrentOrder(record);
         productionApi.getPrintData(record.id).then(res => {
             const data = res.data;
             editForm.setFieldsValue({
                 code: data.code,
-                new_sku: data.sku, // Load SKU cũ lên
+                new_sku: data.sku, 
                 start_date: dayjs(data.start_date),
                 due_date: dayjs(data.due_date),
-                
-                // Load 5 loại phí
                 shipping_fee: data.shipping_fee,
                 other_fee: data.other_fee,
                 labor_fee: data.labor_fee || 0,
@@ -199,10 +218,9 @@ const ProductionPage = () => {
                 packaging_fee: data.packaging_fee || 0
             });
             setIsEditModalOpen(true);
-        }).catch(err => message.error("Lỗi tải thông tin chi tiết"));
+        }).catch(err => message.error("Lỗi tải thông tin"));
     };
 
-    // 5. CẬP NHẬT LỆNH (GỬI SKU VÀ PHÍ MỚI)
     const handleUpdateOrder = async (values) => {
         try {
             const payload = {
@@ -213,29 +231,28 @@ const ProductionPage = () => {
                 labor_fee: values.labor_fee,
                 marketing_fee: values.marketing_fee,
                 packaging_fee: values.packaging_fee,
-                new_sku: values.new_sku // Gửi SKU mới
+                new_sku: values.new_sku 
             };
             await productionApi.updateOrder(currentOrder.id, payload);
             message.success("Cập nhật thành công!");
             setIsEditModalOpen(false);
-            fetchData();
+            // Reload lại trang hiện tại
+            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse);
         } catch (error) {
-            message.error("Lỗi cập nhật: " + error.response?.data?.detail);
+            message.error("Lỗi cập nhật");
         }
     };
 
-    // 6. XÓA ĐƠN HÀNG (MỚI)
     const handleDeleteOrder = async (id) => {
-        if(window.confirm("CẢNH BÁO: Xóa đơn hàng sẽ HOÀN TRẢ nguyên liệu về kho (nếu đã trừ). Bạn chắc chắn chứ?")) {
+        if(window.confirm("CẢNH BÁO: Bạn có chắc chắn muốn xóa đơn hàng này?")) {
             try {
-                // Giả định api/productionApi.js đã có hàm deleteOrder
-                // Nếu chưa có, bạn nhớ thêm: deleteOrder: (id) => axiosClient.delete(`/production/orders/${id}`)
                 if (productionApi.deleteOrder) {
                     await productionApi.deleteOrder(id);
                     message.success("Đã xóa đơn hàng!");
-                    fetchData();
+                    // Reload lại trang 1
+                    fetchData(1, pagination.pageSize, searchText, filterWarehouse);
                 } else {
-                    message.error("Chưa cấu hình API xóa trong frontend!");
+                    message.error("Chưa cấu hình API xóa!");
                 }
             } catch (error) {
                 message.error("Lỗi xóa: " + error.response?.data?.detail);
@@ -243,57 +260,52 @@ const ProductionPage = () => {
         }
     }
 
-    // ... Các hành động khác (Start, Finish, Receive, History, Print) ...
-    const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Đã trừ NVL & Bắt đầu SX!"); fetchData(); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
-    const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn hàng này?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt đơn!"); fetchData(); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
-    const openReceiveModal = async (order) => { setCurrentOrder(order); try { const res = await productionApi.getOrderDetails(order.id); const data = res.data.map(item => ({...item, receiving: 0})); setOrderSizes(data); setIsReceiveModalOpen(true); } catch (error) { message.error("Lỗi tải chi tiết size"); } };
+    const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Bắt đầu SX!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
+    const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
+    
+    const openReceiveModal = async (order) => { setCurrentOrder(order); try { const res = await productionApi.getOrderDetails(order.id); const data = res.data.map(item => ({...item, receiving: 0})); setOrderSizes(data); setIsReceiveModalOpen(true); } catch (error) { message.error("Lỗi tải chi tiết"); } };
     const handleReceiveGoods = async () => {
         try {
             const itemsToReceive = orderSizes.filter(s => s.receiving > 0).map(s => ({ id: s.id, size: s.size, quantity: s.receiving }));
-            if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!");
+            if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng!");
             await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive });
             message.success("Đã nhập kho!");
             setIsReceiveModalOpen(false);
-            fetchData();
+            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse);
         } catch (error) {
             message.error("Lỗi: " + error.response?.data?.detail);
         }
     };
+    
     const handleViewHistory = async (id) => { try { const res = await productionApi.getReceiveHistory(id); setHistoryData(res.data); setIsHistoryModalOpen(true); } catch (error) { message.error("Lỗi tải lịch sử"); } };
     const handlePrintOrder = async (id) => { try { const res = await productionApi.getPrintData(id); setPrintData(res.data); setIsPrintModalOpen(true); } catch (error) { message.error("Lỗi tải dữ liệu in"); } };
+    const printContent = () => { /* ... Logic in giữ nguyên ... */ const printWindow = window.open('', '', 'width=800,height=600'); printWindow.document.write('<html><head><title>In Lệnh</title></head><body>'); printWindow.document.write(document.getElementById('printable-area').innerHTML); printWindow.document.write('</body></html>'); printWindow.document.close(); setTimeout(() => { printWindow.print(); }, 500); };
 
-    const printContent = () => {
-        const printWindow = window.open('', '', 'width=800,height=600');
-        printWindow.document.write('<html><head><title>In Lệnh Sản Xuất</title>');
-        printWindow.document.write('<style>body { font-family: "Times New Roman"; padding: 20px; } .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; } table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #000; } th, td { border: 1px solid #000; padding: 8px; text-align: center; } .money-table td { text-align: right; } .footer { margin-top: 40px; display: flex; justify-content: space-between; } .images img { max-width: 150px; margin: 5px; border: 1px solid #ccc; }</style></head><body>');
-        printWindow.document.write(document.getElementById('printable-area').innerHTML);
-        printWindow.document.write('</body></html>');
-        printWindow.document.close();
-        setTimeout(() => { printWindow.print(); }, 500);
-    };
-
+    // --- CẤU HÌNH CỘT BẢNG ---
     const orderColumns = [
         { title: 'Mã Lệnh', dataIndex: 'code', key: 'code', render: t => <b>{t}</b> },
         { title: 'Xưởng May', dataIndex: 'warehouse_name', key: 'warehouse_name' },
         { title: 'Sản Phẩm', dataIndex: 'product_name', key: 'product_name', render: t => <span style={{color: '#1677ff', fontWeight: 500}}>{t}</span> },
+        { 
+            title: 'Tiến độ', width: 180,
+            render: (_, r) => {
+                const percent = r.quantity_planned > 0 ? Math.round((r.quantity_finished / r.quantity_planned) * 100) : 0;
+                return <div><Progress percent={percent} size="small" status={percent >= 100 ? 'success' : 'active'} /><div style={{fontSize: 12, textAlign: 'center'}}>{r.quantity_finished} / {r.quantity_planned} cái</div></div>
+            }
+        },
         { title: 'Trạng Thái', dataIndex: 'status', align: 'center', render: (s) => <Tag color={s==='draft'?'default':s==='in_progress'?'processing':'success'}>{s.toUpperCase()}</Tag> },
         {
-            title: 'Hành động', key: 'action', align: 'center', width: 280,
+            title: 'Hành động', key: 'action', align: 'center', width: 200,
             render: (_, record) => (
                 <Space>
                     <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} />
                     <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
-                    
-                    {/* Nút Sửa */}
                     <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
-                    
-                    {/* Nút Xóa (MỚI) */}
                     <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteOrder(record.id)} />
-
                     {record.status === 'draft' && <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>}
                     {record.status === 'in_progress' && (
                         <>
-                            <Button size="small" style={{borderColor: '#3f8600', color: '#3f8600'}} icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
+                            <Button size="small" icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
                             <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleForceFinish(record.id)} />
                         </>
                     )}
@@ -307,16 +319,46 @@ const ProductionPage = () => {
             <Card title="Quản Lý Sản Xuất" bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
                 extra={<Button type="primary" onClick={() => setIsOrderModalOpen(true)} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button>}
             >
+                {/* --- KHU VỰC BỘ LỌC --- */}
                 <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <Input placeholder="Tìm theo Mã/Tên..." prefix={<SearchOutlined />} style={{ width: 300 }} value={searchText} onChange={e => setSearchText(e.target.value)} allowClear />
-                    <Select placeholder="Lọc theo Xưởng" style={{ width: 200 }} allowClear onChange={val => setFilterWarehouse(val)}>
+                    <Input.Search 
+                        placeholder="Tìm theo Mã hoặc Tên SP..." 
+                        style={{ width: 300 }} 
+                        value={searchText}
+                        onChange={e => setSearchText(e.target.value)}
+                        onSearch={handleSearch} 
+                        enterButton
+                        allowClear
+                    />
+                    <Select 
+                        placeholder="Lọc theo Xưởng" 
+                        style={{ width: 200 }} 
+                        allowClear 
+                        onChange={handleFilterWarehouse}
+                        value={filterWarehouse}
+                    >
                         {warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
                     </Select>
-                    {searchText || filterWarehouse ? <Tag color="blue">Kết quả: {filteredOrders.length}</Tag> : null}
+                    <Tag color="blue">Tổng: {pagination.total} đơn</Tag>
                 </div>
-                <Table dataSource={filteredOrders} columns={orderColumns} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
-            </Card>
 
+                <Table 
+                    dataSource={orders} 
+                    columns={orderColumns} 
+                    rowKey="id" 
+                    loading={loading}
+                    // Cấu hình Phân trang Server-side
+                    pagination={{
+                        current: pagination.current,
+                        pageSize: pagination.pageSize,
+                        total: pagination.total,
+                        showSizeChanger: true,
+                        pageSizeOptions: ['10', '20', '50']
+                    }}
+                    onChange={handleTableChange}
+                />
+            </Card>
+                
             {/* MODAL 1: TẠO LỆNH (CẬP NHẬT LOGIC TÍNH GIÁ VÀ LABEL) */}
             <Modal title="Lên Mẫu Mới & Sản Xuất" open={isOrderModalOpen} onCancel={() => setIsOrderModalOpen(false)} footer={null} width={1100} style={{ top: 20 }}>
                 <Form layout="vertical" form={orderForm} onFinish={handleCreateQuickOrder} onValuesChange={onFormValuesChange}>
