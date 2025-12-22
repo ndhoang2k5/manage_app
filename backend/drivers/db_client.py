@@ -2,7 +2,7 @@ import os
 import time
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, DatabaseError # Import thêm DatabaseError
 from dotenv import load_dotenv
 
 load_dotenv("local.env")
@@ -15,31 +15,33 @@ DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME", "manage_app_database")
 
 # Chuỗi kết nối
-# Lưu ý: Đã thêm charset=utf8mb4
 DATABASE_URL = f"mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
 
-def create_db_engine(retries=10, delay=5):
+def create_db_engine(retries=15, delay=5): # Tăng số lần thử lên 15
     for i in range(retries):
         try:
-            print(f"🔄 Đang thử kết nối Database lần {i+1}...")
+            print(f"🔄 [Lần {i+1}/{retries}] Đang kết nối tới {DB_HOST}...")
             
-            # --- FIX LỖI SSL TẠI ĐÂY ---
-            # Thêm connect_args={"ssl_disabled": True} để bảo driver bỏ qua kiểm tra SSL
             engine = create_engine(
                 DATABASE_URL, 
                 pool_pre_ping=True,
+                # Quan trọng: Tắt SSL để tránh lỗi self-signed certificate
                 connect_args={"ssl_disabled": True} 
             )
-            # ---------------------------
 
+            # Thử kết nối thực tế
             with engine.connect() as connection:
-                print("✅ Kết nối Database thành công!")
+                print("✅ KẾT NỐI DATABASE THÀNH CÔNG!")
                 return engine
-        except OperationalError as e:
-            print(f"⚠️ Lỗi kết nối (Thử lại sau {delay}s): {e}")
+                
+        except Exception as e: # Bắt tất cả mọi lỗi (bao gồm cả lỗi 2003)
+            print(f"⚠️ Kết nối thất bại: {e}")
+            print(f"⏳ Đợi {delay} giây rồi thử lại...")
             time.sleep(delay)
-    raise Exception("❌ Không thể kết nối tới Database sau nhiều lần thử.")
+            
+    raise Exception("❌ KHÔNG THỂ KẾT NỐI DATABASE SAU NHIỀU LẦN THỬ.")
 
+# Khởi tạo engine
 engine = create_db_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
