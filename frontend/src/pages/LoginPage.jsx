@@ -11,9 +11,7 @@ const LoginPage = () => {
     const onFinish = async (values) => {
         setLoading(true);
         try {
-            // --- SỬA LẠI: GỬI JSON THUẦN TÚY ---
-            // Không cần URLSearchParams, không cần header phức tạp
-            const res = await axios.post('http://localhost:8000/api/v1/auth/login', {
+            const res = await axios.post('/api/v1/auth/login', { 
                 username: values.username,
                 password: values.password
             });
