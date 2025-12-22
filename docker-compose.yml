@@ -7,7 +7,7 @@ services:
     restart: always
     environment:
       MYSQL_DATABASE: manage_app_database
-      MYSQL_ROOT_PASSWORD: Nguyenduyhoang2005# <--- Đặt mật khẩu khó vào nhé
+      MYSQL_ROOT_PASSWORD: Nguyenduyhoang2005
       TZ: Asia/Ho_Chi_Minh
     volumes:
       - db_data:/var/lib/mysql
@@ -20,7 +20,7 @@ services:
       - DB_HOST=database
       - DB_PORT=3306
       - DB_USER=root
-      - DB_PASSWORD=Nguyenduyhoang2005 # <--- Phải khớp với password database ở trên
+      - DB_PASSWORD=Nguyenduyhoang2005
       - DB_NAME=manage_app_database
       - TZ=Asia/Ho_Chi_Minh
     depends_on:
