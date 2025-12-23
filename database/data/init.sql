@@ -283,60 +283,95 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
 );
-
 -- ==========================================================
--- 2. DỮ LIỆU MẪU (TEST DATA)
+-- 2. DỮ LIỆU MẪU (TEST DATA) - Cập nhật mới nhất
 -- ==========================================================
 
--- A. Tạo Danh mục & Brand
-INSERT INTO categories (name) VALUES ('Vải Cao Cấp'), ('Phụ Liệu May'), ('Thành Phẩm');
-INSERT INTO brands (name) VALUES ('Brand X - Thời trang Thiết kế'); 
+-- A. Tạo Danh mục
+INSERT INTO categories (name) VALUES ('Vải Chính'), ('Vải Lót'), ('Phụ Liệu'), ('Thành Phẩm');
 
--- B. Tạo Hệ thống Kho (1 Tổng, 2 Xưởng)
-INSERT INTO warehouses (brand_id, name, is_central, address) VALUES 
-(1, 'Kho Tổng Brand X (Hà Nội)', TRUE, '123 Lạc Long Quân, Tây Hồ'), 
-(1, 'Xưởng May A (Cầu Giấy)', FALSE, 'Ngõ 165 Cầu Giấy'),            
-(1, 'Xưởng May B (Đống Đa)', FALSE, 'Phố Chùa Láng');                 
+-- B. Tạo 4 Brand (Nhãn hàng)
+INSERT INTO brands (id, name) VALUES 
+(1, 'Unbee'), 
+(2, 'Ranbee'), 
+(3, 'Mathor'), 
+(4, 'Himomi');
 
--- C. Tạo Nguyên Vật Liệu (NVL)
+-- C. Tạo Hệ thống Kho & Xưởng (Đúng cấu trúc bạn yêu cầu)
+-- 1. UNBEE (ID 1) - Có 1 Kho tổng và 4 Xưởng
+INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES 
+(1, 1, 'Kho Tổng Unbee', TRUE, 'Hà Nội'),
+(2, 1, 'Xưởng Thành Sơn', FALSE, 'Thanh Hóa'),
+(3, 1, 'Xưởng Liễu', FALSE, 'Chương Mỹ'),
+(4, 1, 'Xưởng Yến', FALSE, 'Nam Định'),
+(5, 1, 'Xưởng Huy Đức', FALSE, 'An Khánh');
+
+-- 2. RANBEE (ID 2)
+INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES 
+(6, 2, 'Kho Tổng Ranbee', TRUE, 'Hà Nội');
+
+-- 3. MATHOR (ID 3)
+INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES 
+(7, 3, 'Kho Tổng Mathor', TRUE, 'Hà Nội');
+
+-- 4. HIMOMI (ID 4)
+INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES 
+(8, 4, 'Kho Tổng Himomi', TRUE, 'Hà Nội');
+
+
+-- D. Tạo Nguyên Vật Liệu (NVL)
 -- Vải
 INSERT INTO products (category_id, name, type, base_unit) VALUES (1, 'Vải Linen', 'material', 'Mét');
-INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes) VALUES 
-(1, 'LINEN-TRANG', 'Vải Linen Trắng Tự Nhiên', 120000, 'Màu trắng, khổ 1.5m'), 
-(1, 'LINEN-NAU', 'Vải Linen Nâu Đất', 125000, 'Màu nâu, khổ 1.5m');           
+INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes, note, color) VALUES 
+(1, 'LINEN-TRANG', 'Vải Linen Trắng Tự Nhiên', 120000, 'Khổ 1.5m', 'Hàng loại 1', 'Trắng'),
+(1, 'LINEN-NAU', 'Vải Linen Nâu Đất', 125000, 'Khổ 1.5m', 'Hàng nhập khẩu', 'Nâu');
 
 -- Cúc
-INSERT INTO products (category_id, name, type, base_unit) VALUES (2, 'Cúc Gỗ', 'material', 'Cái');
-INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes) VALUES 
-(2, 'CUC-GO-01', 'Cúc Gỗ Vintage 2 lỗ', 2000, 'Gỗ sồi, size 1.5cm');          
+INSERT INTO products (category_id, name, type, base_unit) VALUES (3, 'Cúc Gỗ', 'material', 'Cái');
+INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes, note, color) VALUES 
+(2, 'CUC-GO-01', 'Cúc Gỗ Vintage 2 lỗ', 2000, 'Size 1.5cm', '', 'Nâu gỗ');
 
--- D. Tạo Nhà Cung Cấp & Nhập Hàng Tồn Đầu Kỳ
+-- E. Tạo Nhà Cung Cấp & Nhập Hàng Tồn Đầu Kỳ (Vào Kho Tổng Unbee - ID 1)
 INSERT INTO suppliers (name, phone) VALUES ('Nhà Dệt 19/5', '0901234567');
 
+-- Tạo Phiếu Nhập PO-001 (Nhập Vải & Cúc về Kho Tổng Unbee)
 INSERT INTO purchase_orders (warehouse_id, supplier_id, po_code, order_date, total_amount, status) 
-VALUES (1, 1, 'PO-SETUP-001', CURDATE(), 61000000, 'completed');
+VALUES (1, 1, 'PO-SETUP-001', CURDATE(), 61000000, 'completed'); 
 
 INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal) VALUES
-(1, 1, 400, 120000, 48000000), 
-(1, 2, 100, 125000, 12500000), 
-(1, 3, 2500, 200, 500000);     
+(1, 1, 400, 120000, 48000000), -- 400m Vải Linen Trắng
+(1, 2, 100, 125000, 12500000), -- 100m Vải Linen Nâu
+(1, 3, 2500, 200, 500000);     -- 2500 Cúc
 
+-- Cập nhật Tồn kho cho Kho Tổng Unbee (ID 1)
+INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES
+(1, 1, 400),
+(1, 2, 100),
+(1, 3, 2500);
 
-INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (1, 1, 400), (1, 2, 100), (1, 3, 2500);
-INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (1, 1, 'purchase_in', 400, 1, 'Nhập đầu kỳ'), (1, 2, 'purchase_in', 100, 1, 'Nhập đầu kỳ'), (1, 3, 'purchase_in', 2500, 1, 'Nhập đầu kỳ');
+-- Ghi log nhập
+INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES
+(1, 1, 'purchase_in', 400, 1, 'Nhập đầu kỳ'),
+(1, 2, 'purchase_in', 100, 1, 'Nhập đầu kỳ'),
+(1, 3, 'purchase_in', 2500, 1, 'Nhập đầu kỳ');
 
+-- F. Điều chuyển hàng sang Xưởng Thành Sơn (ID 2) để chuẩn bị SX
+-- Chuyển 100m Vải Trắng + 500 Cúc từ Kho Tổng Unbee (1) sang Thành Sơn (2)
+UPDATE inventory_stocks SET quantity_on_hand = 300 WHERE warehouse_id = 1 AND product_variant_id = 1; -- Tổng còn 300
+UPDATE inventory_stocks SET quantity_on_hand = 2000 WHERE warehouse_id = 1 AND product_variant_id = 3; -- Tổng còn 2000
 
-UPDATE inventory_stocks SET quantity_on_hand = 300 WHERE warehouse_id = 1 AND product_variant_id = 1; 
-UPDATE inventory_stocks SET quantity_on_hand = 2000 WHERE warehouse_id = 1 AND product_variant_id = 3; 
+INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES
+(2, 1, 100), -- Xưởng Thành Sơn có 100m Vải
+(2, 3, 500); -- Xưởng Thành Sơn có 500 Cúc
 
-INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (2, 1, 100), (2, 3, 500);
-
-
+-- G. Tạo User (Lưu ý: Mật khẩu chưa mã hóa '123456' theo yêu cầu của bạn)
+-- Admin (Quản trị viên - Xem tất cả)
 INSERT INTO users (username, password, full_name, role, warehouse_id) 
 VALUES ('admin', '123456', 'Quản Trị Viên', 'admin', NULL);
 
+-- User quản lý Xưởng Thành Sơn (ID kho = 2)
 INSERT INTO users (username, password, full_name, role, warehouse_id) 
-VALUES ('user', '123456', 'Trưởng Xưởng A', 'staff', 2);
+VALUES ('user', '123456', 'QL Xưởng Thành Sơn', 'staff', 2);
 
 
 CREATE INDEX idx_product_name ON product_variants(variant_name);
