@@ -163,21 +163,29 @@ class ProductService:
     
     # USE CASE 4: Lấy danh sách tất cả sản phẩm (để chọn khi tạo lệnh sản xuất)
     def get_all(self):
+        # Query lấy thông tin chi tiết bao gồm cả Màu và Ghi chú
         query = text("""
             SELECT v.id, v.sku, v.variant_name, v.cost_price, 
-                   IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand, v.note
+                   v.color, v.note,
+                   IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand
             FROM product_variants v
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
-            GROUP BY v.id, v.sku, v.variant_name, v.cost_price, v.note
+            GROUP BY v.id, v.sku, v.variant_name, v.cost_price, v.color, v.note
+            ORDER BY v.id DESC
         """)
         results = self.db.execute(query).fetchall()
+        
         return [
             {
-                "id": r[0], "sku": r[1], "variant_name": r[2], 
-                "cost_price": r[3], "quantity_on_hand": r[4], "note": r[5]
+                "id": r[0], 
+                "sku": r[1], 
+                "variant_name": r[2], 
+                "cost_price": float(r[3]) if r[3] else 0, 
+                "color": r[4], 
+                "note": r[5],
+                "quantity_on_hand": float(r[6])
             } for r in results
         ]
-    
 
     # USE CASE 5: Cập nhật thông tin NVL
     def update_material(self, material_id: int, data: MaterialUpdateRequest):
@@ -211,3 +219,27 @@ class ProductService:
             if "Duplicate entry" in str(e):
                 raise Exception(f"Mã SKU '{data.sku}' đã tồn tại ở sản phẩm khác!")
             raise e
+
+    # 7. Lấy danh sách vật tư theo kho (MỚI)
+    def get_materials_by_warehouse(self, warehouse_id: int):
+        query = text("""
+            SELECT v.id, v.sku, v.variant_name, v.cost_price, 
+                   v.color, v.note,
+                   IFNULL(s.quantity_on_hand, 0) as quantity_on_hand
+            FROM product_variants v
+            LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id AND s.warehouse_id = :wid
+            JOIN products p ON v.product_id = p.id
+            WHERE p.type = 'material' 
+            -- AND IFNULL(s.quantity_on_hand, 0) > 0  <-- (Bỏ comment dòng này nếu chỉ muốn hiện cái có tồn kho)
+            ORDER BY v.id DESC
+        """)
+        results = self.db.execute(query, {"wid": warehouse_id}).fetchall()
+        
+        return [
+            {
+                "id": r[0], "sku": r[1], "variant_name": r[2], 
+                "cost_price": float(r[3]) if r[3] else 0, 
+                "color": r[4], "note": r[5],
+                "quantity_on_hand": float(r[6])
+            } for r in results
+        ]

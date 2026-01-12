@@ -16,12 +16,11 @@ def list_orders(
     limit: int = 10, 
     search: Optional[str] = None, 
     warehouse: Optional[str] = None,
-    db: Session = Depends(get_db), 
-    user: dict = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     service = ProductionService(db)
     return service.get_all_orders(page, limit, search, warehouse)
-
+    
 @router.get("/production/boms")
 def list_boms(
     db: Session = Depends(get_db),

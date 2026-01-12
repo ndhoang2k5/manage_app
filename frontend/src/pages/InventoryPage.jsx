@@ -185,7 +185,7 @@ const InventoryPage = () => {
                                 
                                 <Tooltip title="Giá vốn được tính tự động từ phiếu nhập">
                                     <Form.Item label="Giá Vốn" name="cost_price">
-                                        <InputNumber disabled style={{width: '100%'}} formatter={v=>`${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
+                                        <InputNumber disabled style={{width: '100%'}} />
                                     </Form.Item>
                                 </Tooltip>
                             </div>
@@ -208,7 +208,7 @@ const InventoryPage = () => {
                                                     <Input placeholder="Mã SKU (VD: LINEN-01)" style={{width: 180}} />
                                                 </Form.Item>
                                                 <Form.Item {...restField} name={[name, 'cost_price']} initialValue={0}>
-                                                    <InputNumber placeholder="Giá vốn" style={{width: 120}} formatter={v=>`${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
+                                                    <InputNumber placeholder="Giá vốn" style={{width: 120}} />
                                                 </Form.Item>
                                                 <Form.Item {...restField} name={[name, 'note']}>
                                                     <Input placeholder="Ghi chú" />

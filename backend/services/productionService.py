@@ -105,7 +105,7 @@ class ProductionService:
                 total_material_cost += (float(item.quantity_needed) * price)
 
 
-            total_fees = float(data.labor_fee + data.shipping_fee + data.other_fee + data.marketing_fee + data.packaging_fee)
+            total_fees = float(data.labor_fee + data.shipping_fee + data.other_fee + data.marketing_fee + data.packaging_fee + data.print_fee)
             final_unit_cost = (total_material_cost + total_fees) / float(total_planned)
 
             self.db.execute(text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"), {
@@ -116,9 +116,9 @@ class ProductionService:
             query_order = text("""
                 INSERT INTO production_orders (
                     code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date, 
-                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee
+                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee
                 )
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack)
+                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print)
             """)
             self.db.execute(query_order, {
                 "code": data.order_code,
@@ -131,7 +131,8 @@ class ProductionService:
                 "other": data.other_fee,
                 "labor": data.labor_fee,
                 "mkt": data.marketing_fee,
-                "pack": data.packaging_fee
+                "pack": data.packaging_fee,
+                "print": data.print_fee
             })
             order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
@@ -316,15 +317,13 @@ class ProductionService:
         """), {"oid": order_id}).fetchall()
         return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
 
-# 6. Lấy danh sách Lệnh SX (Phân trang + Tìm kiếm + Lọc)
+# 6. Lấy danh sách Lệnh SX (CHUẨN PHÂN TRANG)
     def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None):
         offset = (page - 1) * limit
         
-        # Xây dựng câu điều kiện WHERE động
         conditions = []
         params = {"limit": limit, "offset": offset}
 
-        # Lưu ý: Alias 'pv' là product_variants
         if search:
             conditions.append("(po.code LIKE :search OR pv.variant_name LIKE :search)")
             params["search"] = f"%{search}%"
@@ -335,17 +334,17 @@ class ProductionService:
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-        # A. Query Đếm (Sửa JOIN products -> product_variants)
+        # Đếm tổng
         count_sql = text(f"""
             SELECT COUNT(*)
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
-            JOIN product_variants pv ON po.product_variant_id = pv.id 
+            JOIN product_variants pv ON po.product_variant_id = pv.id
             {where_clause}
         """)
         total_records = self.db.execute(count_sql, params).scalar()
 
-        # B. Query Lấy dữ liệu (Sửa JOIN products -> product_variants)
+        # Lấy dữ liệu
         data_sql = text(f"""
             SELECT po.id, po.code, w.name as warehouse_name, pv.variant_name as product_name,
                    po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date
@@ -358,6 +357,7 @@ class ProductionService:
         """)
         results = self.db.execute(data_sql, params).fetchall()
 
+        # Trả về cấu trúc chuẩn
         return {
             "data": [
                 {
@@ -394,7 +394,7 @@ class ProductionService:
                    po.quantity_planned, po.start_date, po.due_date,
                    po.product_variant_id,
                    po.shipping_fee, po.other_fee,
-                   po.labor_fee, po.marketing_fee, po.packaging_fee
+                   po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id
@@ -447,6 +447,7 @@ class ProductionService:
         imgs = self.db.execute(query_imgs, {"oid": order_id}).fetchall()
         list_imgs = [r[0] for r in imgs]
 
+
         return {
             "code": header[0],
             "warehouse": header[1],
@@ -461,10 +462,10 @@ class ProductionService:
             "shipping_fee": header[9],
             "other_fee": header[10],
             "total_material_cost": total_material_cost,
-
             "labor_fee": header[11],
             "marketing_fee": header[12],
             "packaging_fee": header[13],
+            "print_fee": header[14],
             
             "sizes": list_sizes,
             "materials": list_materials,
@@ -478,13 +479,13 @@ class ProductionService:
             # 1. Cập nhật thông tin trong bảng Orders
             query = text("""
                 UPDATE production_orders
-                SET shipping_fee = :ship, other_fee = :other, labor_fee = :labor,
+                SET shipping_fee = :ship, other_fee = :other, labor_fee = :labor, print_fee = :print,
                     marketing_fee = :mkt, packaging_fee = :pack,
                     start_date = :start, due_date = :due
                 WHERE id = :id
             """)
             self.db.execute(query, {
-                "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee,
+                "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee, "print": data.print_fee,
                 "mkt": data.marketing_fee, "pack": data.packaging_fee,
                 "start": data.start_date, "due": data.due_date, "id": order_id
             })

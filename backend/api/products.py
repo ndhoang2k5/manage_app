@@ -45,3 +45,9 @@ def update_material(material_id: int, request: MaterialUpdateRequest, db: Sessio
         return service.update_material(material_id, request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# 6. API Lấy danh sách NVL theo kho
+@router.get("/materials/warehouse/{warehouse_id}")
+def get_materials_by_warehouse(warehouse_id: int, db: Session = Depends(get_db)):
+    service = ProductService(db)
+    return service.get_materials_by_warehouse(warehouse_id)

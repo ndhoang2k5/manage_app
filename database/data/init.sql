@@ -1,6 +1,6 @@
+CREATE DATABASE IF NOT EXISTS manage_app_database CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE manage_app_database;
 SET NAMES 'utf8mb4';
-ALTER DATABASE manage_app_database CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- ==========================================================
 -- 1. TẠO CẤU TRÚC BẢNG (SCHEMA)
@@ -152,6 +152,7 @@ CREATE TABLE production_orders (
     labor_fee DECIMAL(15, 2) DEFAULT 0,
     marketing_fee DECIMAL(15, 2) DEFAULT 0,
     packaging_fee DECIMAL(15, 2) DEFAULT 0,
+    print_fee DECIMAL(15, 2) DEFAULT 0,
     created_by INT, 
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
     FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)

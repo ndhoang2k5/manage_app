@@ -174,7 +174,7 @@ const PurchasePage = () => {
                                     <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
                                         <Form.Item {...restField} name={[name, 'product_variant_id']} rules={[{ required: true, message: 'Chọn hàng' }]} style={{ width: 320 }}><Select placeholder="Chọn Nguyên Vật Liệu" showSearch optionFilterProp="children">{products.map(p => <Select.Option key={p.id} value={p.id}>{p.sku} - {p.variant_name}</Select.Option>)}</Select></Form.Item>
                                         <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true, message: 'Nhập SL' }]}><InputNumber placeholder="Số lượng" min={0} style={{ width: 120 }} /></Form.Item>
-                                        <Form.Item {...restField} name={[name, 'unit_price']} rules={[{ required: true, message: 'Nhập giá' }]}><InputNumber placeholder="Đơn giá" min={0} formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} style={{ width: 150 }} /></Form.Item>
+                                        <Form.Item {...restField} name={[name, 'unit_price']} rules={[{ required: true, message: 'Nhập giá' }]}><InputNumber placeholder="Đơn giá" min={0} style={{ width: 150 }} /></Form.Item>
                                         <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red', cursor: 'pointer' }} />
                                     </Space>
                                 ))}
@@ -248,7 +248,6 @@ const PurchasePage = () => {
                                                             <InputNumber 
                                                                 min={0} 
                                                                 style={{width: '100%'}}
-                                                                formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
                                                             />
                                                         </Form.Item>
                                                     </td>

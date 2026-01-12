@@ -53,30 +53,27 @@ class QuickProductionRequest(BaseModel):
     quantity_planned: int = 0
     start_date: date
     due_date: date
-    
+
     materials: List[BOMItemRequest]
-    
-    # --- MỚI THÊM: DANH SÁCH SIZE ---
     size_breakdown: List[SizeQuantityRequest] 
     auto_start: bool = False
     image_urls: List[str] = []
 
     shipping_fee: float = 0
     other_fee: float = 0
-
+    print_fee: float = 0
     labor_fee: float = 0
     marketing_fee: float = 0
     packaging_fee: float = 0
 
 
-# Request cho việc Nhập kho thành phẩm từng đợt (Trả hàng)
 class ReceiveGoodsRequest(BaseModel):
-    # Danh sách các size được trả trong đợt này
     items: List[SizeQuantityRequest]
 
 class ProductionUpdateRequest(BaseModel):
     shipping_fee: float = 0
     other_fee: float = 0
+    print_fee: float = 0
     labor_fee: float = 0
     marketing_fee: float = 0
     packaging_fee: float = 0

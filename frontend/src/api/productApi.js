@@ -12,6 +12,7 @@ const productApi = {
         return axiosClient.post('/materials/groups/create', data);
     },
     update: (id, data) => axiosClient.put(`/materials/${id}`, data),
+    getByWarehouse: (id) => axiosClient.get(`/materials/warehouse/${id}`),
 };
 
 export default productApi;
