@@ -1,1 +1,6 @@
-đoạn code mà bạn gửi cho tôi đã nâng cấp phần chọn nvl theo kho rồi chứ nhỉ
+lại bị lỗi hiển thị rồi fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:23 +0000] "GET /production HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
+fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:30 +0000] "GET /production HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
+fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:30 +0000] "GET /vite.svg HTTP/1.1" 304 0 "http://ranbeevn.com/production" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
+fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:30 +0000] "GET /production HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
+fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:30 +0000] "GET /production HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
+fashion_frontend  | 171.224.178.30 - - [12/Jan/2026:19:23:30 +0000] "GET /production HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" "-"
