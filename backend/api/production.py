@@ -3,7 +3,7 @@ from security import get_current_user, require_admin
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
 import shutil
 import uuid
 from typing import Optional
@@ -20,7 +20,7 @@ def list_orders(
 ):
     service = ProductionService(db)
     return service.get_all_orders(page, limit, search, warehouse)
-    
+
 @router.get("/production/boms")
 def list_boms(
     db: Session = Depends(get_db),
@@ -128,12 +128,18 @@ def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = 
         return service.update_production_order(order_id, request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-# 6. API Xóa Đơn Hàng
 @router.delete("/production/orders/{order_id}")
 def delete_order(order_id: int, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
     service = ProductionService(db)
     try:
         return service.delete_production_order(order_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.put("/production/orders/{order_id}/progress")
+def update_progress(order_id: int, request: UpdateProgressRequest, db: Session = Depends(get_db)):
+    service = ProductionService(db)
+    try:
+        return service.update_progress(order_id, request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

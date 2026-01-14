@@ -2,46 +2,48 @@ import React, { useEffect, useState } from 'react';
 import { 
     Table, Card, Button, Modal, Form, Select, Input, 
     InputNumber, DatePicker, Tag, message, Divider, Space, 
-    Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty 
+    Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty, Spin, List
 } from 'antd';
 import { 
     PlusOutlined, DeleteOutlined, PlayCircleOutlined, 
     DownloadOutlined, StopOutlined, PrinterOutlined, 
     CheckCircleOutlined, SearchOutlined, HistoryOutlined, 
-    EditOutlined, SaveOutlined 
+    EditOutlined, SaveOutlined, CalendarOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
 
-const BASE_URL = 'http://localhost:8000'; 
+const BASE_URL = window.location.origin; 
 
 const ProductionPage = () => {
-    // Data States
+    // 1. Data States
     const [orders, setOrders] = useState([]);
     const [products, setProducts] = useState([]); 
     const [warehouses, setWarehouses] = useState([]);
-    
-    // --- QUAN TRỌNG: DANH SÁCH NVL THEO KHO ---
-    const [warehouseMaterials, setWarehouseMaterials] = useState([]); 
+    const [warehouseMaterials, setWarehouseMaterials] = useState([]);
 
-    // Pagination & Search
+    // 2. Pagination & Search
     const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 });
     const [searchText, setSearchText] = useState('');
     const [filterWarehouse, setFilterWarehouse] = useState(null);
 
-    // UI States
+    // 3. UI States
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false); 
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+
+    // todolist model
+    const [isTodoModalOpen, setIsTodoModalOpen] = useState(false);
+    const [currentTodos, setCurrentTodos] = useState([]); // List các bước của đơn đang chọn
     
     const [loading, setLoading] = useState(false);
     const [estimatedCost, setEstimatedCost] = useState(0); 
     
-    // Detail States
+    // 4. Detail States
     const [currentOrder, setCurrentOrder] = useState(null);
     const [orderSizes, setOrderSizes] = useState([]); 
     const [printData, setPrintData] = useState(null);
@@ -53,11 +55,10 @@ const ProductionPage = () => {
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y"];
 
-    // 1. Load Dữ Liệu An Toàn
+    // --- HÀM LOAD DỮ LIỆU ---
     const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null) => {
         setLoading(true);
         try {
-            // Load SP và Kho
             const [prodRes, wareRes] = await Promise.all([
                 productApi.getAll(),
                 warehouseApi.getAllWarehouses()
@@ -65,7 +66,6 @@ const ProductionPage = () => {
             setProducts(Array.isArray(prodRes.data) ? prodRes.data : []);
             setWarehouses(Array.isArray(wareRes.data) ? wareRes.data : []);
 
-            // Load Orders
             const params = {
                 page: page,
                 limit: pageSize,
@@ -78,7 +78,7 @@ const ProductionPage = () => {
                 setOrders(res.data.data);
                 setPagination({ current: page, pageSize: pageSize, total: res.data.total });
             } else if (Array.isArray(res.data)) {
-                setOrders(res.data);
+                setOrders(res.data); // Fallback
                 setPagination({ current: 1, pageSize: 10, total: res.data.length });
             } else {
                 setOrders([]);
@@ -93,7 +93,7 @@ const ProductionPage = () => {
         fetchData(1, 10);
     }, []);
 
-    // --- LOGIC LỌC NVL THEO KHO ---
+    // --- LOGIC KHO & NVL ---
     const handleWarehouseChange = async (warehouseId) => {
         if (!warehouseId) {
             setWarehouseMaterials([]);
@@ -103,7 +103,7 @@ const ProductionPage = () => {
         setEstimatedCost(0);
         try {
             const res = await productApi.getByWarehouse(warehouseId);
-            setWarehouseMaterials(res.data);
+            setWarehouseMaterials(res.data || []);
             message.success(`Đã cập nhật danh sách NVL tại kho!`);
         } catch (error) {
             message.error("Lỗi tải NVL của kho này");
@@ -111,24 +111,21 @@ const ProductionPage = () => {
     };
 
     const handleMaterialSelect = (value, fieldName) => {
+        // Tìm trong danh sách NVL của Xưởng (warehouseMaterials)
         const selectedMaterial = warehouseMaterials.find(p => p.id === value);
         
         if (selectedMaterial) {
             const stock = selectedMaterial.quantity_on_hand || 0;
+            
             const currentMaterials = orderForm.getFieldValue('materials');
             currentMaterials[fieldName].quantity_needed = stock; 
             orderForm.setFieldsValue({ materials: currentMaterials });
-            
+            message.info(`Đã tự điền tồn kho: ${stock} ${selectedMaterial.unit || ''}`);
             calculateCost();
-            
-            if (stock <= 0) {
-                message.warning(`Vật tư này đang hết hàng (Tồn: 0)!`);
-            } else {
-                message.success(`Đã tự điền tồn kho: ${stock} ${selectedMaterial.unit || ''}`);
-            }
         }
     };
 
+    // --- TÍNH GIÁ VỐN ---
     const calculateCost = () => {
         const values = orderForm.getFieldsValue();
         const materials = values.materials || [];
@@ -156,7 +153,7 @@ const ProductionPage = () => {
     };
     const onFormValuesChange = () => calculateCost();
 
-    // 3. Các hàm xử lý
+    // --- CÁC HÀM XỬ LÝ ---
     const handleSearch = () => { fetchData(1, pagination.pageSize, searchText, filterWarehouse); };
     const handleFilterWarehouse = (val) => { setFilterWarehouse(val); fetchData(1, pagination.pageSize, searchText, val); };
     const handleTableChange = (newPagination) => { fetchData(newPagination.current, newPagination.pageSize, searchText, filterWarehouse); };
@@ -219,41 +216,242 @@ const ProductionPage = () => {
     const handleReceiveGoods = async () => { try { const itemsToReceive = orderSizes.filter(s => s.receiving > 0).map(s => ({ id: s.id, size: s.size, quantity: Number(s.receiving) })); if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!"); await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive }); message.success("Đã nhập kho!"); setIsReceiveModalOpen(false); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
     const handleViewHistory = async (id) => { try { const res = await productionApi.getReceiveHistory(id); setHistoryData(res.data); setIsHistoryModalOpen(true); } catch (error) { message.error("Lỗi tải lịch sử"); } };
     const handlePrintOrder = async (id) => { try { const res = await productionApi.getPrintData(id); setPrintData(res.data); setIsPrintModalOpen(true); } catch (error) { message.error("Lỗi tải dữ liệu in"); } };
-    
+
+
+    const openTodoModal = (record) => {
+        setCurrentOrder(record);
+        // Lấy progress từ record (Backend trả về)
+        // Nếu chưa có (đơn cũ), tạo mặc định
+        const steps = record.progress || [
+            { name: "Bước 1: Chuẩn bị NVL", done: false },
+            { name: "Bước 2: Cắt bán thành phẩm", done: false },
+            { name: "Bước 3: May gia công", done: false },
+            { name: "Bước 4: KCS & Đóng gói", done: false }
+        ];
+        setCurrentTodos(steps);
+        setIsTodoModalOpen(true);
+    };
+
+    const handleToggleStep = (index) => {
+        const newTodos = [...currentTodos];
+        newTodos[index].done = !newTodos[index].done;
+        setCurrentTodos(newTodos);
+    };
+
+    const handleSaveProgress = async () => {
+        try {
+            await productionApi.updateProgress(currentOrder.id, { steps: currentTodos });
+            message.success("Đã cập nhật tiến độ!");
+            setIsTodoModalOpen(false);
+            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); // Reload để cập nhật màu nút
+        } catch (error) {
+            message.error("Lỗi lưu tiến độ");
+        }
+    };
+
+
+
+
+
+    // --- HÀM IN (ĐÃ CẬP NHẬT GHI CHÚ) ---
     const printContent = () => {
         if (!printData) return;
         const printWindow = window.open('', '', 'width=900,height=800');
-        printWindow.document.write('<html><head><title>In Lệnh Sản Xuất</title>');
-        printWindow.document.write('<style>body { font-family: "Times New Roman"; padding: 20px; } .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; } table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #000; } th, td { border: 1px solid #000; padding: 8px; text-align: center; } .money-table td { text-align: right; } .footer { margin-top: 40px; display: flex; justify-content: space-between; } .images img { max-width: 150px; margin: 5px; border: 1px solid #ccc; } .page-break { page-break-before: always; border-top: 2px dashed #999; margin-top: 40px; padding-top: 40px; } .warning-text { color: red; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 16px; border: 2px solid red; padding: 10px; }</style></head><body><div class="container">');
-        
-        // ... (Nội dung in giữ nguyên như file trước) ...
-        // Để ngắn gọn tôi không paste lại đoạn HTML in ở đây, nhưng bạn nhớ giữ lại đoạn logic render HTML của hàm printContent từ file trước nhé.
-        // Chỉ cần đảm bảo hàm này nằm trong component là được.
-         printWindow.document.write(document.getElementById('printable-area').innerHTML);
-        
+        printWindow.document.write('<html><head><title>PO - ' + (printData.code || '') + '</title>');
+        printWindow.document.write(`
+            <style>
+                body { font-family: 'Arial', sans-serif; padding: 20px; font-size: 14px; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }
+                h2 { margin: 0; text-transform: uppercase; }
+                .info-grid { display: flex; justify-content: space-between; margin-bottom: 20px; }
+                .info-col { width: 48%; }
+                .info-row { margin-bottom: 5px; }
+                table { width: 100%; border-collapse: collapse; margin-bottom: 15px; border: 1px solid #000; }
+                th, td { border: 1px solid #000; padding: 6px 8px; text-align: left; }
+                th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
+                .text-center { text-align: center; }
+                .text-right { text-align: right; }
+                .images-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
+                .product-img { max-height: 250px; border: 1px solid #ccc; padding: 4px; object-fit: contain; }
+                .page-break { page-break-before: always; border-top: 2px dashed #999; margin-top: 40px; padding-top: 40px; }
+                .warning-text { color: red; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 16px; border: 2px solid red; padding: 5px; }
+                .footer { margin-top: 50px; display: flex; justify-content: space-between; }
+                .signature { text-align: center; width: 40%; }
+            </style>
+        `);
+        printWindow.document.write('</head><body><div class="container">');
+
+        // PHẦN 1
+        printWindow.document.write(`
+            <div class="header">
+                <h2>LỆNH SẢN XUẤT (PO)</h2>
+                <p>Mã lệnh: <b>${printData.code}</b></p>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-col">
+                    <div class="info-row"><b>Xưởng may:</b> ${printData.warehouse}</div>
+                    <div class="info-row"><b>Địa chỉ:</b> ${printData.address || '---'}</div>
+                    <div class="info-row"><b>Ngày bắt đầu:</b> ${printData.start_date}</div>
+                    <div class="info-row"><b>Hạn giao hàng:</b> ${printData.due_date}</div>
+                </div>
+                <div class="info-col">
+                    <div class="info-row"><b>Sản phẩm:</b> ${printData.product}</div>
+                    <div class="info-row"><b>Mã SKU:</b> ${printData.sku}</div>
+                    <div class="info-row"><b>Tổng số lượng:</b> ${printData.total_qty} cái</div>
+                </div>
+            </div>
+
+            ${printData.images && printData.images.length > 0 ? `
+                <div class="images-container">
+                    ${printData.images.map(url => `
+                        <img src="${BASE_URL}${url}" class="product-img" />
+                    `).join('')}
+                </div>
+            ` : ''}
+
+            <h3>1. CHI TIẾT SIZE & SỐ LƯỢNG</h3>
+            <table>
+                <thead><tr><th width="30%">Size</th><th width="30%">Số lượng</th><th>Ghi chú kỹ thuật</th></tr></thead>
+                <tbody>
+                    ${(printData.sizes || []).map(s => `
+                        <tr>
+                            <td class="text-center"><b>${s.size}</b></td>
+                            <td class="text-center"><b>${s.qty}</b></td>
+                            <td>${s.note || ''}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <h3>2. NGUYÊN PHỤ LIỆU CẤP ĐI</h3>
+            <table>
+                <thead><tr><th>Tên Vật Tư</th><th width="30%">Tổng cấp</th><th width="30%">Ghi chú</th></tr></thead>
+                <tbody>
+                    ${(printData.materials || []).map(m => `
+                        <tr>
+                            <td>${m.name} <small>(${m.sku})</small></td>
+                            <td class="text-center"><b>${m.total_needed}</b></td>
+                            <td>${m.note || ''}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <div class="footer">
+                <div class="signature"><p><b>Người Lập Lệnh</b></p><br/><br/><br/></div>
+                <div class="signature"><p><b>Xưởng Xác Nhận</b></p><br/><br/><br/></div>
+            </div>
+        `);
+
+        // NGẮT TRANG
+        printWindow.document.write('<div class="page-break"></div>');
+
+        // PHẦN 2
+        const totalCost = (printData.total_material_cost || 0) + (printData.shipping_fee || 0) + (printData.other_fee || 0) + (printData.labor_fee || 0) + (printData.marketing_fee || 0) + (printData.packaging_fee || 0) + (printData.print_fee || 0);
+        const unitCost = printData.total_qty > 0 ? (totalCost / printData.total_qty) : 0;
+
+        printWindow.document.write(`
+            <div class="warning-text">PHẦN DÀNH RIÊNG CHO QUẢN LÝ</div>
+            <div class="header">
+                <h2>BẢNG KÊ CHI PHÍ & GIÁ VỐN</h2>
+                <p>Mã lệnh: <b>${printData.code}</b></p>
+            </div>
+
+            <h3>1. CHI PHÍ NGUYÊN VẬT LIỆU</h3>
+            <table>
+                <thead><tr><th>Tên Vật Tư</th><th>Số lượng</th><th>Đơn giá vốn</th><th>Thành tiền</th></tr></thead>
+                <tbody>
+                    ${(printData.materials || []).map(m => `
+                        <tr>
+                            <td>${m.name}</td>
+                            <td class="text-center">${m.total_needed}</td>
+                            <td class="text-right">${safeMoney(m.total_cost / (m.total_needed || 1))}</td>
+                            <td class="text-right">${safeMoney(m.total_cost)}</td>
+                        </tr>
+                    `).join('')}
+                    <tr>
+                        <td colspan="3" class="text-right"><b>TỔNG TIỀN NVL:</b></td>
+                        <td class="text-right"><b>${safeMoney(printData.total_material_cost)}</b></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>2. CÁC CHI PHÍ KHÁC</h3>
+            <table style="width: 60%; margin-left: auto;">
+                <tr><td>Phí Nhân Công:</td><td class="text-right">${safeMoney(printData.labor_fee)}</td></tr>
+                <tr><td>Phí In / Thêu:</td><td class="text-right">${safeMoney(printData.print_fee)}</td></tr>
+                <tr><td>Phí Vận Chuyển:</td><td class="text-right">${safeMoney(printData.shipping_fee)}</td></tr>
+                <tr><td>Phí Marketing:</td><td class="text-right">${safeMoney(printData.marketing_fee)}</td></tr>
+                <tr><td>Phí Đóng Gói:</td><td class="text-right">${safeMoney(printData.packaging_fee)}</td></tr>
+                <tr><td>Phụ phí khác:</td><td class="text-right">${safeMoney(printData.other_fee)}</td></tr>
+                <tr style="background-color: #eee;">
+                    <td><b>TỔNG CHI PHÍ:</b></td>
+                    <td class="text-right"><b style="color: red; font-size: 16px;">${safeMoney(totalCost)}</b></td>
+                </tr>
+            </table>
+
+            <div style="text-align: right; margin-top: 20px; font-size: 18px; padding: 15px; border: 2px solid blue;">
+                GIÁ VỐN / 1 SẢN PHẨM: <b style="color: blue;">${safeMoney(unitCost)}</b>
+            </div>
+        `);
+
         printWindow.document.write('</div></body></html>');
         printWindow.document.close();
-        setTimeout(() => { printWindow.print(); }, 500);
+        setTimeout(() => { printWindow.print(); }, 1000);
     };
 
     const orderColumns = [
         { title: 'Mã Lệnh', dataIndex: 'code', key: 'code', render: t => <b>{t}</b> },
-        { title: 'Xưởng May', dataIndex: 'warehouse_name', key: 'warehouse_name' },
-        { title: 'Sản Phẩm', dataIndex: 'product_name', key: 'product_name', render: t => <span style={{color: '#1677ff', fontWeight: 500}}>{t}</span> },
-        { title: 'Tiến độ', width: 180, render: (_, r) => { const percent = r.quantity_planned > 0 ? Math.round((r.quantity_finished / r.quantity_planned) * 100) : 0; return <div><Progress percent={percent} size="small" status={percent >= 100 ? 'success' : 'active'} /><div style={{fontSize: 12, textAlign: 'center'}}>{r.quantity_finished} / {r.quantity_planned} cái</div></div> } },
-        { title: 'Trạng Thái', dataIndex: 'status', align: 'center', render: (s) => <Tag color={s==='draft'?'default':s==='in_progress'?'processing':'success'}>{s.toUpperCase()}</Tag> },
+        { title: 'Xưởng May', dataIndex: 'warehouse_name' },
+        { title: 'Sản Phẩm', dataIndex: 'product_name', render: t => <span style={{color: '#1677ff'}}>{t}</span> },
+        
+        // --- CỘT TRẠNG THÁI (TODO LIST) ---
+        { 
+            title: 'Quy trình / Tiến độ', 
+            align: 'center',
+            width: 250,
+            render: (_, r) => {
+                const steps = r.progress || [];
+                const doneCount = steps.filter(s => s.done).length;
+                const totalCount = steps.length || 4; // Mặc định 4 bước
+                
+                // Màu sắc dựa trên tiến độ
+                let color = 'default';
+                if (doneCount > 0) color = 'processing';
+                if (doneCount === totalCount) color = 'success';
+                if (r.status === 'completed') color = 'green';
+
+                return (
+                    <div style={{cursor: 'pointer'}} onClick={() => openTodoModal(r)}>
+                        <Tag color={color} style={{fontSize: 13, padding: '4px 10px'}}>
+                            {r.status === 'completed' ? 'HOÀN THÀNH' : `Bước ${doneCount}/${totalCount}`}
+                        </Tag>
+                        <Progress percent={Math.round((doneCount/totalCount)*100)} size="small" showInfo={false} strokeColor={color === 'success' ? '#52c41a' : '#1890ff'} />
+                    </div>
+                );
+            }
+        },
+        // ----------------------------------
+
         {
-            title: 'Hành động', key: 'action', align: 'center', width: 280,
+            title: 'Hành động', key: 'action', align: 'center', width: 220,
             render: (_, record) => (
                 <Space>
-                    <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} title="In" />
-                    <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} title="Lịch sử" />
-                    <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} title="Sửa" />
+                    <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} />
+                    <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
+                    <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
                     <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteOrder(record.id)} />
-                    {record.status === 'draft' && <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>}
+                    
+                    {/* Logic nút bấm */}
+                    {record.status === 'draft' && (
+                        <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>
+                    )}
                     {record.status === 'in_progress' && (
                         <>
                             <Button size="small" icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
+                            {/* Nút Chốt đơn sẽ gọi API forceFinish, Backend sẽ check đủ bước chưa */}
                             <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleForceFinish(record.id)} />
                         </>
                     )}
@@ -274,8 +472,7 @@ const ProductionPage = () => {
                     </Select>
                     <Tag color="blue">Tổng: {pagination.total} đơn</Tag>
                 </div>
-                
-                {/* --- FIX LỖI HIỂN THỊ: KIỂM TRA MẢNG TRƯỚC KHI RENDER --- */}
+                {/* --- FIX LỖI "filteredOrders is not defined" --- */}
                 {Array.isArray(orders) ? (
                     <Table dataSource={orders} columns={orderColumns} rowKey="id" loading={loading} pagination={{ current: pagination.current, pageSize: pagination.pageSize, total: pagination.total, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }} onChange={handleTableChange} />
                 ) : (
@@ -283,21 +480,50 @@ const ProductionPage = () => {
                 )}
             </Card>
 
-            {/* MODAL 1: TẠO LỆNH (CẬP NHẬT: XỬ LÝ SỰ KIỆN CHỌN XƯỞNG) */}
+            {/* --- MODAL TODO LIST (MỚI) --- */}
+            <Modal 
+                title={`Tiến độ đơn hàng: ${currentOrder?.code}`} 
+                open={isTodoModalOpen} 
+                onCancel={() => setIsTodoModalOpen(false)}
+                onOk={handleSaveProgress}
+                okText="Lưu Tiến Độ"
+            >
+                <List
+                    dataSource={currentTodos}
+                    renderItem={(item, index) => (
+                        <List.Item>
+                            <Checkbox 
+                                checked={item.done} 
+                                onChange={() => handleToggleStep(index)}
+                                disabled={currentOrder?.status === 'completed'} // Không sửa nếu đã xong
+                            >
+                                <span style={{
+                                    textDecoration: item.done ? 'line-through' : 'none', 
+                                    color: item.done ? '#999' : '#000',
+                                    fontWeight: 500
+                                }}>
+                                    {item.name}
+                                </span>
+                            </Checkbox>
+                            {/* Hiển thị Deadline */}
+                            <Tag color="orange" icon={<CalendarOutlined />}>{item.deadline || "N/A"}</Tag>
+                        </List.Item>
+                    )}
+                />
+                {currentOrder?.status === 'completed' && <div style={{color: 'green', marginTop: 10, textAlign: 'center'}}>✔ Đơn hàng đã hoàn tất!</div>}
+            </Modal>
+            
+
+            {/* MODAL 1: TẠO LỆNH (CẬP NHẬT: GHI CHÚ NVL) */}
             <Modal title="Lên Mẫu Mới & Sản Xuất" open={isOrderModalOpen} onCancel={() => setIsOrderModalOpen(false)} footer={null} width={1400} style={{ top: 20 }}>
                 <Form layout="vertical" form={orderForm} onFinish={handleCreateQuickOrder} onValuesChange={onFormValuesChange}>
                     <Row gutter={24}>
                         <Col span={6}>
                             <Card size="small" title="1. Thông tin Chung" bordered={false} style={{background: '#f9f9f9', marginBottom: 16}}>
                                 <Form.Item label="Mã Lệnh" name="code" rules={[{ required: true }]}><Input placeholder="LSX-001" /></Form.Item>
-                                
-                                {/* --- SỬA Ở ĐÂY: THÊM onChange --- */}
                                 <Form.Item label="Xưởng May" name="warehouse_id" rules={[{ required: true }]}>
-                                    <Select placeholder="Chọn xưởng" onChange={handleWarehouseChange}>
-                                        {warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
-                                    </Select>
+                                    <Select placeholder="Chọn xưởng" onChange={handleWarehouseChange}>{warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}</Select>
                                 </Form.Item>
-
                                 <Form.Item label="Tên SP" name="new_product_name" rules={[{ required: true }]}><Input /></Form.Item>
                                 <Form.Item label="Mã SKU" name="new_product_sku" rules={[{ required: true }]}><Input /></Form.Item>
                                 <Row gutter={10}><Col span={12}><Form.Item label="Bắt đầu" name="start_date" rules={[{ required: true }]}><DatePicker style={{ width: '100%' }} /></Form.Item></Col><Col span={12}><Form.Item label="Hạn xong" name="due_date" rules={[{ required: true }]}><DatePicker style={{ width: '100%' }} /></Form.Item></Col></Row>
@@ -306,22 +532,72 @@ const ProductionPage = () => {
                         </Col>
                         <Col span={6}>
                             <Card size="small" title="2. Size & Ghi chú" bordered={false} style={{background: '#e6f7ff', border: '1px solid #91d5ff', height: '100%'}}>
-                                <Form.List name="size_breakdown" initialValue={[{ size: '0-3m', quantity: 0 }]}>{(fields, { add, remove }) => (<div style={{ maxHeight: 600, overflowY: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline"><Form.Item {...restField} name={[name, 'size']} rules={[{ required: true }]} style={{width: 90}}><Select>{sizeStandards.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}</Select></Form.Item><Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true }]}><Input type="number" placeholder="SL" min={1} style={{width: 70}} /></Form.Item><Form.Item {...restField} name={[name, 'note']}><Input placeholder="Ghi chú" style={{width: 120}} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{color:'red'}}/></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm Size</Button></div>)}</Form.List>
+                                <Form.List name="size_breakdown" initialValue={[{ size: '0-3m', quantity: 0 }]}>{(fields, { add, remove }) => (<div style={{ maxHeight: 600, overflowY: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline"><Form.Item {...restField} name={[name, 'size']} rules={[{ required: true }]} style={{width: 90}}><Select>{sizeStandards.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}</Select></Form.Item>
+                                <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true }]}><Input type="number" placeholder="SL" min={1} style={{width: 70}} /></Form.Item>
+                                <Form.Item {...restField} name={[name, 'note']}><Input placeholder="Ghi chú" style={{width: 120}} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{color:'red'}}/></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm Size</Button></div>)}</Form.List>
                             </Card>
                         </Col>
                         <Col span={12}>
                             <Card size="small" title="3. Tổng lượng NVL (Cả lô)" bordered={false} style={{background: '#f9f9f9', height: '100%'}}>
-                                <Form.List name="materials">{(fields, { add, remove }) => (<div style={{ maxHeight: 400, overflowY: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-                                    <Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true }]} style={{ width: 450 }}>
-                                        <Select placeholder="Chọn NVL..." showSearch optionFilterProp="children" dropdownMatchSelectWidth={false} size="large" onChange={(val) => handleMaterialSelect(val, name)}>
-                                            {/* RENDER LIST ĐÃ LỌC THEO KHO */}
-                                            {warehouseMaterials.map(p => (<Select.Option key={p.id} value={p.id}><div style={{display: 'flex', justifyContent: 'space-between', width: '500px'}}><span><b style={{color:'#1677ff'}}>[{p.sku}]</b> {p.variant_name} {p.color && <Tag color="magenta">{p.color}</Tag>}</span><span style={{color: p.quantity_on_hand > 0 ? 'green' : 'red', fontWeight: 'bold'}}>Tồn: {p.quantity_on_hand}</span></div></Select.Option>))}
-                                        </Select>
-                                    </Form.Item>
-                                    <Form.Item {...restField} name={[name, 'quantity_needed']} rules={[{ required: true }]}><Input type="number" placeholder="Tổng" step={0.1} style={{width: 80}} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} /></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm NVL</Button></div>)}</Form.List>
+                                <Form.List name="materials">
+                                    {(fields, { add, remove }) => (
+                                        <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                                            {fields.map(({ key, name, ...restField }) => (
+                                                <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                                                    <Form.Item 
+                                                        {...restField} 
+                                                        name={[name, 'material_variant_id']} 
+                                                        rules={[{ required: true }]} 
+                                                        style={{ width: 450 }} 
+                                                    >
+                                                        <Select 
+                                                            placeholder="Chọn NVL..." 
+                                                            showSearch 
+                                                            optionFilterProp="children" 
+                                                            dropdownMatchSelectWidth={false}
+                                                            size="large"
+                                                            onChange={(val) => handleMaterialSelect(val, name)}
+                                                        >
+                                                            {warehouseMaterials.map(p => (
+                                                                <Select.Option key={p.id} value={p.id}>
+                                                                    <div style={{display: 'flex', justifyContent: 'space-between', width: '500px'}}>
+                                                                        <span>
+                                                                            <b style={{color:'#1677ff'}}>[{p.sku}]</b> {p.variant_name} 
+                                                                            {p.color && <Tag color="magenta" style={{marginLeft: 5}}>{p.color}</Tag>}
+                                                                            {p.note && <span style={{color: '#888', fontSize: 12}}> ({p.note})</span>}
+                                                                        </span>
+                                                                        <span style={{color: p.quantity_on_hand > 0 ? 'green' : 'red', fontWeight: 'bold'}}>
+                                                                            Tồn: {p.quantity_on_hand}
+                                                                        </span>
+                                                                    </div>
+                                                                </Select.Option>
+                                                            ))}
+                                                        </Select>
+                                                    </Form.Item>
+
+                                                    <Form.Item {...restField} name={[name, 'quantity_needed']} rules={[{ required: true }]}>
+                                                        <Input type="number" placeholder="Tổng" step={0.1} style={{width: 80}} />
+                                                    </Form.Item>
+                                                    
+                                                    {/* Ô GHI CHÚ NVL (MỚI) */}
+                                                    <Form.Item {...restField} name={[name, 'note']}>
+                                                        <Input placeholder="Ghi chú NVL" style={{width: 120}} />
+                                                    </Form.Item>
+
+                                                    <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} />
+                                                </Space>
+                                            ))}
+                                            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm NVL</Button>
+                                        </div>
+                                    )}
+                                </Form.List>
                                 <Divider style={{margin: '12px 0'}} />
+                                
                                 <Row gutter={8}><Col span={8}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col></Row>
-                                <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}><Statistic title="Giá vốn ƯỚC TÍNH (1 SP)" value={estimatedCost} precision={0} valueStyle={{ color: '#3f8600', fontWeight: 'bold' }} suffix="₫" /></div>
+                                
+                                <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}>
+                                    <Statistic title="Giá vốn ƯỚC TÍNH (1 SP)" value={estimatedCost} precision={0} valueStyle={{ color: '#3f8600', fontWeight: 'bold' }} suffix="₫" />
+                                </div>
                                 <div style={{marginTop: 20}}><Form.Item name="auto_start" valuePropName="checked"><Checkbox>Xuất kho vải & Chạy ngay?</Checkbox></Form.Item></div>
                             </Card>
                         </Col>
@@ -330,14 +606,178 @@ const ProductionPage = () => {
                 </Form>
             </Modal>
 
-            {/* Các Modal Sửa, Nhập hàng, In... (Giữ nguyên, hoặc copy lại đoạn printContent và Modal từ code trước để đảm bảo đầy đủ) */}
+            {/* Các Modal khác giữ nguyên */}
             <Modal title="Cập nhật Thông tin & Chi phí" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} footer={null}><Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item><Form.Item label="Mã SKU Sản phẩm (Cập nhật)" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item><Row gutter={16}><Col span={12}><Form.Item label="Ngày bắt đầu" name="start_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item label="Hạn xong" name="due_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col></Row><Divider>Chi phí</Divider><Row gutter={16}><Col span={12}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row><Button type="primary" htmlType="submit" block>Lưu Thay Đổi</Button></Form></Modal>
             <Modal title={`📦 Nhập Kho Thành Phẩm (Trả hàng) - ${currentOrder?.code}`} open={isReceiveModalOpen} onCancel={() => setIsReceiveModalOpen(false)} onOk={handleReceiveGoods}><Table dataSource={orderSizes} pagination={false} rowKey="id" size="small" bordered columns={[{ title: 'Size', dataIndex: 'size', align: 'center', width: 80 }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{color:'#888', fontSize: 12}}>{t}</span> }, { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 }, { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> }, { title: 'Nhập Đợt Này', render: (_, r, idx) => <Input type="number" min={0} value={r.receiving} onChange={(val) => { const n = [...orderSizes]; n[idx].receiving = Number(val.target.value); setOrderSizes(n); }} /> }]} /></Modal>
-            <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }]} /></Modal>
-            
-            {/* Modal Print (Bổ sung đầy đủ phần in ấn ở đây để tránh thiếu) */}
-            <Modal open={isPrintModalOpen} onCancel={() => setIsPrintModalOpen(false)} footer={[<Button key="close" onClick={() => setIsPrintModalOpen(false)}>Đóng</Button>, <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printContent}>In Ngay</Button>]} width={800}>{printData && (<div id="printable-area" style={{ padding: 20, fontFamily: 'Times New Roman' }}><div className="header" style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 10, marginBottom: 20 }}><h2 style={{margin: 0}}>LỆNH SẢN XUẤT</h2><i>Mã lệnh: <b>{printData.code}</b></i></div><div className="info" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}><div><p><b>Xưởng thực hiện:</b> {printData.warehouse}</p><p><b>Ngày bắt đầu:</b> {printData.start_date}</p></div><div><p><b>Sản phẩm:</b> {printData.product}</p><p><b>Hạn hoàn thành:</b> {printData.due_date}</p></div></div>{printData.images && printData.images.length > 0 && (<div style={{marginBottom: 20}}><h4>HÌNH ẢNH MẪU:</h4><div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>{printData.images.map((url, idx) => (<img key={idx} src={`${BASE_URL}${url}`} alt="Mẫu" style={{maxHeight: 150, border: '1px solid #ddd', padding: 2}} />))}</div></div>)}<h4 style={{borderBottom: '1px solid #ccc'}}>1. CHI TIẾT SIZE & SỐ LƯỢNG</h4><table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}><thead><tr style={{backgroundColor: '#f0f0f0'}}><th style={{border: '1px solid #000', padding: 8}}>Size</th><th style={{border: '1px solid #000', padding: 8}}>Số lượng đặt</th><th style={{border: '1px solid #000', padding: 8}}>Ghi chú</th></tr></thead><tbody>{printData.sizes.map((s, idx) => (<tr key={idx}><td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}><b>{s.size}</b></td><td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}>{s.qty}</td><td style={{border: '1px solid #000', padding: 8}}>{s.note}</td></tr>))}</tbody></table><h4 style={{borderBottom: '1px solid #ccc'}}>2. ĐỊNH MỨC NGUYÊN LIỆU & CHI PHÍ</h4><table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}><thead><tr style={{backgroundColor: '#f0f0f0'}}><th style={{border: '1px solid #000', padding: 8}}>Tên Vật Tư</th><th style={{border: '1px solid #000', padding: 8}}>Định mức/SP</th><th style={{border: '1px solid #000', padding: 8}}>Tổng cấp</th><th style={{border: '1px solid #000', padding: 8}}>Thành tiền (Dự kiến)</th></tr></thead><tbody>{printData.materials.map((m, idx) => (<tr key={idx}><td style={{border: '1px solid #000', padding: 8}}>{m.name} ({m.sku})</td><td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}>{m.usage_per_unit}</td><td style={{border: '1px solid #000', padding: 8, textAlign: 'center', fontWeight: 'bold'}}>{m.total_needed}</td><td style={{border: '1px solid #000', padding: 8, textAlign: 'right'}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(m.total_cost)}</td></tr>))}</tbody></table><div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: 20}}><table style={{width: '50%', borderCollapse: 'collapse', border: '1px solid #000'}} className="money-table"><tbody><tr><td style={{border: '1px solid #000', padding: 5}}><b>Tổng Tiền NVL:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.total_material_cost)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phí Gia Công:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.labor_fee || 0)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phí In/Thêu:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.print_fee || 0)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phí Vận Chuyển:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.shipping_fee)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phí Marketing:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.marketing_fee || 0)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phí Đóng Gói:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.packaging_fee || 0)}</td></tr><tr><td style={{border: '1px solid #000', padding: 5}}><b>Phụ phí:</b></td><td style={{border: '1px solid #000', padding: 5}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.other_fee)}</td></tr><tr style={{backgroundColor: '#e6f7ff'}}><td style={{border: '1px solid #000', padding: 5}}><b>TỔNG CỘNG:</b></td><td style={{border: '1px solid #000', padding: 5, fontWeight: 'bold', color: '#d4380d'}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.total_material_cost + printData.shipping_fee + printData.other_fee + (printData.labor_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0) + (printData.print_fee||0))}</td></tr></tbody></table></div><div className="footer" style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}><div className="signature" style={{textAlign: 'center', width: '40%'}}><p><b>Người Lập Lệnh</b></p><br/><br/><br/></div><div className="signature" style={{textAlign: 'center', width: '40%'}}><p><b>Xưởng Xác Nhận</b></p><br/><br/><br/></div></div></div>)}</Modal>
-        </div>
+            <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} /></Modal>
+            <Modal
+                open={isPrintModalOpen}
+                onCancel={() => setIsPrintModalOpen(false)}
+                footer={[
+                    <Button key="close" onClick={() => setIsPrintModalOpen(false)}>Đóng</Button>,
+                    <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printContent}>In Ngay</Button>
+                ]}
+                width={800}
+                >
+                {printData && (
+                    <div id="printable-area" style={{ padding: 20, fontFamily: 'Times New Roman' }}>
+                    
+                    <div className="header" style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 10, marginBottom: 20 }}>
+                        <h2 style={{margin: 0}}>LỆNH SẢN XUẤT</h2>
+                        <i>Mã lệnh: <b>{printData.code}</b></i>
+                    </div>
+
+                    <div className="info" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+                        <div>
+                        <p><b>Xưởng thực hiện:</b> {printData.warehouse}</p>
+                        <p><b>Ngày bắt đầu:</b> {printData.start_date}</p>
+                        </div>
+                        <div>
+                        <p><b>Sản phẩm:</b> {printData.product}</p>
+                        <p><b>Hạn hoàn thành:</b> {printData.due_date}</p>
+                        </div>
+                    </div>
+
+                    {printData.images && printData.images.length > 0 && (
+                        <div style={{marginBottom: 20}}>
+                        <h4>HÌNH ẢNH MẪU:</h4>
+                        <div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>
+                            {printData.images.map((url, idx) => (
+                            <img
+                                key={idx}
+                                src={`${BASE_URL}${url}`}
+                                alt="Mẫu"
+                                style={{maxHeight: 150, border: '1px solid #ddd', padding: 2}}
+                            />
+                            ))}
+                        </div>
+                        </div>
+                    )}
+
+                    <h4 style={{borderBottom: '1px solid #ccc'}}>1. CHI TIẾT SIZE & SỐ LƯỢNG</h4>
+                    <table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}>
+                        <thead>
+                        <tr style={{backgroundColor: '#f0f0f0'}}>
+                            <th style={{border: '1px solid #000', padding: 8}}>Size</th>
+                            <th style={{border: '1px solid #000', padding: 8}}>Số lượng đặt</th>
+                            <th style={{border: '1px solid #000', padding: 8}}>Ghi chú</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {printData.sizes.map((s, idx) => (
+                            <tr key={idx}>
+                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}><b>{s.size}</b></td>
+                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}>{s.qty}</td>
+                            <td style={{border: '1px solid #000', padding: 8}}>{s.note}</td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+
+                    <h4 style={{borderBottom: '1px solid #ccc'}}>2. ĐỊNH MỨC NGUYÊN LIỆU & CHI PHÍ</h4>
+                    <table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}>
+                        <thead>
+                        <tr style={{backgroundColor: '#f0f0f0'}}>
+                            <th style={{border: '1px solid #000', padding: 8}}>Tên Vật Tư</th>
+                            <th style={{border: '1px solid #000', padding: 8}}>Tổng cấp</th>
+                            <th style={{border: '1px solid #000', padding: 8}}>Ghi chú</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {printData.materials.map((m, idx) => (
+                            <tr key={idx}>
+                            <td style={{border: '1px solid #000', padding: 8}}>
+                                {m.name} ({m.sku})
+                            </td>
+                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center', fontWeight: 'bold'}}>
+                                {m.total_needed}
+                            </td>
+                            <td style={{border: '1px solid #000', padding: 8}}>
+                                {m.note || ''}
+                            </td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+
+                    <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: 20}}>
+                        <table style={{width: '50%', borderCollapse: 'collapse', border: '1px solid #000'}} className="money-table">
+                        <tbody>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Tổng Tiền NVL:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.total_material_cost)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Gia Công:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.labor_fee || 0)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí In/Thêu:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.print_fee || 0)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Vận Chuyển:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.shipping_fee)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Marketing:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.marketing_fee || 0)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Đóng Gói:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.packaging_fee || 0)}
+                            </td>
+                            </tr>
+                            <tr>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>Phụ phí:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.other_fee)}
+                            </td>
+                            </tr>
+                            <tr style={{backgroundColor: '#e6f7ff'}}>
+                            <td style={{border: '1px solid #000', padding: 5}}><b>TỔNG CỘNG:</b></td>
+                            <td style={{border: '1px solid #000', padding: 5, fontWeight: 'bold', color: '#d4380d'}}>
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(
+                                printData.total_material_cost +
+                                printData.shipping_fee +
+                                printData.other_fee +
+                                (printData.labor_fee||0) +
+                                (printData.marketing_fee||0) +
+                                (printData.packaging_fee||0) +
+                                (printData.print_fee||0)
+                                )}
+                            </td>
+                            </tr>
+                        </tbody>
+                        </table>
+                    </div>
+
+                    <div className="footer" style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}>
+                        <div className="signature" style={{textAlign: 'center', width: '40%'}}>
+                        <p><b>Người Lập Lệnh</b></p>
+                        <br/><br/><br/>
+                        </div>
+                        <div className="signature" style={{textAlign: 'center', width: '40%'}}>
+                        <p><b>Xưởng Xác Nhận</b></p>
+                        <br/><br/><br/>
+                        </div>
+                    </div>
+
+                    </div>
+                )}
+            </Modal>
+       </div>
     );
 };
 

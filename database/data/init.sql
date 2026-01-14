@@ -2,25 +2,22 @@ CREATE DATABASE IF NOT EXISTS manage_app_database CHARACTER SET utf8mb4 COLLATE 
 USE manage_app_database;
 SET NAMES 'utf8mb4';
 
--- ==========================================================
--- 1. TẠO CẤU TRÚC BẢNG (SCHEMA)
--- ==========================================================
 
 -- 1. Danh mục
-CREATE TABLE categories (
+CREATE TABLE if not exists categories (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL,
     description TEXT
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 2. Nhãn hàng (Brands)
-CREATE TABLE brands (
+CREATE TABLE if not exists brands (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL
 );
 
 -- 3. Nhà cung cấp
-CREATE TABLE suppliers (
+CREATE TABLE if not exists suppliers (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(200),
     phone VARCHAR(20),
@@ -28,7 +25,7 @@ CREATE TABLE suppliers (
 );
 
 -- 4. Kho bãi
-CREATE TABLE warehouses (
+CREATE TABLE if not exists warehouses (
     id INT PRIMARY KEY AUTO_INCREMENT,
     brand_id INT,
     name VARCHAR(100) NOT NULL,
@@ -38,7 +35,7 @@ CREATE TABLE warehouses (
 );
 
 -- 5. Sản phẩm chung
-CREATE TABLE products (
+CREATE TABLE if not exists products (
     id INT PRIMARY KEY AUTO_INCREMENT,
     category_id INT,
     name VARCHAR(200) NOT NULL, 
@@ -48,8 +45,7 @@ CREATE TABLE products (
 );
 
 -- 6. Biến thể chi tiết (SKU)
--- Đã có cột color và note
-CREATE TABLE product_variants (
+CREATE TABLE if not exists product_variants (
     id INT PRIMARY KEY AUTO_INCREMENT,
     product_id INT NOT NULL,
     sku VARCHAR(50) UNIQUE NOT NULL,
@@ -63,7 +59,7 @@ CREATE TABLE product_variants (
 );
 
 -- 7. Nhóm Nguyên vật liệu
-CREATE TABLE material_groups (
+CREATE TABLE if not exists material_groups (
     id INT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(50) UNIQUE NOT NULL,
     name VARCHAR(200) NOT NULL,
@@ -71,7 +67,7 @@ CREATE TABLE material_groups (
 );
 
 -- 8. Chi tiết nhóm NVL
-CREATE TABLE material_group_details (
+CREATE TABLE if not exists material_group_details (
     id INT PRIMARY KEY AUTO_INCREMENT,
     group_id INT,
     material_variant_id INT,
@@ -81,7 +77,7 @@ CREATE TABLE material_group_details (
 );
 
 -- 9. Tồn kho
-CREATE TABLE inventory_stocks (
+CREATE TABLE if not exists inventory_stocks (
     warehouse_id INT,
     product_variant_id INT,
     quantity_on_hand DECIMAL(15, 2) DEFAULT 0, 
@@ -93,7 +89,7 @@ CREATE TABLE inventory_stocks (
 );
 
 -- 10. Mua hàng (PO)
-CREATE TABLE purchase_orders (
+CREATE TABLE if not exists purchase_orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     warehouse_id INT,
     supplier_id INT,
@@ -106,7 +102,7 @@ CREATE TABLE purchase_orders (
 );
 
 -- 11. Chi tiết PO
-CREATE TABLE purchase_order_items (
+CREATE TABLE if not exists purchase_order_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     purchase_order_id INT,
     product_variant_id INT,
@@ -118,17 +114,18 @@ CREATE TABLE purchase_order_items (
 );
 
 -- 12. Công thức (BOM)
-CREATE TABLE bom (
+CREATE TABLE if not exists bom (
     id INT PRIMARY KEY AUTO_INCREMENT,
     product_variant_id INT, 
     name VARCHAR(100) 
 );
 
 -- 13. Chi tiết BOM
-CREATE TABLE bom_materials (
+CREATE TABLE if not exists bom_materials (
     id INT PRIMARY KEY AUTO_INCREMENT,
     bom_id INT,
     material_variant_id INT, 
+    note TEXT,
     quantity_needed DECIMAL(15, 2),
     FOREIGN KEY (bom_id) REFERENCES bom(id),
     FOREIGN KEY (material_variant_id) REFERENCES product_variants(id)
@@ -136,7 +133,7 @@ CREATE TABLE bom_materials (
 
 -- 14. Lệnh Sản Xuất
 -- Đã thêm 5 loại phí
-CREATE TABLE production_orders (
+CREATE TABLE if not exists production_orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(50) UNIQUE, 
     warehouse_id INT, 
@@ -146,7 +143,8 @@ CREATE TABLE production_orders (
     status ENUM('draft', 'waiting_material', 'in_progress', 'completed', 'cancelled'),
     start_date DATE,
     due_date DATE,
-    -- Các loại phí
+    progress_data TEXT,
+
     shipping_fee DECIMAL(15, 2) DEFAULT 0,
     other_fee DECIMAL(15, 2) DEFAULT 0,
     labor_fee DECIMAL(15, 2) DEFAULT 0,
@@ -159,7 +157,7 @@ CREATE TABLE production_orders (
 );
 
 -- 15. Giữ chỗ nguyên liệu
-CREATE TABLE production_material_reservations (
+CREATE TABLE if not exists production_material_reservations (
     id INT PRIMARY KEY AUTO_INCREMENT,
     production_order_id INT,
     material_variant_id INT,
@@ -170,7 +168,7 @@ CREATE TABLE production_material_reservations (
 
 -- 16. Chi tiết Size Lệnh Sản Xuất
 -- Đã có cột note
-CREATE TABLE production_order_items (
+CREATE TABLE if not exists production_order_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     production_order_id INT,
     size_label VARCHAR(50), 
@@ -181,7 +179,7 @@ CREATE TABLE production_order_items (
 );
 
 -- 17. Bảng Ảnh Sản xuất
-CREATE TABLE production_order_images (
+CREATE TABLE if not exists production_order_images (
     id INT PRIMARY KEY AUTO_INCREMENT,
     production_order_id INT,
     image_url TEXT, 
@@ -190,7 +188,7 @@ CREATE TABLE production_order_images (
 );
 
 -- 18. Lịch Sử Nhập Kho Thành Phẩm
-CREATE TABLE production_receive_logs (
+CREATE TABLE if not exists production_receive_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,
     production_order_id INT,
     production_order_item_id INT, 
@@ -201,7 +199,7 @@ CREATE TABLE production_receive_logs (
 );
 
 -- 19. Lịch sử giao dịch Kho
-CREATE TABLE inventory_transactions (
+CREATE TABLE if not exists inventory_transactions (
     id INT PRIMARY KEY AUTO_INCREMENT,
     warehouse_id INT,
     product_variant_id INT,
@@ -216,7 +214,7 @@ CREATE TABLE inventory_transactions (
 );
 
 -- 20. Khách hàng
-CREATE TABLE customers (
+CREATE TABLE if not exists customers (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(200) NOT NULL,
     phone VARCHAR(20),
@@ -225,7 +223,7 @@ CREATE TABLE customers (
 );
 
 -- 21. Đơn Bán Hàng
-CREATE TABLE sales_orders (
+CREATE TABLE if not exists sales_orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     order_code VARCHAR(50) UNIQUE, 
     warehouse_id INT, 
@@ -238,7 +236,7 @@ CREATE TABLE sales_orders (
 );
 
 -- 22. Chi tiết Đơn bán
-CREATE TABLE sales_order_items (
+CREATE TABLE if not exists sales_order_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     sales_order_id INT,
     product_variant_id INT,
@@ -250,7 +248,7 @@ CREATE TABLE sales_order_items (
 );
 
 -- 23. Phiếu Kiểm Kê
-CREATE TABLE inventory_adjustments (
+CREATE TABLE if not exists inventory_adjustments (
     id INT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(50) UNIQUE, 
     warehouse_id INT,
@@ -262,7 +260,7 @@ CREATE TABLE inventory_adjustments (
 );
 
 -- 24. Chi tiết Kiểm kê
-CREATE TABLE inventory_adjustment_items (
+CREATE TABLE if not exists inventory_adjustment_items (
     id INT PRIMARY KEY AUTO_INCREMENT,
     adjustment_id INT,
     product_variant_id INT,
@@ -274,7 +272,7 @@ CREATE TABLE inventory_adjustment_items (
 );
 
 -- 25. Bảng Users (Đã có phân quyền Kho)
-CREATE TABLE users (
+CREATE TABLE if not exists users (
     id INT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(50) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
@@ -283,6 +281,24 @@ CREATE TABLE users (
     warehouse_id INT NULL, 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
+);
+
+-- 26. Bảng thông tin của mẫu
+CREATE TABLE if not exists draft_orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    code VARCHAR(50),      -- Mã dự kiến (VD: DRAFT-001)
+    name VARCHAR(200),     -- Tên ý tưởng (VD: Váy hoa nhí 2026)
+    note TEXT,             -- Ghi chú chi tiết (Vải gì, kiểu dáng ra sao...)
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending', -- Trạng thái duyệt
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 27. lưu ảnh của mẫu sản phẩm
+CREATE TABLE if not exists draft_order_images (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    draft_order_id INT,
+    image_url TEXT,
+    FOREIGN KEY (draft_order_id) REFERENCES draft_orders(id) ON DELETE CASCADE
 );
 -- ==========================================================
 -- 2. DỮ LIỆU MẪU (TEST DATA) - Cập nhật mới nhất

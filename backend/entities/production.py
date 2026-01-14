@@ -6,6 +6,7 @@ from datetime import date
 class BOMItemRequest(BaseModel):
     material_variant_id: int # ID vải, cúc
     quantity_needed: float   # Cần bao nhiêu cho 1 sản phẩm
+    note: Optional[str] = ""
 
 class BOMCreateRequest(BaseModel):
     product_variant_id: int  # Sản phẩm đầu ra (VD: Áo Sơ mi ID 6)
@@ -80,3 +81,11 @@ class ProductionUpdateRequest(BaseModel):
     start_date: Optional[date] = None
     due_date: Optional[date] = None
     new_sku: Optional[str] = None
+
+class ProgressItem(BaseModel):
+    name: str
+    done: bool
+    deadline: Optional[str] = None
+
+class UpdateProgressRequest(BaseModel):
+    steps: List[ProgressItem]

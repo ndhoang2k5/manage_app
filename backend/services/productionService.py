@@ -2,7 +2,8 @@ from email import header
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest
+import json
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -53,8 +54,7 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # 3. Tạo Lệnh Sản Xuất NHANH (Hỗ trợ Size Breakdown)
-    def create_quick_order(self, data: QuickProductionRequest):
+    def create_quick_order(self, data: QuickProductionRequest, user_id: int = None):
         try:
             # A. Tính tổng số lượng sản phẩm
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
@@ -76,35 +76,33 @@ class ProductionService:
             self.db.execute(query_var, {"pid": pid, "sku": data.new_product_sku, "name": data.new_product_name})
             product_variant_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            # C. Tạo BOM (LƯU Ý: Chuyển đổi từ Tổng lượng -> Định mức/cái để lưu trữ chuẩn)
+            # C. Tạo BOM (Lưu định mức/cái)
             query_bom = text("INSERT INTO bom (product_variant_id, name) VALUES (:pid, :name)")
             self.db.execute(query_bom, {"pid": product_variant_id, "name": f"Công thức {data.new_product_name}"})
             bom_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
-            query_bom_detail = text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed) VALUES (:bid, :mid, :qty)")
+            query_bom_detail = text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :qty, :note)")
             
-            total_material_cost = 0
+            total_material_cost = 0.0
 
             for item in data.materials:
-                # item.quantity_needed lúc này là TỔNG LƯỢNG (User nhập 500m vải)
-                # Ta cần chia cho total_planned để ra định mức (500m / 100 áo = 5m/áo)
-                # Để lưu vào DB cho đúng chuẩn BOM
-                per_unit_usage = item.quantity_needed / total_planned
-                
+                # Tính định mức cho 1 sản phẩm = Tổng lượng / Tổng sản phẩm
+                # Ví dụ: Cần 1000m vải cho 500 áo -> Định mức = 2m/áo
+                per_unit_usage = float(item.quantity_needed) / float(total_planned)
+
                 self.db.execute(query_bom_detail, {
                     "bid": bom_id, 
                     "mid": item.material_variant_id, 
-                    "qty": per_unit_usage
+                    "qty": per_unit_usage, # Lưu định mức
+                    "note": item.note if item.note else ""
                 })
 
-                # Tính giá vốn vật tư (để update giá cost_price cho sản phẩm)
+                # Tính giá vốn (Lấy giá * Tổng lượng)
                 mat_price_row = self.db.execute(text("SELECT cost_price FROM product_variants WHERE id = :id"), {"id": item.material_variant_id}).fetchone()
-                
-                # --- FIX LỖI Ở ĐÂY: Ép kiểu Decimal sang float ---
                 price = float(mat_price_row[0]) if (mat_price_row and mat_price_row[0] is not None) else 0.0
                 total_material_cost += (float(item.quantity_needed) * price)
 
-
+            # D. Tính giá vốn đơn vị
             total_fees = float(data.labor_fee + data.shipping_fee + data.other_fee + data.marketing_fee + data.packaging_fee + data.print_fee)
             final_unit_cost = (total_material_cost + total_fees) / float(total_planned)
 
@@ -112,27 +110,31 @@ class ProductionService:
                 "cost": final_unit_cost, "id": product_variant_id
             })
 
+
+            default_steps = [
+                {"name": "Bước 1: Chuẩn bị NVL & Rập", "done": False, "deadline": str(data.start_date)},
+                {"name": "Bước 2: Cắt bán thành phẩm", "done": False, "deadline": str(data.start_date)}, # +3 ngày tùy logic
+                {"name": "Bước 3: May gia công", "done": False, "deadline": str(data.due_date)},
+                {"name": "Bước 4: KCS & Đóng gói", "done": False, "deadline": str(data.due_date)},
+            ]
+            progress_json = json.dumps(default_steps)
+
+
             # E. Tạo Lệnh SX
             query_order = text("""
                 INSERT INTO production_orders (
                     code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date, 
-                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee
+                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee, created_by, progress_data
                 )
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print)
+                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print, :uid, :progress)
             """)
             self.db.execute(query_order, {
-                "code": data.order_code,
-                "wid": data.warehouse_id,
-                "pid": product_variant_id,
-                "qty": total_planned,
-                "start": data.start_date,
-                "due": data.due_date,
-                "ship": data.shipping_fee,
-                "other": data.other_fee,
-                "labor": data.labor_fee,
-                "mkt": data.marketing_fee,
-                "pack": data.packaging_fee,
-                "print": data.print_fee
+                "code": data.order_code, "wid": data.warehouse_id, "pid": product_variant_id,
+                "qty": total_planned, "start": data.start_date, "due": data.due_date,
+                "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee,
+                "mkt": data.marketing_fee, "pack": data.packaging_fee, "print": data.print_fee,
+                "uid": user_id if user_id else None,
+                "progress": progress_json
             })
             order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
@@ -147,10 +149,9 @@ class ProductionService:
                 for url in data.image_urls:
                     self.db.execute(query_img, {"oid": order_id, "url": url})
 
-            self.db.commit()
-
             if data.auto_start:
-                return self.start_production(order_id)
+                self.start_production(order_id, commit=False) 
+            self.db.commit()
 
             return {"status": "success", "message": "Đã tạo Mẫu & Lệnh SX thành công!"}
 
@@ -162,20 +163,26 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # 4. Bắt đầu SX (Trừ kho NVL LUÔN)
-    def start_production(self, order_id: int):
+    # 3. CẬP NHẬT TIẾN ĐỘ (PROGRESS) - YÊU CẦU MỚI
+    def update_progress(self, order_id: int, data: UpdateProgressRequest):
+        # Chuyển object thành string JSON để lưu
+        json_str = json.dumps([item.dict() for item in data.steps])
+        self.db.execute(text("UPDATE production_orders SET progress_data = :p WHERE id = :id"), {"p": json_str, "id": order_id})
+        self.db.commit()
+        return {"status": "success", "message": "Đã cập nhật tiến độ!"}
+
+
+    # 4. Bắt đầu SX (Có tham số commit để hỗ trợ transaction lồng)
+    def start_production(self, order_id: int, commit: bool = True):
         try:
             # Lấy thông tin lệnh
             order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy lệnh SX")
-            
-            # Lấy BOM
             bom_items = self.db.execute(text("""
                 SELECT bm.material_variant_id, bm.quantity_needed 
                 FROM bom_materials bm
                 JOIN bom b ON bm.bom_id = b.id
                 WHERE b.product_variant_id = :pid
-
             """), {"pid": order[3]}).fetchall()
 
             if not bom_items: raise Exception("Sản phẩm này chưa có công thức (BOM)!")
@@ -183,7 +190,7 @@ class ProductionService:
             # Duyệt qua từng nguyên liệu để TRỪ KHO
             for item in bom_items:
                 mat_id = item[0]
-                qty_needed_per_unit = float(item[1])
+                qty_needed_per_unit = float(item[1]) 
                 order_qty = float(order[4]) 
                 total_qty_needed = qty_needed_per_unit * order_qty # Định mức * Tổng SL
 
@@ -194,12 +201,12 @@ class ProductionService:
                     WHERE warehouse_id = :wid AND product_variant_id = :mid
                 """), {"wid": order[2], "mid": mat_id}).fetchone()
 
-                current_stock = stock[0] if stock else 0
+                current_stock = float(stock[0]) if stock else 0.0
 
                 if current_stock < total_qty_needed:
                     raise Exception(f"Kho thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {current_stock}")
 
-                # --- TRỪ TRỰC TIẾP QUANTITY_ON_HAND ---
+                # --- TRỪ TRỰC TIẾP ---
                 self.db.execute(text("""
                     UPDATE inventory_stocks 
                     SET quantity_on_hand = quantity_on_hand - :qty
@@ -212,7 +219,7 @@ class ProductionService:
                     VALUES (:wid, :mid, 'production_out', :qty, :ref)
                 """), {"wid": order[2], "mid": mat_id, "qty": -total_qty_needed, "ref": order_id})
 
-                # Vẫn lưu vào bảng reservations để tham chiếu thống kê
+                # Lưu reservation
                 self.db.execute(text("""
                     INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved)
                     VALUES (:oid, :mid, :qty)
@@ -220,11 +227,15 @@ class ProductionService:
 
             # Cập nhật trạng thái lệnh
             self.db.execute(text("UPDATE production_orders SET status = 'in_progress' WHERE id = :id"), {"id": order_id})
-            self.db.commit()
+            
+            if commit:
+                self.db.commit()
+                
             return {"status": "success", "message": "Đã xuất kho nguyên liệu & Bắt đầu sản xuất!"}
 
         except Exception as e:
-            self.db.rollback()
+            if commit: self.db.rollback()
+            # Nếu gọi lồng, để hàm cha rollback
             raise e
 
     # 5. NHẬP KHO THÀNH PHẨM TỪNG ĐỢT (Receive Goods)
@@ -285,7 +296,9 @@ class ProductionService:
                 l.received_at,
                 i.size_label,
                 i.note as size_note,
-                l.quantity
+                l.quantity,
+                i.quantity_planned, 
+                i.quantity_finished 
             FROM production_receive_logs l
             JOIN production_order_items i ON l.production_order_item_id = i.id
             WHERE l.production_order_id = :oid
@@ -298,7 +311,8 @@ class ProductionService:
                 "date": r[0].strftime("%Y-%m-%d %H:%M"), # Format ngày giờ đẹp
                 "size": r[1],
                 "note": r[2],
-                "quantity": r[3]
+                "quantity": r[3],
+                "remaining": r[4] - r[5]
             } for r in results
         ]
 
@@ -347,7 +361,7 @@ class ProductionService:
         # Lấy dữ liệu
         data_sql = text(f"""
             SELECT po.id, po.code, w.name as warehouse_name, pv.variant_name as product_name,
-                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date
+                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date, po.progress_data
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id 
@@ -363,7 +377,7 @@ class ProductionService:
                 {
                     "id": r[0], "code": r[1], "warehouse_name": r[2], "product_name": r[3],
                     "quantity_planned": r[4], "quantity_finished": r[5], "status": r[6],
-                    "start_date": r[7], "due_date": r[8]
+                    "start_date": r[7], "due_date": r[8], "progress_data": r[9]
                 } for r in results
             ],
             "total": total_records,
@@ -415,7 +429,7 @@ class ProductionService:
 
         # C. Materials (Cần lấy thêm giá cost_price để tính tổng tiền trên phiếu in)
         query_materials = text("""
-            SELECT m.sku, m.variant_name, bm.quantity_needed, m.cost_price
+            SELECT m.sku, m.variant_name, bm.quantity_needed, m.cost_price, bm.note
             FROM bom b
             JOIN bom_materials bm ON b.id = bm.bom_id
             JOIN product_variants m ON bm.material_variant_id = m.id
@@ -439,7 +453,8 @@ class ProductionService:
                 "usage_per_unit": usage, 
                 "total_needed": total_needed,
                 "unit_cost": unit_cost,
-                "total_cost": total_cost_mat
+                "total_cost": total_cost_mat,
+                "note": m[4]
             })
 
         # D. Ảnh (GIỮ NGUYÊN)
@@ -472,8 +487,7 @@ class ProductionService:
             "images": list_imgs
         }
     
-
-    # 7. CẬP NHẬT THÔNG TIN LỆNH SẢN XUẤT (Chi phí và ngày tháng) - YÊU CẦU MỚI
+    # 9. CẬP NHẬT ĐƠN HÀNG (UPDATE) - YÊU CẦU MỚI
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
         try:
             # 1. Cập nhật thông tin trong bảng Orders
