@@ -250,6 +250,16 @@ const ProductionPage = () => {
     };
 
 
+    const handleOpenCreateModal = () => {
+        orderForm.resetFields(); // 1. Xóa sạch dữ liệu trong Form
+        setFileList([]);         // 2. Xóa danh sách ảnh cũ
+        setEstimatedCost(0);     // 3. Reset giá vốn ước tính về 0
+        
+        // 4. Reset danh sách NVL về rỗng (nếu cần thiết)
+        // Mặc định resetFields sẽ đưa về initialValue, nhưng an toàn thì set lại state nếu có
+        
+        setIsOrderModalOpen(true); // 5. Mở Modal
+    };
 
 
 
@@ -406,6 +416,22 @@ const ProductionPage = () => {
         { title: 'Mã Lệnh', dataIndex: 'code', key: 'code', render: t => <b>{t}</b> },
         { title: 'Xưởng May', dataIndex: 'warehouse_name' },
         { title: 'Sản Phẩm', dataIndex: 'product_name', render: t => <span style={{color: '#1677ff'}}>{t}</span> },
+        { 
+            title: 'Đã trả', 
+            align: 'center',
+            width: 120,
+            render: (_, r) => (
+                <div style={{ fontSize: 15 }}>
+                    {/* Số lượng đã xong: Màu xanh nếu xong hết, màu cam nếu đang làm */}
+                    <b style={{ color: r.quantity_finished >= r.quantity_planned ? '#52c41a' : '#fa8c16' }}>
+                        {r.quantity_finished}
+                    </b>
+                    <span style={{ color: '#999', margin: '0 4px' }}>/</span>
+                    {/* Số lượng kế hoạch */}
+                    <b>{r.quantity_planned}</b>
+                </div>
+            )
+        },
         
         // --- CỘT TRẠNG THÁI (TODO LIST) ---
         { 
@@ -463,7 +489,7 @@ const ProductionPage = () => {
     return (
         <div>
             <Card title="Quản Lý Sản Xuất" bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
-                extra={<Button type="primary" onClick={() => setIsOrderModalOpen(true)} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button>}
+                extra={<Button type="primary" onClick={handleOpenCreateModal} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button>}
             >
                 <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <Input.Search placeholder="Tìm theo Mã/Tên..." style={{ width: 300 }} value={searchText} onChange={e => setSearchText(e.target.value)} onSearch={handleSearch} enterButton allowClear />

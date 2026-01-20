@@ -371,20 +371,42 @@ class ProductionService:
         """)
         results = self.db.execute(data_sql, params).fetchall()
 
-        # Trả về cấu trúc chuẩn
+        result_list = []
+        for r in results:
+            # Xử lý Progress: Chuyển từ JSON String -> Python List/Dict
+            progress_raw = r[9]
+            progress_parsed = []
+            if progress_raw:
+                try:
+                    if isinstance(progress_raw, str):
+                        progress_parsed = json.loads(progress_raw)
+                    else:
+                        progress_parsed = progress_raw # Trường hợp DB driver tự parse
+                except:
+                    progress_parsed = [] # Nếu lỗi JSON thì trả về rỗng
+
+            result_list.append({
+                "id": r[0], 
+                "code": r[1], 
+                "warehouse_name": r[2], 
+                "product_name": r[3],
+                "quantity_planned": r[4], 
+                "quantity_finished": r[5], 
+                "status": r[6],
+                "start_date": r[7], 
+                "due_date": r[8], 
+                
+                # QUAN TRỌNG: Đổi tên key thành 'progress' để khớp với Frontend
+                # Và trả về object đã parse chứ không phải string
+                "progress": progress_parsed 
+            })
+
         return {
-            "data": [
-                {
-                    "id": r[0], "code": r[1], "warehouse_name": r[2], "product_name": r[3],
-                    "quantity_planned": r[4], "quantity_finished": r[5], "status": r[6],
-                    "start_date": r[7], "due_date": r[8], "progress_data": r[9]
-                } for r in results
-            ],
+            "data": result_list,
             "total": total_records,
             "page": page,
             "limit": limit
         }
-    
     
 
     def get_all_boms(self):
@@ -490,6 +512,16 @@ class ProductionService:
     # 9. CẬP NHẬT ĐƠN HÀNG (UPDATE) - YÊU CẦU MỚI
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
         try:
+            # 1. Lấy dữ liệu cũ để so sánh ngày
+            old_order = self.db.execute(
+                text("SELECT start_date, due_date, progress_data FROM production_orders WHERE id = :id"), 
+                {"id": order_id}
+            ).fetchone()
+            
+            if not old_order:
+                raise Exception("Không tìm thấy đơn hàng")
+
+            old_start, old_due, progress_json = old_order
             # 1. Cập nhật thông tin trong bảng Orders
             query = text("""
                 UPDATE production_orders
@@ -503,10 +535,28 @@ class ProductionService:
                 "mkt": data.marketing_fee, "pack": data.packaging_fee,
                 "start": data.start_date, "due": data.due_date, "id": order_id
             })
+            if progress_json and (data.start_date or data.due_date):
+                steps = json.loads(progress_json)
+                new_start = str(data.start_date) if data.start_date else str(old_start)
+                new_due = str(data.due_date) if data.due_date else str(old_due)
 
-            # 2. Cập nhật SKU (Nếu có yêu cầu sửa SKU) - YÊU CẦU MỚI
-            # Lấy product_variant_id của lệnh này
-            order = self.db.execute(text("SELECT product_variant_id FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+                updated = False
+                for step in steps:
+                    # Logic tự động gán ngày (Tùy chỉnh theo quy trình của bạn)
+                    if "Chuẩn bị" in step['name'] or "Cắt" in step['name']:
+                        if step['deadline'] != new_start:
+                            step['deadline'] = new_start
+                            updated = True
+                    elif "May" in step['name'] or "KCS" in step['name']:
+                        if step['deadline'] != new_due:
+                            step['deadline'] = new_due
+                            updated = True
+                
+                if updated:
+                    self.db.execute(
+                        text("UPDATE production_orders SET progress_data = :p WHERE id = :id"),
+                        {"p": json.dumps(steps), "id": order_id}
+                    )
             if order and hasattr(data, 'new_sku') and data.new_sku:
                 # Update SKU trong bảng product_variants
                 self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {
@@ -523,20 +573,20 @@ class ProductionService:
             raise e
         
 
-    # 8. XÓA ĐƠN HÀNG & HOÀN KHO (DELETE / CANCEL) - YÊU CẦU MỚI
+
+    # 8. XÓA ĐƠN HÀNG & HOÀN KHO & XÓA SKU TẠO NHANH
     def delete_production_order(self, order_id: int):
         try:
             # A. Lấy thông tin lệnh
             order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Đơn hàng không tồn tại")
             
-            status = order[6] # status column
+            status = order[6] 
             warehouse_id = order[2]
+            product_variant_id = order[3] # Lấy ID sản phẩm để xóa sau này
             
-            # B. Nếu đơn hàng đã chạy (in_progress) hoặc xong -> Phải hoàn trả NVL vào kho
+            # B. Hoàn trả NVL (Logic giữ nguyên)
             if status in ['in_progress', 'completed']:
-                # Lấy danh sách NVL đã trừ (dựa vào bảng reservation hoặc BOM)
-                # Cách chính xác nhất: Lấy từ bảng production_material_reservations (nơi lưu số lượng đã trừ)
                 reservations = self.db.execute(text("""
                     SELECT material_variant_id, quantity_reserved 
                     FROM production_material_reservations 
@@ -547,36 +597,30 @@ class ProductionService:
                     mat_id = res[0]
                     qty_return = res[1]
                     
-                    # Cộng lại vào kho
                     self.db.execute(text("""
                         UPDATE inventory_stocks 
                         SET quantity_on_hand = quantity_on_hand + :qty
                         WHERE warehouse_id = :wid AND product_variant_id = :mid
                     """), {"qty": qty_return, "wid": warehouse_id, "mid": mat_id})
 
-                    # Ghi log hoàn trả
                     self.db.execute(text("""
                         INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
                         VALUES (:wid, :mid, 'production_in', :qty, :ref, 'Hoàn trả do xóa lệnh')
                     """), {"wid": warehouse_id, "mid": mat_id, "qty": qty_return, "ref": order_id})
 
-                # Nếu đơn đã Completed -> Phải trừ Thành phẩm đã nhập (nếu muốn xóa sạch)
-                # Nhưng thường xóa lệnh là do làm sai, nên ta cứ xóa. Cẩn thận hơn thì check quantity_finished.
                 if order[5] > 0: # quantity_finished
-                     # Trừ kho thành phẩm (Revert nhập kho)
-                     pid = order[3]
                      qty_finished = order[5]
                      self.db.execute(text("""
                         UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :qty
                         WHERE warehouse_id = :wid AND product_variant_id = :pid
-                     """), {"qty": qty_finished, "wid": warehouse_id, "pid": pid})
+                     """), {"qty": qty_finished, "wid": warehouse_id, "pid": product_variant_id})
                      
                      self.db.execute(text("""
                         INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
                         VALUES (:wid, :pid, 'production_out', :qty, :ref, 'Hủy nhập TP do xóa lệnh')
-                    """), {"wid": warehouse_id, "pid": pid, "qty": -qty_finished, "ref": order_id})
+                    """), {"wid": warehouse_id, "pid": product_variant_id, "qty": -qty_finished, "ref": order_id})
 
-            # C. Xóa dữ liệu trong các bảng liên quan (Do có khóa ngoại nên phải xóa con trước)
+            # C. Xóa dữ liệu bảng con của Lệnh SX
             self.db.execute(text("DELETE FROM production_receive_logs WHERE production_order_id = :id"), {"id": order_id})
             self.db.execute(text("DELETE FROM production_order_images WHERE production_order_id = :id"), {"id": order_id})
             self.db.execute(text("DELETE FROM production_material_reservations WHERE production_order_id = :id"), {"id": order_id})
@@ -585,9 +629,103 @@ class ProductionService:
             # D. Xóa Lệnh chính
             self.db.execute(text("DELETE FROM production_orders WHERE id = :id"), {"id": order_id})
 
+            # --- E. (MỚI) XÓA SẢN PHẨM & SKU NẾU ĐƯỢC TẠO TỪ QUICK ORDER ---
+            # Để tránh lỗi trùng SKU khi tạo lại, ta thử xóa sản phẩm đó đi.
+            # Dùng try/catch để nếu sản phẩm này đang dùng ở đơn khác thì bỏ qua không xóa.
+            try:
+                # 1. Xóa BOM (Công thức) trước
+                self.db.execute(text("""
+                    DELETE FROM bom_materials 
+                    WHERE bom_id IN (SELECT id FROM bom WHERE product_variant_id = :pid)
+                """), {"pid": product_variant_id})
+                
+                self.db.execute(text("DELETE FROM bom WHERE product_variant_id = :pid"), {"pid": product_variant_id})
+
+                # 2. Xóa Variant (SKU)
+                self.db.execute(text("DELETE FROM product_variants WHERE id = :pid"), {"pid": product_variant_id})
+            except Exception as e:
+                # Nếu không xóa được (do dính ràng buộc khác) thì thôi, in ra log để biết
+                print(f"Warning: Không thể xóa SKU sau khi xóa đơn (có thể đang được dùng nơi khác): {str(e)}")
+
             self.db.commit()
-            return {"status": "success", "message": "Đã xóa đơn hàng và hoàn trả kho (nếu có)."}
+            return {"status": "success", "message": "Đã xóa đơn hàng, hoàn kho và dọn dẹp SKU."}
 
         except Exception as e:
             self.db.rollback()
             raise e
+
+    def revert_receive_log(self, log_id: int):
+        try:
+            # 1. Lấy thông tin log nhập hàng cũ
+            log = self.db.execute(text("""
+                SELECT l.production_order_id, l.production_order_item_id, l.quantity, 
+                       po.warehouse_id, po.product_variant_id
+                FROM production_receive_logs l
+                JOIN production_orders po ON l.production_order_id = po.id
+                WHERE l.id = :lid
+            """), {"lid": log_id}).fetchone()
+
+            if not log:
+                raise Exception("Không tìm thấy lịch sử nhập này")
+
+            order_id, item_id, qty, wid, pid = log
+
+            # 2. Trừ kho thành phẩm (Revert Stock)
+            # Kiểm tra xem kho còn đủ để trừ không (đề phòng đã xuất bán hết)
+            current_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:p"), {"w": wid, "p": pid}).scalar() or 0
+            if current_stock < qty:
+                raise Exception(f"Không thể hoàn tác! Kho chỉ còn {current_stock} sản phẩm (Cần trừ {qty}).")
+
+            self.db.execute(text("""
+                UPDATE inventory_stocks 
+                SET quantity_on_hand = quantity_on_hand - :qty
+                WHERE warehouse_id = :wid AND product_variant_id = :pid
+            """), {"qty": qty, "wid": wid, "pid": pid})
+
+            # 3. Trừ số lượng đã hoàn thành trong Order Header & Item
+            self.db.execute(text("UPDATE production_orders SET quantity_finished = quantity_finished - :qty WHERE id = :id"), {"qty": qty, "id": order_id})
+            self.db.execute(text("UPDATE production_order_items SET quantity_finished = quantity_finished - :qty WHERE id = :id"), {"qty": qty, "id": item_id})
+
+            # 4. Ghi log kho (Transaction Out để cân bằng)
+            self.db.execute(text("""
+                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
+                VALUES (:wid, :pid, 'production_out', :qty, :ref, :note)
+            """), {"wid": wid, "pid": pid, "qty": -qty, "ref": order_id, "note": f"Hoàn tác nhập kho #{log_id}"})
+
+            # 5. Xóa dòng log
+            self.db.execute(text("DELETE FROM production_receive_logs WHERE id = :id"), {"id": log_id})
+
+            self.db.commit()
+            return {"status": "success", "message": "Đã hoàn tác nhập kho thành công."}
+        except Exception as e:
+            self.db.rollback()
+            raise e
+            
+    # CẬP NHẬT THÊM ID VÀO HÀM LẤY LỊCH SỬ ĐỂ FRONTEND GỌI XÓA ĐƯỢC
+    def get_receive_history(self, order_id: int):
+        query = text("""
+            SELECT 
+                l.id,  -- Thêm lấy ID log
+                l.received_at,
+                i.size_label,
+                i.note as size_note,
+                l.quantity,
+                i.quantity_planned, 
+                i.quantity_finished 
+            FROM production_receive_logs l
+            JOIN production_order_items i ON l.production_order_item_id = i.id
+            WHERE l.production_order_id = :oid
+            ORDER BY l.received_at DESC
+        """)
+        results = self.db.execute(query, {"oid": order_id}).fetchall()
+        
+        return [
+            {
+                "id": r[0], # Trả về ID
+                "date": r[1].strftime("%Y-%m-%d %H:%M"),
+                "size": r[2],
+                "note": r[3],
+                "quantity": r[4],
+                "remaining": r[5] - r[6]
+            } for r in results
+        ]

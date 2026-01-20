@@ -143,3 +143,12 @@ def update_progress(order_id: int, request: UpdateProgressRequest, db: Session =
         return service.update_progress(order_id, request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+        
+# 6. API Hoàn tác nhập hàng
+@router.delete("/production/receive-logs/{log_id}")
+def revert_receive(log_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = ProductionService(db)
+    try:
+        return service.revert_receive_log(log_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
