@@ -300,11 +300,19 @@ CREATE TABLE if not exists draft_order_images (
     image_url TEXT,
     FOREIGN KEY (draft_order_id) REFERENCES draft_orders(id) ON DELETE CASCADE
 );
--- ==========================================================
--- 2. DỮ LIỆU MẪU (TEST DATA) - Cập nhật mới nhất
--- ==========================================================
 
--- A. Tạo Danh mục
+-- 28. Bảng phân quyền người dùng theo kho
+CREATE TABLE if not exists user_permissions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    warehouse_id INT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE,
+    UNIQUE(user_id, warehouse_id)
+);
+
+
+
 INSERT INTO categories (name) VALUES ('Vải Chính'), ('Vải Lót'), ('Phụ Liệu'), ('Thành Phẩm');
 
 -- B. Tạo 4 Brand (Nhãn hàng)
@@ -336,60 +344,36 @@ INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES
 (8, 4, 'Kho Tổng Himomi', TRUE, 'Hà Nội');
 
 
--- D. Tạo Nguyên Vật Liệu (NVL)
--- Vải
-INSERT INTO products (category_id, name, type, base_unit) VALUES (1, 'Vải Linen', 'material', 'Mét');
-INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes, note, color) VALUES 
-(1, 'LINEN-TRANG', 'Vải Linen Trắng Tự Nhiên', 120000, 'Khổ 1.5m', 'Hàng loại 1', 'Trắng'),
-(1, 'LINEN-NAU', 'Vải Linen Nâu Đất', 125000, 'Khổ 1.5m', 'Hàng nhập khẩu', 'Nâu');
 
--- Cúc
-INSERT INTO products (category_id, name, type, base_unit) VALUES (3, 'Cúc Gỗ', 'material', 'Cái');
-INSERT INTO product_variants (product_id, sku, variant_name, cost_price, attributes, note, color) VALUES 
-(2, 'CUC-GO-01', 'Cúc Gỗ Vintage 2 lỗ', 2000, 'Size 1.5cm', '', 'Nâu gỗ');
+-- 1. BA TÀI KHOẢN ADMIN (Full quyền)
+INSERT INTO users (username, password, full_name, role) 
+VALUES 
+('admin', '123456', 'Super Admin 1', 'admin'),
+('admin2', '123456', 'Super Admin 2', 'admin'),
+('admin3', '123456', 'Super Admin 3', 'admin');
 
--- E. Tạo Nhà Cung Cấp & Nhập Hàng Tồn Đầu Kỳ (Vào Kho Tổng Unbee - ID 1)
-INSERT INTO suppliers (name, phone) VALUES ('Nhà Dệt 19/5', '0901234567');
 
--- Tạo Phiếu Nhập PO-001 (Nhập Vải & Cúc về Kho Tổng Unbee)
-INSERT INTO purchase_orders (warehouse_id, supplier_id, po_code, order_date, total_amount, status) 
-VALUES (1, 1, 'PO-SETUP-001', CURDATE(), 61000000, 'completed'); 
 
-INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal) VALUES
-(1, 1, 400, 120000, 48000000), -- 400m Vải Linen Trắng
-(1, 2, 100, 125000, 12500000), -- 100m Vải Linen Nâu
-(1, 3, 2500, 200, 500000);     -- 2500 Cúc
+-- 2. USER 1 (Quản lý Unbee & Ranbee)
+INSERT INTO users (username, password, full_name, role) 
+VALUES ('user1', '123456', 'QL Unbee & Ranbee', 'staff');
 
--- Cập nhật Tồn kho cho Kho Tổng Unbee (ID 1)
-INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES
-(1, 1, 400),
-(1, 2, 100),
-(1, 3, 2500);
+-- Cấp quyền cho user1 (Lấy ID tự động theo username để tránh lỗi ID cứng)
+INSERT INTO user_permissions (user_id, warehouse_id)
+SELECT id, 1 FROM users WHERE username = 'user1'; -- Unbee (ID 1)
+INSERT INTO user_permissions (user_id, warehouse_id)
+SELECT id, 6 FROM users WHERE username = 'user1'; -- Ranbee (ID 6)
 
--- Ghi log nhập
-INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES
-(1, 1, 'purchase_in', 400, 1, 'Nhập đầu kỳ'),
-(1, 2, 'purchase_in', 100, 1, 'Nhập đầu kỳ'),
-(1, 3, 'purchase_in', 2500, 1, 'Nhập đầu kỳ');
 
--- F. Điều chuyển hàng sang Xưởng Thành Sơn (ID 2) để chuẩn bị SX
--- Chuyển 100m Vải Trắng + 500 Cúc từ Kho Tổng Unbee (1) sang Thành Sơn (2)
-UPDATE inventory_stocks SET quantity_on_hand = 300 WHERE warehouse_id = 1 AND product_variant_id = 1; -- Tổng còn 300
-UPDATE inventory_stocks SET quantity_on_hand = 2000 WHERE warehouse_id = 1 AND product_variant_id = 3; -- Tổng còn 2000
+-- 3. USER 2 (Quản lý Mathor & Himomi)
+INSERT INTO users (username, password, full_name, role) 
+VALUES ('user2', '123456', 'QL Mathor & Himomi', 'staff');
 
-INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES
-(2, 1, 100), -- Xưởng Thành Sơn có 100m Vải
-(2, 3, 500); -- Xưởng Thành Sơn có 500 Cúc
-
--- G. Tạo User (Lưu ý: Mật khẩu chưa mã hóa '123456' theo yêu cầu của bạn)
--- Admin (Quản trị viên - Xem tất cả)
-INSERT INTO users (username, password, full_name, role, warehouse_id) 
-VALUES ('admin', '123456', 'Quản Trị Viên', 'admin', NULL);
-
--- User quản lý Xưởng Thành Sơn (ID kho = 2)
-INSERT INTO users (username, password, full_name, role, warehouse_id) 
-VALUES ('user', '123456', 'QL Xưởng Thành Sơn', 'staff', 2);
-
+-- Cấp quyền cho user2
+INSERT INTO user_permissions (user_id, warehouse_id)
+SELECT id, 7 FROM users WHERE username = 'user2'; -- Mathor (ID 7)
+INSERT INTO user_permissions (user_id, warehouse_id)
+SELECT id, 8 FROM users WHERE username = 'user2'; -- Himomi (ID 8)
 
 CREATE INDEX idx_product_name ON product_variants(variant_name);
 CREATE INDEX idx_production_warehouse ON production_orders(warehouse_id);

@@ -1,45 +1,173 @@
-có vẻ như đoạn code này lại gây ra lỗi hiển thị 
+thêm cho tôi phần giao diện khi in PO ra nữa, chỉ cần thêm cột giá vốn của 1 sản phẩm và tổng số tiền ở nửa dưới của PO . đây là code ban đầu của PO 
+    // --- HÀM IN ---
+    const printContent = () => {
+        if (!printData) return;
+        const printWindow = window.open('', '', 'width=900,height=800');
+        printWindow.document.write('<html><head><title>PO - ' + (printData.code || '') + '</title>');
+        printWindow.document.write(`
+            <style>
+                body { font-family: 'Arial', sans-serif; padding: 20px; font-size: 14px; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }
+                h2 { margin: 0; text-transform: uppercase; }
+                .info-grid { display: flex; justify-content: space-between; margin-bottom: 20px; }
+                .info-col { width: 48%; }
+                .info-row { margin-bottom: 5px; }
+                table { width: 100%; border-collapse: collapse; margin-bottom: 15px; border: 1px solid #000; }
+                th, td { border: 1px solid #000; padding: 6px 8px; text-align: left; }
+                th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
+                .text-center { text-align: center; }
+                .text-right { text-align: right; }
+                .images-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
+                .product-img { max-height: 250px; border: 1px solid #ccc; padding: 4px; object-fit: contain; }
+                .page-break { page-break-before: always; border-top: 2px dashed #999; margin-top: 40px; padding-top: 40px; }
+                .warning-text { color: red; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 16px; border: 2px solid red; padding: 5px; }
+                .footer { margin-top: 50px; display: flex; justify-content: space-between; }
+                .signature { text-align: center; width: 40%; }
+            </style>
+        `);
+        printWindow.document.write('</head><body><div class="container">');
 
+        // PHẦN 1
+        printWindow.document.write(`
+            <div class="header">
+                <h2>LỆNH SẢN XUẤT (PO)</h2>
+                <p>Mã lệnh: <b>${printData.code}</b></p>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-col">
+                    <div class="info-row"><b>Xưởng may:</b> ${printData.warehouse}</div>
+                    <div class="info-row"><b>Địa chỉ:</b> ${printData.address || '---'}</div>
+                    <div class="info-row"><b>Ngày bắt đầu:</b> ${printData.start_date}</div>
+                    <div class="info-row"><b>Hạn giao hàng:</b> ${printData.due_date}</div>
+                </div>
+                <div class="info-col">
+                    <div class="info-row"><b>Sản phẩm:</b> ${printData.product}</div>
+                    <div class="info-row"><b>Mã SKU:</b> ${printData.sku}</div>
+                    <div class="info-row"><b>Tổng số lượng:</b> ${printData.total_qty} cái</div>
+                </div>
+            </div>
 
-    // --- CÁC HÀM XỬ LÝ TODO LIST (MỚI) ---
-    const openTodoModal = (record) => {
-        setCurrentOrder(record);
-        // Lấy progress từ record (Backend trả về)
-        // Nếu chưa có (đơn cũ), tạo mặc định
-        const steps = record.progress || [
-            { name: "Bước 1: Chuẩn bị NVL", done: false },
-            { name: "Bước 2: Cắt bán thành phẩm", done: false },
-            { name: "Bước 3: May gia công", done: false },
-            { name: "Bước 4: KCS & Đóng gói", done: false }
-        ];
-        setCurrentTodos(steps);
-        setIsTodoModalOpen(true);
+            ${printData.images && printData.images.length > 0 ? `
+                <div class="images-container">
+                    ${printData.images.map(url => `
+                        <img src="${BASE_URL}${url}" class="product-img" />
+                    `).join('')}
+                </div>
+            ` : ''}
+
+            <h3>1. CHI TIẾT SIZE & SỐ LƯỢNG</h3>
+            <table>
+                <thead><tr><th width="30%">Size</th><th width="30%">Số lượng</th><th>Ghi chú kỹ thuật</th></tr></thead>
+                <tbody>
+                    ${(printData.sizes || []).map(s => `
+                        <tr>
+                            <td class="text-center"><b>${s.size}</b></td>
+                            <td class="text-center"><b>${s.qty}</b></td>
+                            <td>${s.note || ''}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <h3>2. NGUYÊN PHỤ LIỆU CẤP ĐI</h3>
+            <table>
+                <thead><tr><th>Tên Vật Tư</th><th width="30%">Tổng cấp</th><th width="30%">Ghi chú</th></tr></thead>
+                <tbody>
+                    ${(printData.materials || []).map(m => `
+                        <tr>
+                            <td>${m.name} <small>(${m.sku})</small></td>
+                            <td class="text-center"><b>${m.total_needed}</b></td>
+                            <td>${m.note || ''}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <div class="footer">
+                <div class="signature"><p><b>Người Lập Lệnh</b></p><br/><br/><br/></div>
+                <div class="signature"><p><b>Xưởng Xác Nhận</b></p><br/><br/><br/></div>
+            </div>
+        `);
+
+        // NGẮT TRANG
+        printWindow.document.write('<div class="page-break"></div>');
+
+        // PHẦN 2
+        const totalCost = (printData.total_material_cost || 0) + (printData.shipping_fee || 0) + (printData.other_fee || 0) + (printData.labor_fee || 0) + (printData.marketing_fee || 0) + (printData.packaging_fee || 0) + (printData.print_fee || 0);
+        const unitCost = printData.total_qty > 0 ? (totalCost / printData.total_qty) : 0;
+
+        printWindow.document.write(`
+            <div class="warning-text">PHẦN DÀNH RIÊNG CHO QUẢN LÝ</div>
+            <div class="header">
+                <h2>BẢNG KÊ CHI PHÍ & GIÁ VỐN</h2>
+                <p>Mã lệnh: <b>${printData.code}</b></p>
+            </div>
+
+            <h3>1. CHI PHÍ NGUYÊN VẬT LIỆU</h3>
+            <table>
+                <thead><tr><th>Tên Vật Tư</th><th>Số lượng</th><th>Đơn giá vốn</th><th>Thành tiền</th></tr></thead>
+                <tbody>
+                    ${(printData.materials || []).map(m => `
+                        <tr>
+                            <td>${m.name}</td>
+                            <td class="text-center">${m.total_needed}</td>
+                            <td class="text-right">${safeMoney(m.total_cost / (m.total_needed || 1))}</td>
+                            <td class="text-right">${safeMoney(m.total_cost)}</td>
+                        </tr>
+                    `).join('')}
+                    <tr>
+                        <td colspan="3" class="text-right"><b>TỔNG TIỀN NVL:</b></td>
+                        <td class="text-right"><b>${safeMoney(printData.total_material_cost)}</b></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>2. CÁC CHI PHÍ KHÁC</h3>
+            <table style="width: 60%; margin-left: auto;">
+                <tr><td>Phí Nhân Công:</td><td class="text-right">${safeMoney(printData.labor_fee)}</td></tr>
+                <tr><td>Phí In / Thêu:</td><td class="text-right">${safeMoney(printData.print_fee)}</td></tr>
+                <tr><td>Phí Vận Chuyển:</td><td class="text-right">${safeMoney(printData.shipping_fee)}</td></tr>
+                <tr><td>Phí Marketing:</td><td class="text-right">${safeMoney(printData.marketing_fee)}</td></tr>
+                <tr><td>Phí Đóng Gói:</td><td class="text-right">${safeMoney(printData.packaging_fee)}</td></tr>
+                <tr><td>Phụ phí khác:</td><td class="text-right">${safeMoney(printData.other_fee)}</td></tr>
+                <tr style="background-color: #eee;">
+                    <td><b>TỔNG CHI PHÍ:</b></td>
+                    <td class="text-right"><b style="color: red; font-size: 16px;">${safeMoney(totalCost)}</b></td>
+                </tr>
+            </table>
+
+            <div style="text-align: right; margin-top: 20px; font-size: 18px; padding: 15px; border: 2px solid blue;">
+                GIÁ VỐN / 1 SẢN PHẨM: <b style="color: blue;">${safeMoney(unitCost)}</b>
+            </div>
+        `);
+
+        printWindow.document.write('</div></body></html>');
+        printWindow.document.close();
+        setTimeout(() => { printWindow.print(); }, 1000);
     };
 
-    const handleToggleStep = (index) => {
-        const newTodos = [...currentTodos];
-        newTodos[index].done = !newTodos[index].done;
-        setCurrentTodos(newTodos);
-    };
-
-    const handleSaveProgress = async () => {
-        try {
-            await productionApi.updateProgress(currentOrder.id, { steps: currentTodos });
-            message.success("Đã cập nhật tiến độ!");
-            setIsTodoModalOpen(false);
-            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); // Reload để cập nhật màu nút
-        } catch (error) {
-            message.error("Lỗi lưu tiến độ");
-        }
-    };
-
-
-
- // --- COLUMNS ---
     const orderColumns = [
         { title: 'Mã Lệnh', dataIndex: 'code', key: 'code', render: t => <b>{t}</b> },
         { title: 'Xưởng May', dataIndex: 'warehouse_name' },
         { title: 'Sản Phẩm', dataIndex: 'product_name', render: t => <span style={{color: '#1677ff'}}>{t}</span> },
+        { 
+            title: 'Đã trả', 
+            align: 'center',
+            width: 120,
+            render: (_, r) => (
+                <div style={{ fontSize: 15 }}>
+                    {/* Số lượng đã xong: Màu xanh nếu xong hết, màu cam nếu đang làm */}
+                    <b style={{ color: r.quantity_finished >= r.quantity_planned ? '#52c41a' : '#fa8c16' }}>
+                        {r.quantity_finished}
+                    </b>
+                    <span style={{ color: '#999', margin: '0 4px' }}>/</span>
+                    {/* Số lượng kế hoạch */}
+                    <b>{r.quantity_planned}</b>
+                </div>
+            )
+        },
         
         // --- CỘT TRẠNG THÁI (TODO LIST) ---
         { 
@@ -68,76 +196,3 @@ có vẻ như đoạn code này lại gây ra lỗi hiển thị
             }
         },
         // ----------------------------------
-
-        {
-            title: 'Hành động', key: 'action', align: 'center', width: 220,
-            render: (_, record) => (
-                <Space>
-                    <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} />
-                    <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
-                    <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
-                    <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteOrder(record.id)} />
-                    
-                    {/* Logic nút bấm */}
-                    {record.status === 'draft' && (
-                        <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>
-                    )}
-                    {record.status === 'in_progress' && (
-                        <>
-                            <Button size="small" icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
-                            {/* Nút Chốt đơn sẽ gọi API forceFinish, Backend sẽ check đủ bước chưa */}
-                            <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleForceFinish(record.id)} />
-                        </>
-                    )}
-                </Space>
-            )
-        }
-    ];
-
-    return (
-        <div>
-            <Card title="Quản Lý Sản Xuất" bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
-                extra={<Button type="primary" onClick={() => setIsOrderModalOpen(true)} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button>}
-            >
-                {/* Search ... */}
-                <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <Input.Search placeholder="Tìm theo Mã/Tên..." style={{ width: 300 }} value={searchText} onChange={e => setSearchText(e.target.value)} onSearch={handleSearch} enterButton allowClear />
-                    <Select placeholder="Lọc theo Xưởng" style={{ width: 200 }} allowClear onChange={handleFilterWarehouse} value={filterWarehouse}>
-                        {warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
-                    </Select>
-                </div>
-                {Array.isArray(orders) ? <Table dataSource={orders} columns={orderColumns} rowKey="id" loading={loading} pagination={{ current: pagination.current, pageSize: pagination.pageSize, total: pagination.total, onChange: handleTableChange }} /> : <Empty />}
-            </Card>
-
-            {/* --- MODAL TODO LIST (MỚI) --- */}
-            <Modal 
-                title={`Tiến độ đơn hàng: ${currentOrder?.code}`} 
-                open={isTodoModalOpen} 
-                onCancel={() => setIsTodoModalOpen(false)}
-                onOk={handleSaveProgress}
-                okText="Lưu Tiến Độ"
-            >
-                <List
-                    dataSource={currentTodos}
-                    renderItem={(item, index) => (
-                        <List.Item>
-                            <Checkbox 
-                                checked={item.done} 
-                                onChange={() => handleToggleStep(index)}
-                                disabled={currentOrder?.status === 'completed'} // Không sửa nếu đã xong
-                            >
-                                <span style={{
-                                    textDecoration: item.done ? 'line-through' : 'none', 
-                                    color: item.done ? '#999' : '#000',
-                                    fontWeight: 500
-                                }}>
-                                    {item.name}
-                                </span>
-                            </Checkbox>
-                            {/* Hiển thị Deadline */}
-                            <Tag color="orange" icon={<CalendarOutlined />}>{item.deadline || "N/A"}</Tag>
-                        </List.Item>
-                    )}
-                />
-                {currentOrder?.status === 'completed' && <div style={{color: 'green', marginTop: 10, textAlign: 'center'}}>✔ Đơn hàng đã hoàn tất!</div>}
-            </Modal>

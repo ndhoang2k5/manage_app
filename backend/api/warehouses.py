@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.warehouseService import WarehouseService
 from entities.warehouse import WarehouseCreateRequest, BrandCreateRequest, WarehouseResponse, BrandResponse, TransferCreateRequest
-from security import get_current_user
+from drivers.dependencies import get_current_user, get_allowed_warehouse_ids 
+
 
 router = APIRouter()
 
@@ -32,8 +33,9 @@ def create_warehouse(request: WarehouseCreateRequest, db: Session = Depends(get_
 
 @router.get("/warehouses", response_model=list[WarehouseResponse])
 def list_warehouses(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    allowed_ids = get_allowed_warehouse_ids(user, db)
     service = WarehouseService(db)
-    return service.get_all_warehouses()
+    return service.get_all_warehouses(allowed_ids)
 
 @router.post("/warehouses/transfer")
 def transfer_stock(request: TransferCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):

@@ -263,7 +263,7 @@ const ProductionPage = () => {
 
 
 
-    // --- HÀM IN (ĐÃ CẬP NHẬT GHI CHÚ) ---
+    // --- HÀM IN ---
     const printContent = () => {
         if (!printData) return;
         const printWindow = window.open('', '', 'width=900,height=800');
@@ -636,6 +636,7 @@ const ProductionPage = () => {
             <Modal title="Cập nhật Thông tin & Chi phí" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} footer={null}><Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item><Form.Item label="Mã SKU Sản phẩm (Cập nhật)" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item><Row gutter={16}><Col span={12}><Form.Item label="Ngày bắt đầu" name="start_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item label="Hạn xong" name="due_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col></Row><Divider>Chi phí</Divider><Row gutter={16}><Col span={12}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row><Button type="primary" htmlType="submit" block>Lưu Thay Đổi</Button></Form></Modal>
             <Modal title={`📦 Nhập Kho Thành Phẩm (Trả hàng) - ${currentOrder?.code}`} open={isReceiveModalOpen} onCancel={() => setIsReceiveModalOpen(false)} onOk={handleReceiveGoods}><Table dataSource={orderSizes} pagination={false} rowKey="id" size="small" bordered columns={[{ title: 'Size', dataIndex: 'size', align: 'center', width: 80 }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{color:'#888', fontSize: 12}}>{t}</span> }, { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 }, { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> }, { title: 'Nhập Đợt Này', render: (_, r, idx) => <Input type="number" min={0} value={r.receiving} onChange={(val) => { const n = [...orderSizes]; n[idx].receiving = Number(val.target.value); setOrderSizes(n); }} /> }]} /></Modal>
             <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} /></Modal>
+{/* --- MODAL IN ẤN (ĐÃ SỬA: XÓA NOTE Ở PHẦN 1, THÊM DÒNG PHÍ MARKETING/ĐÓNG GÓI) --- */}
             <Modal
                 open={isPrintModalOpen}
                 onCancel={() => setIsPrintModalOpen(false)}
@@ -643,162 +644,169 @@ const ProductionPage = () => {
                     <Button key="close" onClick={() => setIsPrintModalOpen(false)}>Đóng</Button>,
                     <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printContent}>In Ngay</Button>
                 ]}
-                width={800}
-                >
+                width={900}
+                style={{ top: 20 }}
+            >
                 {printData && (
-                    <div id="printable-area" style={{ padding: 20, fontFamily: 'Times New Roman' }}>
-                    
-                    <div className="header" style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 10, marginBottom: 20 }}>
-                        <h2 style={{margin: 0}}>LỆNH SẢN XUẤT</h2>
-                        <i>Mã lệnh: <b>{printData.code}</b></i>
-                    </div>
-
-                    <div className="info" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
-                        <div>
-                        <p><b>Xưởng thực hiện:</b> {printData.warehouse}</p>
-                        <p><b>Ngày bắt đầu:</b> {printData.start_date}</p>
+                    <div id="printable-area" style={{ padding: 20, fontFamily: 'Times New Roman', color: '#000' }}>
+                        
+                        {/* HEADER */}
+                        <div style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 10, marginBottom: 20 }}>
+                            <h2 style={{ margin: 0, textTransform: 'uppercase' }}>LỆNH SẢN XUẤT & TÍNH GIÁ THÀNH</h2>
+                            <i>Mã lệnh: <b>{printData.code}</b></i>
                         </div>
-                        <div>
-                        <p><b>Sản phẩm:</b> {printData.product}</p>
-                        <p><b>Hạn hoàn thành:</b> {printData.due_date}</p>
+
+                        {/* INFO */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+                            <div>
+                                <p style={{margin: '4px 0'}}><b>Xưởng thực hiện:</b> {printData.warehouse}</p>
+                                <p style={{margin: '4px 0'}}><b>Ngày bắt đầu:</b> {printData.start_date}</p>
+                            </div>
+                            <div>
+                                <p style={{margin: '4px 0'}}><b>Sản phẩm:</b> <span style={{color: '#1677ff', fontWeight: 'bold'}}>{printData.product}</span></p>
+                                <p style={{margin: '4px 0'}}><b>Hạn hoàn thành:</b> {printData.due_date}</p>
+                            </div>
                         </div>
-                    </div>
 
-                    {printData.images && printData.images.length > 0 && (
-                        <div style={{marginBottom: 20}}>
-                        <h4>HÌNH ẢNH MẪU:</h4>
-                        <div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>
-                            {printData.images.map((url, idx) => (
-                            <img
-                                key={idx}
-                                src={`${BASE_URL}${url}`}
-                                alt="Mẫu"
-                                style={{maxHeight: 150, border: '1px solid #ddd', padding: 2}}
-                            />
-                            ))}
-                        </div>
-                        </div>
-                    )}
+                        {/* IMAGE */}
+                        {printData.images && printData.images.length > 0 && (
+                            <div style={{ marginBottom: 20, textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                                    {printData.images.map((url, idx) => (
+                                        <img key={idx} src={`${BASE_URL}${url}`} alt="Mẫu" style={{ maxHeight: 180, border: '1px solid #ddd', padding: 2, borderRadius: 4 }} />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
-                    <h4 style={{borderBottom: '1px solid #ccc'}}>1. CHI TIẾT SIZE & SỐ LƯỢNG</h4>
-                    <table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}>
-                        <thead>
-                        <tr style={{backgroundColor: '#f0f0f0'}}>
-                            <th style={{border: '1px solid #000', padding: 8}}>Size</th>
-                            <th style={{border: '1px solid #000', padding: 8}}>Số lượng đặt</th>
-                            <th style={{border: '1px solid #000', padding: 8}}>Ghi chú</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {printData.sizes.map((s, idx) => (
-                            <tr key={idx}>
-                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}><b>{s.size}</b></td>
-                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center'}}>{s.qty}</td>
-                            <td style={{border: '1px solid #000', padding: 8}}>{s.note}</td>
-                            </tr>
-                        ))}
-                        </tbody>
-                    </table>
-
-                    <h4 style={{borderBottom: '1px solid #ccc'}}>2. ĐỊNH MỨC NGUYÊN LIỆU & CHI PHÍ</h4>
-                    <table style={{width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #000'}}>
-                        <thead>
-                        <tr style={{backgroundColor: '#f0f0f0'}}>
-                            <th style={{border: '1px solid #000', padding: 8}}>Tên Vật Tư</th>
-                            <th style={{border: '1px solid #000', padding: 8}}>Tổng cấp</th>
-                            <th style={{border: '1px solid #000', padding: 8}}>Ghi chú</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {printData.materials.map((m, idx) => (
-                            <tr key={idx}>
-                            <td style={{border: '1px solid #000', padding: 8}}>
-                                {m.name} ({m.sku})
-                            </td>
-                            <td style={{border: '1px solid #000', padding: 8, textAlign: 'center', fontWeight: 'bold'}}>
-                                {m.total_needed}
-                            </td>
-                            <td style={{border: '1px solid #000', padding: 8}}>
-                                {m.note || ''}
-                            </td>
-                            </tr>
-                        ))}
-                        </tbody>
-                    </table>
-
-                    <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: 20}}>
-                        <table style={{width: '50%', borderCollapse: 'collapse', border: '1px solid #000'}} className="money-table">
-                        <tbody>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Tổng Tiền NVL:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.total_material_cost)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Gia Công:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.labor_fee || 0)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí In/Thêu:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.print_fee || 0)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Vận Chuyển:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.shipping_fee)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Marketing:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.marketing_fee || 0)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phí Đóng Gói:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.packaging_fee || 0)}
-                            </td>
-                            </tr>
-                            <tr>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>Phụ phí:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(printData.other_fee)}
-                            </td>
-                            </tr>
-                            <tr style={{backgroundColor: '#e6f7ff'}}>
-                            <td style={{border: '1px solid #000', padding: 5}}><b>TỔNG CỘNG:</b></td>
-                            <td style={{border: '1px solid #000', padding: 5, fontWeight: 'bold', color: '#d4380d'}}>
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(
-                                printData.total_material_cost +
-                                printData.shipping_fee +
-                                printData.other_fee +
-                                (printData.labor_fee||0) +
-                                (printData.marketing_fee||0) +
-                                (printData.packaging_fee||0) +
-                                (printData.print_fee||0)
-                                )}
-                            </td>
-                            </tr>
-                        </tbody>
+                        {/* TABLE 1: SIZE (ĐÃ XÓA CỘT GHI CHÚ) */}
+                        <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5, marginTop: 0 }}>1. CHI TIẾT SIZE & SỐ LƯỢNG</h4>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
+                            <thead style={{ background: '#f5f5f5' }}>
+                                <tr>
+                                    <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Size</th>
+                                    <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Số lượng đặt</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {printData.sizes.map((s, idx) => (
+                                    <tr key={idx}>
+                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%' }}><b>{s.size}</b></td>
+                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%', fontWeight: 'bold' }}>{s.qty}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
                         </table>
-                    </div>
 
-                    <div className="footer" style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}>
-                        <div className="signature" style={{textAlign: 'center', width: '40%'}}>
-                        <p><b>Người Lập Lệnh</b></p>
-                        <br/><br/><br/>
+                        {/* TABLE 2: MATERIALS & COST */}
+                        <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5 }}>2. ĐỊNH MỨC NGUYÊN LIỆU & CHI PHÍ</h4>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
+                            <thead style={{ background: '#f5f5f5' }}>
+                                <tr>
+                                    <th style={{ border: '1px solid #333', padding: '8px', width: '35%' }}>Tên Vật Tư</th>
+                                    <th style={{ border: '1px solid #333', padding: '8px', width: '15%' }}>Tổng cấp</th>
+                                    <th style={{ border: '1px solid #333', padding: '8px', width: '15%' }}>Đơn giá vốn</th>
+                                    <th style={{ border: '1px solid #333', padding: '8px', width: '15%' }}>Thành tiền</th>
+                                    <th style={{ border: '1px solid #333', padding: '8px' }}>Ghi chú</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {printData.materials.map((m, idx) => (
+                                    <tr key={idx}>
+                                        <td style={{ border: '1px solid #333', padding: '8px' }}>{m.name} <small style={{color:'#666'}}>({m.sku})</small></td>
+                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>{m.total_needed}</td>
+                                        
+                                        {/* HIỂN THỊ GIÁ */}
+                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
+                                            {new Intl.NumberFormat('vi-VN').format(m.total_cost / (m.total_needed || 1))}
+                                        </td>
+                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right', fontWeight: 'bold' }}>
+                                            {new Intl.NumberFormat('vi-VN').format(m.total_cost)}
+                                        </td>
+                                        
+                                        <td style={{ border: '1px solid #333', padding: '8px' }}>{m.note || ''}</td>
+                                    </tr>
+                                ))}
+                                {/* DÒNG TỔNG TIỀN NVL */}
+                                <tr style={{background: '#fafafa'}}>
+                                    <td colSpan={3} style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}><b>Tổng tiền NVL:</b></td>
+                                    <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}><b>{new Intl.NumberFormat('vi-VN').format(printData.total_material_cost)} ₫</b></td>
+                                    <td style={{ border: '1px solid #333' }}></td>
+                                </tr>
+                            </tbody>
+                        </table>
+
+                        {/* TABLE 3: SUMMARY COST (ĐÃ THÊM CÁC DÒNG PHÍ CÒN THIẾU) */}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                            <table style={{ width: '50%', borderCollapse: 'collapse', border: '2px solid #000' }}>
+                                <tbody>
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phí Gia Công:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.labor_fee || 0)} ₫</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phí In/Thêu:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.print_fee || 0)} ₫</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phí Vận Chuyển:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.shipping_fee || 0)} ₫</td>
+                                    </tr>
+                                    {/* THÊM DÒNG MARKETING */}
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phí Marketing:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee || 0)} ₫</td>
+                                    </tr>
+                                    {/* THÊM DÒNG ĐÓNG GÓI */}
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phí Đóng Gói:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.packaging_fee || 0)} ₫</td>
+                                    </tr>
+                                    
+                                    <tr>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px' }}>Phụ phí khác:</td>
+                                        <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee || 0)} ₫</td>
+                                    </tr>
+                                    <tr style={{ background: '#e6f7ff' }}>
+                                        <td style={{ border: '1px solid #000', padding: '10px' }}><b>TỔNG CHI PHÍ:</b></td>
+                                        <td style={{ border: '1px solid #000', padding: '10px', textAlign: 'right', color: '#d4380d', fontSize: '16px' }}>
+                                            <b>
+                                                {new Intl.NumberFormat('vi-VN').format(
+                                                    printData.total_material_cost + 
+                                                    (printData.labor_fee||0) + 
+                                                    (printData.print_fee||0) + 
+                                                    (printData.shipping_fee||0) + 
+                                                    (printData.marketing_fee||0) + 
+                                                    (printData.packaging_fee||0) + 
+                                                    (printData.other_fee||0)
+                                                )} ₫
+                                            </b>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
-                        <div className="signature" style={{textAlign: 'center', width: '40%'}}>
-                        <p><b>Xưởng Xác Nhận</b></p>
-                        <br/><br/><br/>
+                        
+                        {/* GIÁ VỐN ĐƠN VỊ */}
+                        <div style={{marginTop: 15, textAlign: 'right'}}>
+                            <Tag color="blue" style={{fontSize: 16, padding: '8px 15px'}}>
+                                GIÁ VỐN / 1 SP: <b>{new Intl.NumberFormat('vi-VN').format(
+                                    printData.total_qty > 0 
+                                    ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
+                                    : 0
+                                )} ₫</b>
+                            </Tag>
                         </div>
-                    </div>
+
+                        {/* SIGNATURE */}
+                        <div style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}>
+                            <div style={{ textAlign: 'center', width: '40%' }}>
+                                <p><b>Người Lập Lệnh</b></p><br /><br /><br />
+                            </div>
+                            <div style={{ textAlign: 'center', width: '40%' }}>
+                                <p><b>Xưởng Xác Nhận</b></p><br /><br /><br />
+                            </div>
+                        </div>
 
                     </div>
                 )}

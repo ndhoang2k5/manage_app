@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from entities.warehouse import WarehouseCreateRequest, BrandCreateRequest
 from entities.warehouse import TransferCreateRequest
+from typing import List, Optional
+
 
 class WarehouseService:
     def __init__(self, db: Session):
@@ -48,16 +50,24 @@ class WarehouseService:
             self.db.rollback()
             raise e
 
-    # 3. Lấy danh sách tất cả các kho (Kèm tên Brand)
-    def get_all_warehouses(self):
-        query = text("""
+    # 3. Lấy danh sách kho (CÓ PHÂN QUYỀN)
+    def get_all_warehouses(self, allowed_ids: Optional[List[int]] = None):
+        sql = """
             SELECT w.id, w.name, b.name as brand_name, w.address,
                    CASE WHEN w.is_central = 1 THEN 'Kho Tổng' ELSE 'Xưởng May' END as type_name
             FROM warehouses w
             JOIN brands b ON w.brand_id = b.id
-            ORDER BY w.brand_id, w.is_central DESC
-        """)
-        results = self.db.execute(query).fetchall()
+        """
+
+        if allowed_ids is not None:
+            if len(allowed_ids) == 0:
+                return []
+            ids_str = ",".join(map(str, allowed_ids))
+            sql += f" WHERE w.id IN ({ids_str})"
+
+        sql += " ORDER BY w.brand_id, w.is_central DESC"
+
+        results = self.db.execute(text(sql)).fetchall()
         
         return [
             {

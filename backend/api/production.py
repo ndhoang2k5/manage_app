@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from security import get_current_user, require_admin
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
@@ -7,7 +6,7 @@ from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, 
 import shutil
 import uuid
 from typing import Optional
-
+from drivers.dependencies import get_current_user, get_allowed_warehouse_ids, require_admin 
 router = APIRouter()
 
 @router.get("/production/orders")
@@ -16,10 +15,15 @@ def list_orders(
     limit: int = 10, 
     search: Optional[str] = None, 
     warehouse: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user) # 1. Bắt buộc đăng nhập
 ):
+    # 2. Tính toán quyền
+    allowed_ids = get_allowed_warehouse_ids(user, db)
+
     service = ProductionService(db)
-    return service.get_all_orders(page, limit, search, warehouse)
+    # 3. Truyền quyền vào Service
+    return service.get_all_orders(page, limit, search, warehouse, allowed_warehouse_ids=allowed_ids)
 
 @router.get("/production/boms")
 def list_boms(

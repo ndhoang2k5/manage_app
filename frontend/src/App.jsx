@@ -51,10 +51,22 @@ const App = () => {
     const fetchWarehouses = async () => {
       try {
         const response = await warehouseApi.getAllWarehouses();
-        const centrals = response.data.filter(w => w.type_name === 'Kho Tổng');
+        let allWarehouses = response.data;
+        
+        // --- LOGIC LỌC MENU Ở FRONTEND (UI ONLY) ---
+        // Tuy backend đã chặn dữ liệu, nhưng frontend cũng nên ẩn menu đi cho gọn
+        if (user.role !== 'admin' && user.warehouse_id) {
+             // Nếu là staff, chỉ hiện kho tổng mà họ thuộc về (hoặc kho tổng chứa kho con họ thuộc về)
+             // Lưu ý: Logic này phụ thuộc vào việc backend trả về danh sách warehouse như thế nào.
+             // Nếu backend đã filter rồi thì ta cứ hiển thị hết những gì nhận được.
+        }
+
+        // Lọc lấy các kho tổng để hiển thị Dashboard
+        const centrals = allWarehouses.filter(w => w.type_name === 'Kho Tổng');
         setCentralWarehouses(centrals);
       } catch (error) {
         console.error("Lỗi tải menu kho:", error);
+        // Nếu lỗi 403/401 do hết token thì axiosClient đã tự redirect rồi
       }
       setLoadingMenu(false);
     };

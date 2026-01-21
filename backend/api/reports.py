@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.reportService import ReportService
 from entities.report import WorkshopDetailResponse
-from security import get_current_user
+from drivers.dependencies import get_current_user
 
 router = APIRouter()
 

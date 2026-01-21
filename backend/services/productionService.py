@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import json
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
+from typing import List, Optional
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -265,7 +266,6 @@ class ProductionService:
                 else:
                     raise Exception("Thiếu ID dòng size")
 
-                # B. Cộng kho thành phẩm (Giữ nguyên)
                 self.db.execute(text("""
                     INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
                     VALUES (:wid, :pid, :qty)
@@ -274,7 +274,6 @@ class ProductionService:
 
                 total_received_now += item.quantity
 
-            # C. Update Header & Ghi Transaction (Giữ nguyên)
             self.db.execute(text("UPDATE production_orders SET quantity_finished = quantity_finished + :qty WHERE id = :id"), {"qty": total_received_now, "id": order_id})
             
             self.db.execute(text("""
@@ -289,10 +288,10 @@ class ProductionService:
             self.db.rollback()
             raise e
 
-    # --- HÀM MỚI: LẤY LỊCH SỬ TRẢ HÀNG ---
     def get_receive_history(self, order_id: int):
         query = text("""
             SELECT 
+                l.id,
                 l.received_at,
                 i.size_label,
                 i.note as size_note,
@@ -308,11 +307,12 @@ class ProductionService:
         
         return [
             {
-                "date": r[0].strftime("%Y-%m-%d %H:%M"), # Format ngày giờ đẹp
-                "size": r[1],
-                "note": r[2],
-                "quantity": r[3],
-                "remaining": r[4] - r[5]
+                "id": r[0],
+                "date": r[1].strftime("%Y-%m-%d %H:%M"),
+                "size": r[2],
+                "note": r[3],
+                "quantity": r[4],
+                "remaining": r[5] - r[6]
             } for r in results
         ]
 
@@ -332,11 +332,18 @@ class ProductionService:
         return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
 
 # 6. Lấy danh sách Lệnh SX (CHUẨN PHÂN TRANG)
-    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None):
+    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None, allowed_warehouse_ids: Optional[List[int]] = None):
         offset = (page - 1) * limit
         
         conditions = []
         params = {"limit": limit, "offset": offset}
+
+        if allowed_warehouse_ids is not None:
+            if len(allowed_warehouse_ids) == 0:
+                return {"data": [], "total": 0, "page": page, "limit": limit}
+
+            ids_str = ",".join(map(str, allowed_warehouse_ids))
+            conditions.append(f"po.warehouse_id IN ({ids_str})")
 
         if search:
             conditions.append("(po.code LIKE :search OR pv.variant_name LIKE :search)")
@@ -671,7 +678,6 @@ class ProductionService:
             order_id, item_id, qty, wid, pid = log
 
             # 2. Trừ kho thành phẩm (Revert Stock)
-            # Kiểm tra xem kho còn đủ để trừ không (đề phòng đã xuất bán hết)
             current_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:p"), {"w": wid, "p": pid}).scalar() or 0
             if current_stock < qty:
                 raise Exception(f"Không thể hoàn tác! Kho chỉ còn {current_stock} sản phẩm (Cần trừ {qty}).")
@@ -700,6 +706,7 @@ class ProductionService:
         except Exception as e:
             self.db.rollback()
             raise e
+
             
     # CẬP NHẬT THÊM ID VÀO HÀM LẤY LỊCH SỬ ĐỂ FRONTEND GỌI XÓA ĐƯỢC
     def get_receive_history(self, order_id: int):
@@ -711,7 +718,7 @@ class ProductionService:
                 i.note as size_note,
                 l.quantity,
                 i.quantity_planned, 
-                i.quantity_finished 
+                i.quantity_finished
             FROM production_receive_logs l
             JOIN production_order_items i ON l.production_order_item_id = i.id
             WHERE l.production_order_id = :oid

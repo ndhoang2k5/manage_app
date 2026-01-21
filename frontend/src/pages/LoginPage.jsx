@@ -11,12 +11,13 @@ const LoginPage = () => {
     const onFinish = async (values) => {
         setLoading(true);
         try {
-            const res = await axios.post('/api/v1/auth/login', { 
-                username: values.username,
-                password: values.password
-            });
-            // ------------------------------------
+            const formData = new FormData();
+            formData.append('username', values.username);
+            formData.append('password', values.password);
 
+            const res = await axios.post('/api/v1/auth/login', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
             localStorage.setItem('token', res.data.access_token);
             localStorage.setItem('user', JSON.stringify(res.data.user_info));
             
@@ -28,7 +29,7 @@ const LoginPage = () => {
             if (error.response && error.response.status === 401) {
                 message.error("Sai tài khoản hoặc mật khẩu!");
             } else {
-                message.error("Lỗi kết nối hoặc định dạng (Kiểm tra lại Backend)");
+                message.error("Lỗi kết nối: " + (error.response?.data?.detail || "Server Error"));
             }
         }
         setLoading(false);

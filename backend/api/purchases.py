@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.purchaseService import PurchaseService
-from security import get_current_user, require_admin
+from drivers.dependencies import get_current_user, require_admin
 # Import đầy đủ các Entities
 from entities.purchase import SupplierCreateRequest, PurchaseOrderCreateRequest, SupplierResponse, PurchaseUpdateRequest
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from security import get_current_user, require_admin
+from drivers.dependencies import get_current_user
 from drivers.db_client import get_db
 from services.productService import ProductService
 from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse, MaterialUpdateRequest
