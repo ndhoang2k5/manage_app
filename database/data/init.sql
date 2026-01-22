@@ -344,36 +344,31 @@ INSERT INTO warehouses (id, brand_id, name, is_central, address) VALUES
 (8, 4, 'Kho Tổng Himomi', TRUE, 'Hà Nội');
 
 
-
--- 1. BA TÀI KHOẢN ADMIN (Full quyền)
 INSERT INTO users (username, password, full_name, role) 
 VALUES 
-('admin', '123456', 'Super Admin 1', 'admin'),
-('admin2', '123456', 'Super Admin 2', 'admin'),
-('admin3', '123456', 'Super Admin 3', 'admin');
-
+('global_admin', '23020368', 'Super Admin 1', 'admin');
 
 
 -- 2. USER 1 (Quản lý Unbee & Ranbee)
 INSERT INTO users (username, password, full_name, role) 
-VALUES ('user1', '123456', 'QL Unbee & Ranbee', 'staff');
+VALUES ('URBEECD01', '23020369', 'QL Unbee & Ranbee', 'staff');
 
 -- Cấp quyền cho user1 (Lấy ID tự động theo username để tránh lỗi ID cứng)
 INSERT INTO user_permissions (user_id, warehouse_id)
-SELECT id, 1 FROM users WHERE username = 'user1'; -- Unbee (ID 1)
+SELECT id, 1 FROM users WHERE username = 'URBEECD01'; -- Unbee (ID 1)
 INSERT INTO user_permissions (user_id, warehouse_id)
-SELECT id, 6 FROM users WHERE username = 'user1'; -- Ranbee (ID 6)
+SELECT id, 6 FROM users WHERE username = 'URBEECD01'; -- Ranbee (ID 6)
 
 
 -- 3. USER 2 (Quản lý Mathor & Himomi)
 INSERT INTO users (username, password, full_name, role) 
-VALUES ('user2', '123456', 'QL Mathor & Himomi', 'staff');
+VALUES ('MHBEEAT02', '23020370', 'QL Mathor & Himomi', 'staff');
 
 -- Cấp quyền cho user2
 INSERT INTO user_permissions (user_id, warehouse_id)
-SELECT id, 7 FROM users WHERE username = 'user2'; -- Mathor (ID 7)
+SELECT id, 7 FROM users WHERE username = 'MHBEEAT02'; -- Mathor (ID 7)
 INSERT INTO user_permissions (user_id, warehouse_id)
-SELECT id, 8 FROM users WHERE username = 'user2'; -- Himomi (ID 8)
+SELECT id, 8 FROM users WHERE username = 'MHBEEAT02'; -- Himomi (ID 8)
 
 CREATE INDEX idx_product_name ON product_variants(variant_name);
 CREATE INDEX idx_production_warehouse ON production_orders(warehouse_id);
