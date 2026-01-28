@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import json
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -368,7 +368,7 @@ class ProductionService:
         # Lấy dữ liệu
         data_sql = text(f"""
             SELECT po.id, po.code, w.name as warehouse_name, pv.variant_name as product_name,
-                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date, po.progress_data
+                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date, po.progress_data, po.warehouse_id
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id 
@@ -402,6 +402,7 @@ class ProductionService:
                 "status": r[6],
                 "start_date": r[7], 
                 "due_date": r[8], 
+                "warehouse_id": r[10],
                 
                 # QUAN TRỌNG: Đổi tên key thành 'progress' để khớp với Frontend
                 # Và trả về object đã parse chứ không phải string
@@ -428,16 +429,17 @@ class ProductionService:
     
     # ... (Các hàm cũ giữ nguyên) ...
 
-    # 8. LẤY DỮ LIỆU ĐỂ IN LỆNH SẢN XUẤT (Full Detail)
+    # 8. LẤY DỮ LIỆU ĐỂ IN (ĐÃ CẬP NHẬT LOGIC LẤY NVL THỰC TẾ)
     def get_order_print_data(self, order_id: int):
-        # A. Header (Thêm shipping_fee, other_fee)
+        # A. Header (Giữ nguyên)
         query_header = text("""
             SELECT po.code, w.name as warehouse_name, w.address as warehouse_address,
                    pv.variant_name as product_name, pv.sku as product_sku,
                    po.quantity_planned, po.start_date, po.due_date,
                    po.product_variant_id,
                    po.shipping_fee, po.other_fee,
-                   po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee
+                   po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee,
+                   po.status
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id
@@ -445,52 +447,72 @@ class ProductionService:
         """)
         header = self.db.execute(query_header, {"oid": order_id}).fetchone()
         if not header: raise Exception("Không tìm thấy lệnh")
+        
+        status = header[15]
+        total_qty = header[5]
 
-        # B. Size & Note (GIỮ NGUYÊN)
-        query_sizes = text("""
-            SELECT size_label, quantity_planned, note 
-            FROM production_order_items 
-            WHERE production_order_id = :oid
-            ORDER BY id ASC
-        """)
+        # B. Size (Giữ nguyên)
+        query_sizes = text("SELECT size_label, quantity_planned, note FROM production_order_items WHERE production_order_id = :oid ORDER BY id ASC")
         sizes = self.db.execute(query_sizes, {"oid": order_id}).fetchall()
         list_sizes = [{"size": s[0], "qty": s[1], "note": s[2]} for s in sizes]
 
-        # C. Materials (Cần lấy thêm giá cost_price để tính tổng tiền trên phiếu in)
-        query_materials = text("""
-            SELECT m.sku, m.variant_name, bm.quantity_needed, m.cost_price, bm.note
-            FROM bom b
-            JOIN bom_materials bm ON b.id = bm.bom_id
-            JOIN product_variants m ON bm.material_variant_id = m.id
-            WHERE b.product_variant_id = :pid
-        """)
-        materials = self.db.execute(query_materials, {"pid": header[8]}).fetchall()
-        
+        # C. Materials (LOGIC MỚI: Ưu tiên lấy từ Reservation nếu có)
         list_materials = []
-        total_material_cost = 0 # Tổng tiền nguyên liệu
+        total_material_cost = 0
 
-        for m in materials:
-            usage = m[2]
-            total_needed = usage * header[5]
-            unit_cost = m[3] if m[3] else 0
-            total_cost_mat = total_needed * unit_cost
+        # Nếu đơn đã Start hoặc có Reservation -> Lấy từ bảng Reservation (Chính xác nhất sau khi sửa)
+        if status in ['in_progress', 'completed']:
+            query_res = text("""
+                SELECT m.sku, m.variant_name, pmr.quantity_reserved, m.cost_price, pmr.note
+                FROM production_material_reservations pmr
+                JOIN product_variants m ON pmr.material_variant_id = m.id
+                WHERE pmr.production_order_id = :oid
+            """)
+            materials = self.db.execute(query_res, {"oid": order_id}).fetchall()
             
-            total_material_cost += total_cost_mat
+            for m in materials:
+                total_needed = float(m[2])
+                unit_cost = float(m[3] or 0)
+                total_cost_mat = total_needed * unit_cost
+                total_material_cost += total_cost_mat
 
-            list_materials.append({
-                "sku": m[0], "name": m[1], 
-                "usage_per_unit": usage, 
-                "total_needed": total_needed,
-                "unit_cost": unit_cost,
-                "total_cost": total_cost_mat,
-                "note": m[4]
-            })
+                list_materials.append({
+                    "sku": m[0], "name": m[1], 
+                    "total_needed": total_needed,
+                    "unit_cost": unit_cost,
+                    "total_cost": total_cost_mat,
+                    "note": m[4]
+                })
+        
+        # Nếu chưa Start -> Lấy từ BOM (Dự kiến)
+        else:
+            query_bom = text("""
+                SELECT m.sku, m.variant_name, bm.quantity_needed, m.cost_price, bm.note
+                FROM bom b
+                JOIN bom_materials bm ON b.id = bm.bom_id
+                JOIN product_variants m ON bm.material_variant_id = m.id
+                WHERE b.product_variant_id = :pid
+            """)
+            materials = self.db.execute(query_bom, {"pid": header[8]}).fetchall()
+            
+            for m in materials:
+                usage = float(m[2])
+                total_needed = usage * total_qty # Nhân định mức với số lượng
+                unit_cost = float(m[3] or 0)
+                total_cost_mat = total_needed * unit_cost
+                total_material_cost += total_cost_mat
 
-        # D. Ảnh (GIỮ NGUYÊN)
+                list_materials.append({
+                    "sku": m[0], "name": m[1], 
+                    "total_needed": total_needed,
+                    "unit_cost": unit_cost,
+                    "total_cost": total_cost_mat,
+                    "note": m[4]
+                })
+
+        # D. Ảnh (Giữ nguyên)
         query_imgs = text("SELECT image_url FROM production_order_images WHERE production_order_id = :oid")
-        imgs = self.db.execute(query_imgs, {"oid": order_id}).fetchall()
-        list_imgs = [r[0] for r in imgs]
-
+        list_imgs = [r[0] for r in self.db.execute(query_imgs, {"oid": order_id}).fetchall()]
 
         return {
             "code": header[0],
@@ -498,83 +520,120 @@ class ProductionService:
             "address": header[2],
             "product": header[3],
             "sku": header[4],
-            "total_qty": header[5],
+            "total_qty": total_qty,
             "start_date": header[6],
             "due_date": header[7],
             
-            # Thông tin tài chính
             "shipping_fee": header[9],
             "other_fee": header[10],
-            "total_material_cost": total_material_cost,
+            "total_material_cost": total_material_cost, # Tổng tiền mới
             "labor_fee": header[11],
             "marketing_fee": header[12],
             "packaging_fee": header[13],
             "print_fee": header[14],
             
             "sizes": list_sizes,
-            "materials": list_materials,
+            "materials": list_materials, # Danh sách mới
             "images": list_imgs
         }
     
-    # 9. CẬP NHẬT ĐƠN HÀNG (UPDATE) - YÊU CẦU MỚI
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
         try:
-            # 1. Lấy dữ liệu cũ để so sánh ngày
-            old_order = self.db.execute(
-                text("SELECT start_date, due_date, progress_data FROM production_orders WHERE id = :id"), 
-                {"id": order_id}
-            ).fetchone()
+            # 1. Lấy thông tin cơ bản
+            order = self.db.execute(text("SELECT warehouse_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+            if not order: raise Exception("Không tìm thấy đơn hàng")
             
-            if not old_order:
-                raise Exception("Không tìm thấy đơn hàng")
+            wid = order[0]
+            status = order[1]
+            pid = order[2]
+            qty_planned = order[3]
 
-            old_start, old_due, progress_json = old_order
-            # 1. Cập nhật thông tin trong bảng Orders
-            query = text("""
+            # 2. Cập nhật thông tin tài chính & ngày tháng (Header)
+            query_header = text("""
                 UPDATE production_orders
                 SET shipping_fee = :ship, other_fee = :other, labor_fee = :labor, print_fee = :print,
                     marketing_fee = :mkt, packaging_fee = :pack,
                     start_date = :start, due_date = :due
                 WHERE id = :id
             """)
-            self.db.execute(query, {
+            self.db.execute(query_header, {
                 "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee, "print": data.print_fee,
                 "mkt": data.marketing_fee, "pack": data.packaging_fee,
                 "start": data.start_date, "due": data.due_date, "id": order_id
             })
-            if progress_json and (data.start_date or data.due_date):
-                steps = json.loads(progress_json)
-                new_start = str(data.start_date) if data.start_date else str(old_start)
-                new_due = str(data.due_date) if data.due_date else str(old_due)
 
-                updated = False
-                for step in steps:
-                    # Logic tự động gán ngày (Tùy chỉnh theo quy trình của bạn)
-                    if "Chuẩn bị" in step['name'] or "Cắt" in step['name']:
-                        if step['deadline'] != new_start:
-                            step['deadline'] = new_start
-                            updated = True
-                    elif "May" in step['name'] or "KCS" in step['name']:
-                        if step['deadline'] != new_due:
-                            step['deadline'] = new_due
-                            updated = True
-                
-                if updated:
-                    self.db.execute(
-                        text("UPDATE production_orders SET progress_data = :p WHERE id = :id"),
-                        {"p": json.dumps(steps), "id": order_id}
-                    )
-            if order and hasattr(data, 'new_sku') and data.new_sku:
-                # Update SKU trong bảng product_variants
-                self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {
-                    "sku": data.new_sku, "pid": order[0]
-                })
+            # 3. XỬ LÝ NGUYÊN VẬT LIỆU
+            if data.materials:
+                # --- CASE A: ĐÃ START (Xử lý kho thật) ---
+                if status == 'in_progress':  # <--- ĐÃ SỬA: Thêm dấu :
+                    for item in data.materials:
+                        
+                        # SỬA DÒNG ĐÃ CÓ (Có ID reservation)
+                        if item.id:
+                            old_res = self.db.execute(text("SELECT quantity_reserved, material_variant_id FROM production_material_reservations WHERE id=:id"), {"id": item.id}).fetchone()
+                            if old_res:
+                                old_qty = float(old_res[0])
+                                mat_id = old_res[1]
+                                new_qty = item.quantity
+                                diff = new_qty - old_qty
+
+                                if diff != 0:
+                                    if diff > 0: # Cần thêm -> Trừ kho
+                                        stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
+                                        if stock < diff: raise Exception(f"Kho thiếu hàng! Cần thêm {diff}, còn {stock}")
+                                        
+                                        self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": diff, "w": wid, "m": mat_id})
+                                        self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Cấp thêm do sửa lệnh')"), {"w": wid, "m": mat_id, "q": -diff, "ref": order_id})
+                                    else: # Giảm -> Trả kho
+                                        return_qty = abs(diff)
+                                        self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": return_qty, "w": wid, "m": mat_id})
+                                        self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Hoàn trả do giảm định mức')"), {"w": wid, "m": mat_id, "q": return_qty, "ref": order_id})
+
+                                    self.db.execute(text("UPDATE production_material_reservations SET quantity_reserved = :q, note = :n WHERE id = :id"), {"q": new_qty, "n": item.note, "id": item.id})
+                                else:
+                                    self.db.execute(text("UPDATE production_material_reservations SET note = :n WHERE id = :id"), {"n": item.note, "id": item.id})
+
+                        # THÊM NVL MỚI (Chưa có ID)
+                        else:
+                            if not item.material_variant_id: continue
+                            mat_id = item.material_variant_id
+                            req_qty = item.quantity
+
+                            stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
+                            if stock < req_qty: raise Exception(f"Kho không đủ hàng mới! Cần {req_qty}, còn {stock}")
+
+                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": wid, "m": mat_id})
+                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới vào lệnh')"), {"w": wid, "m": mat_id, "q": -req_qty, "ref": order_id})
+
+                            self.db.execute(text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"), 
+                                            {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note})
+
+                # --- CASE B: CHƯA START (Chỉ sửa BOM - KHÔNG trừ kho) ---
+                else:
+                    # Lấy BOM ID
+                    bom_id = self.db.execute(text("SELECT id FROM bom WHERE product_variant_id=:pid"), {"pid": pid}).scalar()
+                    
+                    if bom_id:
+                        for item in data.materials:
+                            # Tính lại định mức (Tổng cần / Số lượng SP)
+                            per_unit_qty = item.quantity / qty_planned if qty_planned > 0 else 0
+
+                            if item.id:
+                                # Update dòng BOM cũ
+                                self.db.execute(text("UPDATE bom_materials SET quantity_needed = :q, note = :n WHERE id = :id"), 
+                                                {"q": per_unit_qty, "n": item.note, "id": item.id})
+                            else:
+                                # Thêm dòng BOM mới
+                                if item.material_variant_id:
+                                    self.db.execute(text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
+                                                    {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note})
+
+            # 4. Cập nhật SKU (Giữ nguyên)
+            if hasattr(data, 'new_sku') and data.new_sku:
+                self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {"sku": data.new_sku, "pid": pid})
 
             self.db.commit()
-            return {"status": "success", "message": "Cập nhật đơn hàng thành công!"}
-        except IntegrityError as e:
-            self.db.rollback()
-            raise Exception("Mã SKU mới bị trùng!")
+            return {"status": "success", "message": "Cập nhật thành công!"}
         except Exception as e:
             self.db.rollback()
             raise e
@@ -736,3 +795,59 @@ class ProductionService:
                 "remaining": r[5] - r[6]
             } for r in results
         ]
+
+    def get_order_reservations(self, order_id: int):
+        # 1. Lấy trạng thái đơn hàng
+        order = self.db.execute(text("SELECT status, product_variant_id, quantity_planned FROM production_orders WHERE id=:id"), {"id": order_id}).fetchone()
+        if not order: return []
+        
+        status = order[0]
+        pid = order[1]
+        qty_planned = order[2]
+
+        # TRƯỜNG HỢP 1: ĐÃ START (Lấy từ bảng Reservation - Dữ liệu thực tế đã trừ kho)
+        if status in ['in_progress', 'completed']:
+            query = text("""
+                SELECT pmr.id, pmr.material_variant_id, pv.sku, pv.variant_name, pmr.quantity_reserved, pmr.note, pv.cost_price
+                FROM production_material_reservations pmr
+                JOIN product_variants pv ON pmr.material_variant_id = pv.id
+                WHERE pmr.production_order_id = :oid
+            """)
+            results = self.db.execute(query, {"oid": order_id}).fetchall()
+            return [
+                {
+                    "id": r[0], 
+                    "material_variant_id": r[1], 
+                    "sku": r[2], 
+                    "name": r[3], 
+                    "quantity": r[4], 
+                    "note": r[5], 
+                    "unit_price": r[6] or 0
+                } for r in results
+            ]
+
+        # TRƯỜNG HỢP 2: CHƯA START (Lấy từ BOM - Dữ liệu lý thuyết)
+        else:
+            query = text("""
+                SELECT bm.id, bm.material_variant_id, pv.sku, pv.variant_name, bm.quantity_needed, bm.note, pv.cost_price
+                FROM bom_materials bm
+                JOIN bom b ON bm.bom_id = b.id
+                JOIN product_variants pv ON bm.material_variant_id = pv.id
+                WHERE b.product_variant_id = :pid
+            """)
+            results = self.db.execute(query, {"pid": pid}).fetchall()
+            
+            return [
+                {
+                    "id": r[0], # Đây là ID của dòng BOM (để biết đường update lại BOM)
+                    "material_variant_id": r[1],
+                    "sku": r[2], 
+                    "name": r[3],
+                    # Tính tổng lượng cần = Định mức * Số lượng đơn hàng
+                    "quantity": float(r[4]) * qty_planned, 
+                    "note": r[5], 
+                    "unit_price": r[6] or 0
+                } for r in results
+            ]
+
+          

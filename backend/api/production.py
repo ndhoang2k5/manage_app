@@ -156,3 +156,9 @@ def revert_receive(log_id: int, db: Session = Depends(get_db), user: dict = Depe
         return service.revert_receive_log(log_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+        
+# 7. API Lấy danh sách đặt trước cho lệnh sản xuất
+@router.get("/production/orders/{order_id}/reservations")
+def get_order_reservations(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = ProductionService(db)
+    return service.get_order_reservations(order_id)

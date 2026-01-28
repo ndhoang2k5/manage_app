@@ -207,8 +207,107 @@ const ProductionPage = () => {
         setLoading(false);
     };
 
-    const openEditModal = (record) => { setCurrentOrder(record); productionApi.getPrintData(record.id).then(res => { const data = res.data; editForm.setFieldsValue({ code: data.code, new_sku: data.sku, start_date: dayjs(data.start_date), due_date: dayjs(data.due_date), shipping_fee: data.shipping_fee, other_fee: data.other_fee, labor_fee: data.labor_fee || 0, marketing_fee: data.marketing_fee || 0, packaging_fee: data.packaging_fee || 0, print_fee: data.print_fee || 0 }); setIsEditModalOpen(true); }).catch(err => message.error("Lỗi tải thông tin")); };
-    const handleUpdateOrder = async (values) => { try { const payload = { start_date: values.start_date.format('YYYY-MM-DD'), due_date: values.due_date.format('YYYY-MM-DD'), shipping_fee: Number(values.shipping_fee || 0), other_fee: Number(values.other_fee || 0), labor_fee: Number(values.labor_fee || 0), marketing_fee: Number(values.marketing_fee || 0), packaging_fee: Number(values.packaging_fee || 0), print_fee: Number(values.print_fee || 0), new_sku: values.new_sku }; await productionApi.updateOrder(currentOrder.id, payload); message.success("Cập nhật thành công!"); setIsEditModalOpen(false); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi cập nhật"); } };
+    const openEditModal = async (record) => {
+        setCurrentOrder(record);
+
+        console.log("DEBUG: Đang mở Modal cho kho ID:", record.warehouse_id); // <--- LOG 1
+
+        if (record.warehouse_id) {
+            try {
+                const res = await productApi.getByWarehouse(record.warehouse_id);
+                console.log("DEBUG: Kết quả API NVL:", res.data); // <--- LOG 2
+                
+                // Set dữ liệu (Dùng fallback mảng rỗng nếu null)
+                const materials = Array.isArray(res.data) ? res.data : [];
+                setWarehouseMaterials(materials);
+                
+                if (materials.length === 0) {
+                    console.warn("CẢNH BÁO: API trả về rỗng -> Kho này không có NVL nào?");
+                }
+            } catch (error) {
+                console.error("Lỗi tải NVL tại kho:", error);
+                setWarehouseMaterials([]);
+            }
+        } else {
+            console.error("LỖI: Không tìm thấy warehouse_id trong record đơn hàng");
+        }
+        
+        try {
+            // Lấy thông tin in ấn (để lấy chi phí cũ)
+            const printRes = await productionApi.getPrintData(record.id);
+            const data = printRes.data;
+            
+            // Lấy danh sách NVL đang giữ chỗ (API mới)
+            // Cần thêm hàm getReservations vào productionApi.js trước nhé!
+            let materials = [];
+            if (productionApi.getReservations) {
+                try {
+                    const matRes = await productionApi.getReservations(record.id);
+                    materials = matRes.data;
+                } catch (e) {
+                    console.error("Lỗi lấy NVL cũ:", e);
+                }
+            }
+
+            editForm.setFieldsValue({
+                code: data.code,
+                new_sku: data.sku,
+                start_date: dayjs(data.start_date),
+                due_date: dayjs(data.due_date),
+                shipping_fee: data.shipping_fee,
+                other_fee: data.other_fee,
+                labor_fee: data.labor_fee || 0,
+                marketing_fee: data.marketing_fee || 0,
+                packaging_fee: data.packaging_fee || 0,
+                print_fee: data.print_fee || 0,
+                
+                // Set danh sách NVL vào Form
+                materials: materials.map(m => ({
+                    id: m.id,
+                    material_variant_id: m.material_variant_id,
+                    sku: m.sku, // Để hiển thị
+                    name: m.name, // Để hiển thị
+                    quantity: m.quantity,
+                    note: m.note
+                }))
+            });
+            setIsEditModalOpen(true);
+        } catch (err) {
+            message.error("Lỗi tải thông tin chi tiết: " + err.message);
+        }
+    };
+
+    // Cập nhật đơn
+    const handleUpdateOrder = async (values) => {
+        try {
+            const payload = {
+                start_date: values.start_date.format('YYYY-MM-DD'),
+                due_date: values.due_date.format('YYYY-MM-DD'),
+                shipping_fee: Number(values.shipping_fee || 0),
+                other_fee: Number(values.other_fee || 0),
+                labor_fee: Number(values.labor_fee || 0),
+                marketing_fee: Number(values.marketing_fee || 0),
+                packaging_fee: Number(values.packaging_fee || 0),
+                print_fee: Number(values.print_fee || 0),
+                new_sku: values.new_sku,
+                
+                // Gửi kèm danh sách NVL
+                materials: values.materials.map(m => ({
+                    id: m.id, // Nếu có ID là sửa, ko có là thêm
+                    material_variant_id: m.material_variant_id,
+                    quantity: Number(m.quantity),
+                    note: m.note
+                }))
+            };
+            
+            await productionApi.updateOrder(currentOrder.id, payload);
+            message.success("Cập nhật thành công!");
+            setIsEditModalOpen(false);
+            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse);
+        } catch (error) {
+            message.error("Lỗi: " + error.response?.data?.detail);
+        }
+    };
     const handleDeleteOrder = async (id) => { if(window.confirm("CẢNH BÁO: Xóa đơn hàng sẽ HOÀN TRẢ nguyên liệu!")) { try { if (productionApi.deleteOrder) { await productionApi.deleteOrder(id); message.success("Đã xóa!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } else { message.error("Chưa cấu hình API xóa!"); } } catch (error) { message.error("Lỗi xóa: " + error.response?.data?.detail); } } }
     const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Bắt đầu SX!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
     const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
@@ -633,7 +732,87 @@ const ProductionPage = () => {
             </Modal>
 
             {/* Các Modal khác giữ nguyên */}
-            <Modal title="Cập nhật Thông tin & Chi phí" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} footer={null}><Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item><Form.Item label="Mã SKU Sản phẩm (Cập nhật)" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item><Row gutter={16}><Col span={12}><Form.Item label="Ngày bắt đầu" name="start_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item label="Hạn xong" name="due_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col></Row><Divider>Chi phí</Divider><Row gutter={16}><Col span={12}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={12}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row><Button type="primary" htmlType="submit" block>Lưu Thay Đổi</Button></Form></Modal>
+            <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={1000} footer={null} style={{top: 20}}>
+                <Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}>
+                    <Row gutter={16}>
+                        <Col span={8}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item></Col>
+                        <Col span={8}><Form.Item label="Mã SKU Sản phẩm" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item></Col>
+                        <Col span={8}>
+                             <Row gutter={8}>
+                                <Col span={12}><Form.Item label="Bắt đầu" name="start_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col>
+                                <Col span={12}><Form.Item label="Hạn xong" name="due_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col>
+                             </Row>
+                        </Col>
+                    </Row>
+
+                    <Divider orientation="left">Điều chỉnh Nguyên Phụ Liệu (Tự động trừ/cộng kho)</Divider>
+                    
+                    <Form.List name="materials">
+                        {(fields, { add, remove }) => (
+                            <div style={{background: '#fafafa', padding: 10, borderRadius: 8, marginBottom: 20, border: '1px solid #f0f0f0', maxHeight: 300, overflowY: 'auto'}}>
+                                <table style={{width: '100%'}}>
+                                    <thead>
+                                        <tr>
+                                            <th>Tên Vật Tư</th>
+                                            <th width="100">Số lượng</th>
+                                            <th>Ghi chú</th>
+                                            <th width="30"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {fields.map(({ key, name, ...restField }) => {
+                                            const itemData = editForm.getFieldValue(['materials', name]);
+                                            const isExisting = !!itemData?.id;
+
+                                            return (
+                                                <tr key={key}>
+                                                    <td style={{padding: 5}}>
+                                                        <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
+                                                        {isExisting ? (
+                                                            <span><Tag>{itemData.sku}</Tag> <b>{itemData.name}</b></span>
+                                                        ) : (
+                                                            <Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true }]} style={{marginBottom: 0}}>
+                                                                <Select placeholder="Chọn thêm NVL..." showSearch optionFilterProp="children" style={{width: '100%'}}>
+                                                                    {warehouseMaterials.map(m => (
+                                                                        <Select.Option key={m.id} value={m.id}>{m.sku} - {m.variant_name} (Tồn: {m.quantity_on_hand})</Select.Option>
+                                                                    ))}
+                                                                </Select>
+                                                            </Form.Item>
+                                                        )}
+                                                    </td>
+                                                    <td style={{padding: 5}}>
+                                                        <Form.Item {...restField} name={[name, 'quantity']} style={{marginBottom: 0}} rules={[{ required: true }]}>
+                                                            <InputNumber min={0} style={{width: '100%'}} />
+                                                        </Form.Item>
+                                                    </td>
+                                                    <td style={{padding: 5}}>
+                                                        <Form.Item {...restField} name={[name, 'note']} style={{marginBottom: 0}}>
+                                                            <Input placeholder="Note" />
+                                                        </Form.Item>
+                                                    </td>
+                                                    <td style={{textAlign: 'center'}}>
+                                                        {!isExisting && <DeleteOutlined onClick={() => remove(name)} style={{color: 'red', cursor: 'pointer'}} />}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                        <tr>
+                                            <td colSpan={4} style={{textAlign: 'center', paddingTop: 10}}>
+                                                <Button type="dashed" onClick={() => add()} icon={<PlusOutlined />}>Thêm NVL bổ sung</Button>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </Form.List>
+
+                    <Divider orientation="left">Cập nhật Chi phí</Divider>
+                    <Row gutter={16}><Col span={8}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row>
+                    
+                    <Button type="primary" htmlType="submit" block size="large">Lưu Thay Đổi</Button>
+                </Form>
+            </Modal>
             <Modal title={`📦 Nhập Kho Thành Phẩm (Trả hàng) - ${currentOrder?.code}`} open={isReceiveModalOpen} onCancel={() => setIsReceiveModalOpen(false)} onOk={handleReceiveGoods}><Table dataSource={orderSizes} pagination={false} rowKey="id" size="small" bordered columns={[{ title: 'Size', dataIndex: 'size', align: 'center', width: 80 }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{color:'#888', fontSize: 12}}>{t}</span> }, { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 }, { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> }, { title: 'Nhập Đợt Này', render: (_, r, idx) => <Input type="number" min={0} value={r.receiving} onChange={(val) => { const n = [...orderSizes]; n[idx].receiving = Number(val.target.value); setOrderSizes(n); }} /> }]} /></Modal>
             <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} /></Modal>
 {/* --- MODAL IN ẤN (ĐÃ SỬA: XÓA NOTE Ở PHẦN 1, THÊM DÒNG PHÍ MARKETING/ĐÓNG GÓI) --- */}

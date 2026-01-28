@@ -71,6 +71,22 @@ class QuickProductionRequest(BaseModel):
 class ReceiveGoodsRequest(BaseModel):
     items: List[SizeQuantityRequest]
 
+class ProgressItem(BaseModel):
+    name: str
+    done: bool
+    deadline: Optional[str] = None
+
+class UpdateProgressRequest(BaseModel):
+    steps: List[ProgressItem]
+
+
+class ProductionMaterialUpdateItem(BaseModel):
+    id: Optional[int] = None       # ID dòng reservation (nếu sửa)
+    material_variant_id: Optional[int] = None # ID NVL (nếu thêm mới)
+    quantity: float                # Số lượng thực tế cần dùng
+    note: Optional[str] = ""
+
+# Cập nhật class ProductionUpdateRequest
 class ProductionUpdateRequest(BaseModel):
     shipping_fee: float = 0
     other_fee: float = 0
@@ -81,11 +97,4 @@ class ProductionUpdateRequest(BaseModel):
     start_date: Optional[date] = None
     due_date: Optional[date] = None
     new_sku: Optional[str] = None
-
-class ProgressItem(BaseModel):
-    name: str
-    done: bool
-    deadline: Optional[str] = None
-
-class UpdateProgressRequest(BaseModel):
-    steps: List[ProgressItem]
+    materials: List[ProductionMaterialUpdateItem] = []

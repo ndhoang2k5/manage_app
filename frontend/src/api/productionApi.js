@@ -11,6 +11,9 @@ const productionApi = {
     getOrderDetails: (id) => axiosClient.get(`/production/orders/${id}/details`),
     getReceiveHistory: (id) => axiosClient.get(`/production/orders/${id}/history`),
     getPrintData: (id) => axiosClient.get(`/production/orders/${id}/print`),
+     
+    // Lấy danh sách đặt trước
+    getReservations: (id) => axiosClient.get(`/production/orders/${id}/reservations`),
     
     // Hành động
     receiveGoods: (id, data) => axiosClient.post(`/production/orders/${id}/receive`, data),
