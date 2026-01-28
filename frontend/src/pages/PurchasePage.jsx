@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio, Tag } from 'antd';
-import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
@@ -76,7 +76,7 @@ const PurchasePage = () => {
         setLoading(false);
     };
 
-    // --- 3. XỬ LÝ SỬA (QUAN TRỌNG) ---
+    // 3. Mở Modal Sửa
     const handleOpenEdit = async (id) => {
         try {
             const res = await purchaseApi.getDetail(id);
@@ -87,7 +87,15 @@ const PurchasePage = () => {
                 po_code: data.po_code,
                 supplier_id: data.supplier_id,
                 order_date: dayjs(data.order_date),
-                items: data.items // Antd tự map mảng này vào Form.List
+                items: data.items.map(item => ({
+                    id: item.id, // Quan trọng: ID dòng cũ
+                    product_variant_id: item.product_variant_id,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    // Các trường hiển thị thêm (UI)
+                    sku: item.sku,
+                    name: item.name
+                }))
             });
             
             setIsEditModalOpen(true);
@@ -96,6 +104,7 @@ const PurchasePage = () => {
         }
     };
 
+    // 4. Cập Nhật (Sửa + Thêm mới)
     const handleUpdatePO = async (values) => {
         setLoading(true);
         try {
@@ -103,10 +112,12 @@ const PurchasePage = () => {
                 po_code: values.po_code,
                 supplier_id: values.supplier_id,
                 order_date: values.order_date.format('YYYY-MM-DD'),
-                // Map đúng cấu trúc Backend yêu cầu (PurchaseUpdateRequest)
+                
+                // Map items: Có ID -> Sửa, Không ID -> Thêm mới
                 items: values.items.map(item => ({
-                    id: item.id,            // ID dòng chi tiết (để backend biết dòng nào)
-                    quantity: item.quantity, // Số lượng mới (để tính chênh lệch)
+                    id: item.id, // Gửi ID đi (nếu có)
+                    product_variant_id: item.product_variant_id,
+                    quantity: item.quantity,
                     unit_price: item.unit_price
                 }))
             };
@@ -116,9 +127,48 @@ const PurchasePage = () => {
             setIsEditModalOpen(false);
             fetchInitialData();
         } catch (error) {
-            message.error("Lỗi cập nhật: " + error.response?.data?.detail);
+            // Xử lý lỗi hiển thị [object Object]
+            console.error("Lỗi chi tiết:", error.response?.data);
+            let errorMsg = "Lỗi cập nhật";
+            
+            if (error.response?.data?.detail) {
+                if (typeof error.response.data.detail === 'string') {
+                    errorMsg = error.response.data.detail;
+                } else if (Array.isArray(error.response.data.detail)) {
+                    // Lỗi Validation (422)
+                    errorMsg = "Dữ liệu không hợp lệ: " + error.response.data.detail[0].msg;
+                }
+            }
+            message.error(errorMsg);
         }
         setLoading(false);
+    };
+
+    // 5. Xóa Phiếu Nhập
+    const handleDeletePO = (id) => {
+        Modal.confirm({
+            title: 'Xóa phiếu nhập hàng?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'CẢNH BÁO: Hành động này sẽ trừ lại số lượng tồn kho tương ứng. Bạn có chắc chắn muốn xóa?',
+            okText: 'Xóa ngay',
+            okType: 'danger',
+            cancelText: 'Hủy',
+            onOk: async () => {
+                setLoading(true);
+                try {
+                    if (purchaseApi.delete) {
+                        await purchaseApi.delete(id);
+                        message.success("Đã xóa phiếu nhập!");
+                        fetchInitialData();
+                    } else {
+                        message.error("Thiếu hàm API xóa!");
+                    }
+                } catch (error) {
+                    message.error("Lỗi xóa: " + (error.response?.data?.detail || error.message));
+                }
+                setLoading(false);
+            },
+        });
     };
 
     // --- CỘT BẢNG ---
@@ -133,7 +183,10 @@ const PurchasePage = () => {
             title: 'Hành động',
             key: 'action',
             render: (_, record) => (
-                <Button icon={<EditOutlined />} onClick={() => handleOpenEdit(record.id)} type="text" style={{color: '#1677ff'}}>Chi tiết/Sửa</Button>
+                <Space>
+                    <Button icon={<EditOutlined />} onClick={() => handleOpenEdit(record.id)} size="small">Chi tiết/Sửa</Button>
+                    <Button icon={<DeleteOutlined />} onClick={() => handleDeletePO(record.id)} size="small" danger type="primary" ghost />
+                </Space>
             )
         }
     ];
@@ -186,7 +239,7 @@ const PurchasePage = () => {
                 </Form>
             </Modal>
 
-            {/* --- MODAL SỬA (CHO PHÉP SỬA SỐ LƯỢNG & GIÁ) --- */}
+            {/* --- MODAL SỬA (CHO PHÉP SỬA & THÊM HÀNG MỚI) --- */}
             <Modal 
                 title="Chi Tiết / Chỉnh Sửa Phiếu Nhập" 
                 open={isEditModalOpen} 
@@ -209,56 +262,93 @@ const PurchasePage = () => {
                     </div>
 
                     <Form.List name="items">
-                        {(fields) => (
+                        {(fields, { add, remove }) => (
                             <div style={{ maxHeight: 400, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                                 <table style={{width: '100%', borderCollapse: 'collapse'}}>
                                     <thead style={{background: '#fafafa', position: 'sticky', top: 0, zIndex: 1}}>
                                         <tr>
-                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0'}}>Mã SKU</th>
                                             <th style={{padding: 8, borderBottom: '1px solid #f0f0f0'}}>Tên Hàng</th>
-                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 120}}>Số lượng (Sửa)</th>
-                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 150}}>Đơn giá (Sửa)</th>
+                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 100}}>Số lượng (Sửa)</th>
+                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 140}}>Đơn giá (Sửa)</th>
                                             <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', textAlign: 'right'}}>Thành tiền</th>
+                                            <th style={{width: 40}}></th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {fields.map(({ key, name, ...restField }) => {
-                                            // Lấy dữ liệu item từ form data để hiển thị text tĩnh (SKU, Name)
-                                            // Dữ liệu này được set từ handleOpenEdit
                                             const itemData = editForm.getFieldValue(['items', name]);
-                                            
+                                            const isExisting = !!itemData?.id; // Check xem là dòng cũ hay mới
+
                                             return (
-                                                <tr key={key} style={{borderBottom: '1px solid #f0f0f0'}}>
-                                                    {/* Hidden ID để gửi về Backend */}
+                                                <tr key={key} style={{borderBottom: '1px solid #f0f0f0', background: isExisting ? '#fff' : '#f6ffed'}}>
+                                                    {/* Hidden ID */}
                                                     <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
                                                     
-                                                    <td style={{padding: 8}}><Tag>{itemData?.sku}</Tag></td>
-                                                    <td style={{padding: 8}}><b>{itemData?.name}</b></td>
-                                                    
-                                                    {/* Ô NHẬP SỐ LƯỢNG */}
                                                     <td style={{padding: 8}}>
-                                                        <Form.Item {...restField} name={[name, 'quantity']} style={{marginBottom: 0}}>
+                                                        {isExisting ? (
+                                                            // Dòng cũ: Chỉ hiện text
+                                                            <div>
+                                                                <Tag>{itemData?.sku}</Tag> <b>{itemData?.name}</b>
+                                                                {/* Hidden field product_variant_id để gửi kèm nếu cần */}
+                                                                <Form.Item name={[name, 'product_variant_id']} hidden><Input /></Form.Item>
+                                                            </div>
+                                                        ) : (
+                                                            // Dòng mới: Hiện Select
+                                                            <Form.Item 
+                                                                {...restField} 
+                                                                name={[name, 'product_variant_id']} 
+                                                                rules={[{ required: true, message: 'Chọn hàng' }]} 
+                                                                style={{marginBottom: 0}}
+                                                            >
+                                                                <Select 
+                                                                    placeholder="Chọn nguyên liệu thêm..." 
+                                                                    showSearch 
+                                                                    optionFilterProp="children"
+                                                                    style={{width: '100%'}}
+                                                                >
+                                                                    {products.map(p => (
+                                                                        <Select.Option key={p.id} value={p.id}>
+                                                                            {p.sku} - {p.variant_name}
+                                                                        </Select.Option>
+                                                                    ))}
+                                                                </Select>
+                                                            </Form.Item>
+                                                        )}
+                                                    </td>
+                                                    
+                                                    <td style={{padding: 8}}>
+                                                        <Form.Item {...restField} name={[name, 'quantity']} style={{marginBottom: 0}} rules={[{ required: true }]}>
                                                             <InputNumber min={0} style={{width: '100%'}} />
                                                         </Form.Item>
                                                     </td>
 
-                                                    {/* Ô NHẬP GIÁ */}
                                                     <td style={{padding: 8}}>
-                                                        <Form.Item {...restField} name={[name, 'unit_price']} style={{marginBottom: 0}}>
-                                                            <InputNumber 
-                                                                min={0} 
-                                                                style={{width: '100%'}}
+                                                        <Form.Item {...restField} name={[name, 'unit_price']} style={{marginBottom: 0}} rules={[{ required: true }]}>
+                                                            <InputNumber min={0} style={{width: '100%'}} 
+                                                                formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                                                                parser={value => value.replace(/\$\s?|(,*)/g, '')}
                                                             />
                                                         </Form.Item>
                                                     </td>
                                                     <td style={{padding: 8, textAlign: 'right', color: '#888'}}>
-                                                        {/* Tính tạm thành tiền để hiển thị (chỉ là UI) */}
-                                                        {/* Lưu ý: Giá trị này không tự nhảy real-time nếu không dùng Form.useWatch, nhưng để đơn giản ta hiển thị giá trị lúc load */}
-                                                        {new Intl.NumberFormat('vi-VN').format((itemData?.quantity || 0) * (itemData?.unit_price || 0))}
+                                                        {new Intl.NumberFormat('vi-VN').format((editForm.getFieldValue(['items', name, 'quantity']) || 0) * (editForm.getFieldValue(['items', name, 'unit_price']) || 0))}
+                                                    </td>
+                                                    <td style={{padding: 8, textAlign: 'center'}}>
+                                                        {!isExisting && (
+                                                            <DeleteOutlined onClick={() => remove(name)} style={{color: 'red', cursor: 'pointer'}} />
+                                                        )}
                                                     </td>
                                                 </tr>
                                             );
                                         })}
+                                        {/* Nút thêm dòng */}
+                                        <tr>
+                                            <td colSpan={5} style={{padding: 10, textAlign: 'center'}}>
+                                                <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                                                    Thêm nguyên liệu vào phiếu này
+                                                </Button>
+                                            </td>
+                                        </tr>
                                     </tbody>
                                 </table>
                             </div>

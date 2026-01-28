@@ -50,9 +50,18 @@ def get_po_detail(po_id: int, db: Session = Depends(get_db), user: dict = Depend
 
 # 4. Cập nhật phiếu (PUT)
 @router.put("/purchases/{po_id}")
-def update_purchase_order(po_id: int, request: PurchaseUpdateRequest, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+def update_purchase_order(po_id: int, request: PurchaseUpdateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = PurchaseService(db)
     try:
         return service.update_po(po_id, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# 5. Xóa Phiếu Nhập (Và hoàn tác kho)
+@router.delete("/purchases/{po_id}")
+def delete_purchase_order(po_id: int, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+    service = PurchaseService(db)
+    try:
+        return service.delete_purchase_order(po_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

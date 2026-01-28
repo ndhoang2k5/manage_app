@@ -53,7 +53,7 @@ const ProductionPage = () => {
     const [orderForm] = Form.useForm();
     const [editForm] = Form.useForm();
 
-    const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y"];
+    const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
 
     // --- HÀM LOAD DỮ LIỆU ---
     const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null) => {

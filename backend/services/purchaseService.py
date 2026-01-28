@@ -161,163 +161,129 @@ class PurchaseService:
             ]
         }
 
-    # 5. Cập nhật PO
-    # 5. Cập nhật Phiếu Nhập (Sửa Giá, Sửa Số Lượng & TÍNH LẠI GIÁ VỐN)
+    # 5. Cập nhật PO (Phiên bản: TÍNH LẠI GIÁ VỐN TỪ LỊCH SỬ)
     def update_po(self, po_id: int, data: PurchaseUpdateRequest):
         try:
-            # 0. Lấy thông tin chung của phiếu trước (để biết kho nào)
-            po_header = self.db.execute(text("SELECT warehouse_id, status FROM purchase_orders WHERE id = :id"), {"id": po_id}).fetchone()
+            # 0. Lấy thông tin chung
+            po_header = self.db.execute(text("SELECT warehouse_id FROM purchase_orders WHERE id = :id"), {"id": po_id}).fetchone()
             if not po_header: raise Exception("Không tìm thấy phiếu nhập")
-            
-            wid_header = po_header[0] # Kho nhập
-            status = po_header[1]
-            
+            wid_header = po_header[0]
             total_amount = 0
 
-            # A. Duyệt qua từng item gửi lên
+            # A. Cập nhật dữ liệu vào DB trước (Item & Kho)
             for item in data.items:
-                
-                # ====================================================
-                # TRƯỜNG HỢP 1: SỬA DÒNG CŨ (CÓ ID) -> GIỮ LOGIC CŨ CỦA BẠN
-                # ====================================================
                 if item.id:
-                    # 1. Lấy dữ liệu CŨ
-                    query_old = text("""
-                        SELECT poi.quantity, poi.unit_price, poi.product_variant_id, po.warehouse_id 
-                        FROM purchase_order_items poi 
-                        JOIN purchase_orders po ON poi.purchase_order_id = po.id 
-                        WHERE poi.id = :id
-                    """)
-                    old_data = self.db.execute(query_old, {"id": item.id}).fetchone()
-                    
+                    # SỬA DÒNG CŨ
+                    old_data = self.db.execute(text("SELECT quantity, unit_price, product_variant_id FROM purchase_order_items WHERE id = :id"), {"id": item.id}).fetchone()
                     if old_data:
                         old_qty = float(old_data[0])
-                        old_price = float(old_data[1])
                         vid = old_data[2]
-                        wid = old_data[3] # Lấy ID kho
+                        qty_diff = item.quantity - old_qty
                         
-                        new_qty = item.quantity
-                        new_price = item.unit_price
-
-                        # --- [LOGIC CŨ] TÍNH LẠI GIÁ VỐN ---
-                        current_info = self.db.execute(text("""
-                            SELECT pv.cost_price, IFNULL(SUM(s.quantity_on_hand), 0)
-                            FROM product_variants pv 
-                            LEFT JOIN inventory_stocks s ON pv.id = s.product_variant_id
-                            WHERE pv.id = :vid
-                            GROUP BY pv.id
-                        """), {"vid": vid}).fetchone()
-
-                        if current_info:
-                            current_avg_cost = float(current_info[0] or 0)
-                            current_total_stock = float(current_info[1] or 0)
-
-                            # Tính giá trị
-                            total_value_system = current_total_stock * current_avg_cost
-                            old_value_batch = old_qty * old_price
-                            new_value_batch = new_qty * new_price
-                            
-                            # Tổng số lượng mới
-                            new_total_stock = current_total_stock - old_qty + new_qty
-
-                            if new_total_stock > 0:
-                                # Giá vốn mới
-                                new_wac = (total_value_system - old_value_batch + new_value_batch) / new_total_stock
-                                self.db.execute(text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"), {"cost": new_wac, "id": vid})
-                        # ------------------------------------
-
-                        # 2. Update bảng chi tiết PO
-                        new_subtotal = new_qty * new_price
-                        total_amount += new_subtotal
+                        # Update Item
+                        total_amount += (item.quantity * item.unit_price)
+                        self.db.execute(text("UPDATE purchase_order_items SET unit_price=:p, quantity=:q, subtotal=:s WHERE id=:id"), 
+                                        {"p": item.unit_price, "q": item.quantity, "s": item.quantity * item.unit_price, "id": item.id})
                         
-                        self.db.execute(text("""
-                            UPDATE purchase_order_items 
-                            SET unit_price = :price, quantity = :qty, subtotal = :sub 
-                            WHERE id = :id
-                        """), {"price": new_price, "qty": new_qty, "sub": new_subtotal, "id": item.id})
-
-                        # 3. Update Kho (Chênh lệch)
-                        qty_diff = new_qty - old_qty
-                        if qty_diff != 0 and status == 'completed':
-                            self.db.execute(text("""
-                                UPDATE inventory_stocks 
-                                SET quantity_on_hand = quantity_on_hand + :diff
-                                WHERE warehouse_id = :wid AND product_variant_id = :vid
-                            """), {"diff": qty_diff, "wid": wid, "vid": vid})
-
-                            self.db.execute(text("""
-                                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                                VALUES (:wid, :vid, 'purchase_in', :diff, :ref, 'Sửa phiếu nhập (SL/Giá)')
-                            """), {"wid": wid, "vid": vid, "diff": qty_diff, "ref": po_id})
-
-                # ====================================================
-                # TRƯỜNG HỢP 2: THÊM DÒNG MỚI (KHÔNG CÓ ID) -> LOGIC MỚI
-                # ====================================================
+                        # Update Kho
+                        if qty_diff != 0:
+                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :diff WHERE warehouse_id=:w AND product_variant_id=:v"), {"diff": qty_diff, "w": wid_header, "v": vid})
+                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Sửa phiếu nhập')"), {"w": wid_header, "v": vid, "diff": qty_diff, "ref": po_id})
                 else:
-                    if not item.product_variant_id: continue # Bỏ qua nếu lỗi
-
+                    # THÊM MỚI
+                    if not item.product_variant_id: continue
                     vid = item.product_variant_id
-                    new_qty = item.quantity
-                    new_price = item.unit_price
-                    new_subtotal = new_qty * new_price
-                    total_amount += new_subtotal
-
-                    # 1. Insert vào DB
-                    self.db.execute(text("""
-                        INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal)
-                        VALUES (:oid, :pid, :qty, :price, :sub)
-                    """), {"oid": po_id, "pid": vid, "qty": new_qty, "price": new_price, "sub": new_subtotal})
-
-                    # 2. Cộng Kho (Full số lượng)
-                    if status == 'completed':
-                        self.db.execute(text("""
-                            INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
-                            VALUES (:wid, :pid, :qty)
-                            ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty
-                        """), {"wid": wid_header, "pid": vid, "qty": new_qty})
-
-                        self.db.execute(text("""
-                            INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                            VALUES (:wid, :pid, 'purchase_in', :qty, :ref, 'Thêm mới vào phiếu cũ')
-                        """), {"wid": wid_header, "pid": vid, "qty": new_qty, "ref": po_id})
-
-                    # 3. Tính lại giá vốn (Cho hàng mới thêm)
-                    current_info = self.db.execute(text("""
-                        SELECT pv.cost_price, IFNULL(SUM(s.quantity_on_hand), 0)
-                        FROM product_variants pv 
-                        LEFT JOIN inventory_stocks s ON pv.id = s.product_variant_id
-                        WHERE pv.id = :vid
-                        GROUP BY pv.id
-                    """), {"vid": vid}).fetchone()
-
-                    if current_info:
-                        current_avg_cost = float(current_info[0] or 0)
-                        current_total_stock = float(current_info[1] or 0)
-                        
-                        # Công thức khi thêm mới: (Tổng cũ + Giá trị mới) / (Lượng cũ + Lượng mới)
-                        new_total_value = (current_total_stock * current_avg_cost) + (new_qty * new_price)
-                        new_total_stock = current_total_stock + new_qty
-                        
-                        if new_total_stock > 0:
-                            new_wac = new_total_value / new_total_stock
-                            self.db.execute(text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"), {"cost": new_wac, "id": vid})
+                    total_amount += (item.quantity * item.unit_price)
+                    self.db.execute(text("INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal) VALUES (:oid, :pid, :qty, :price, :sub)"), {"oid": po_id, "pid": vid, "qty": item.quantity, "price": item.unit_price, "sub": item.quantity * item.unit_price})
+                    self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:w, :v, :q) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :q"), {"w": wid_header, "v": vid, "q": item.quantity})
+                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Thêm mới vào phiếu')"), {"w": wid_header, "v": vid, "q": item.quantity, "ref": po_id})
 
             # B. Cập nhật Header
-            self.db.execute(text("""
-                UPDATE purchase_orders 
-                SET po_code = :code, supplier_id = :sid, order_date = :date, total_amount = :total 
-                WHERE id = :id
-            """), {
-                "code": data.po_code, 
-                "sid": data.supplier_id, 
-                "date": data.order_date, 
-                "total": total_amount, 
-                "id": po_id
-            })
+            self.db.execute(text("UPDATE purchase_orders SET po_code=:c, supplier_id=:s, order_date=:d, total_amount=:t WHERE id=:id"), {"c": data.po_code, "s": data.supplier_id, "d": data.order_date, "t": total_amount, "id": po_id})
+
+            # C. [QUAN TRỌNG] TÍNH LẠI GIÁ VỐN CHO TẤT CẢ SẢN PHẨM TRONG PHIẾU
+            # Logic: Quét toàn bộ lịch sử nhập của sản phẩm đó để tính lại trung bình
+            # Công thức: Tổng tiền nhập / Tổng số lượng nhập
+            
+            # Lấy danh sách ID sản phẩm trong phiếu này
+            pids = [i.product_variant_id for i in data.items if i.product_variant_id]
+            # Hoặc lấy từ item.id nếu product_variant_id bị thiếu ở frontend (với dòng cũ)
+            for item in data.items:
+                if item.id and not item.product_variant_id:
+                    pid = self.db.execute(text("SELECT product_variant_id FROM purchase_order_items WHERE id=:id"), {"id": item.id}).scalar()
+                    if pid: pids.append(pid)
+            
+            # Loại bỏ trùng lặp
+            pids = list(set(pids))
+
+            for pid in pids:
+                # Tính tổng nhập trong lịch sử
+                history = self.db.execute(text("""
+                    SELECT SUM(quantity), SUM(subtotal) 
+                    FROM purchase_order_items 
+                    WHERE product_variant_id = :pid
+                """), {"pid": pid}).fetchone()
+                
+                total_qty_history = float(history[0] or 0)
+                total_val_history = float(history[1] or 0)
+
+                if total_qty_history > 0:
+                    new_wac = total_val_history / total_qty_history
+                    self.db.execute(text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"), {"cost": new_wac, "id": pid})
+                else:
+                    # Nếu không còn lịch sử nhập (đã xóa hết phiếu), set về 0
+                    self.db.execute(text("UPDATE product_variants SET cost_price = 0 WHERE id = :id"), {"id": pid})
 
             self.db.commit()
-            return {"status": "success", "message": "Cập nhật phiếu, kho & giá vốn thành công!"}
+            return {"status": "success", "message": "Cập nhật thành công!"}
 
         except Exception as e:
             self.db.rollback()
             raise e
+
+    # 6. Xóa Phiếu Nhập & Hoàn tác kho
+    def delete_purchase_order(self, po_id: int):
+        try:
+            # 1. Lấy thông tin PO để biết kho nào
+            po = self.db.execute(text("SELECT warehouse_id FROM purchase_orders WHERE id = :id"), {"id": po_id}).fetchone()
+            if not po: raise Exception("Phiếu nhập không tồn tại")
+            
+            wid = po[0]
+
+            # 2. Lấy chi tiết hàng đã nhập để trừ lại kho
+            items = self.db.execute(text("SELECT product_variant_id, quantity FROM purchase_order_items WHERE purchase_order_id = :id"), {"id": po_id}).fetchall()
+            
+            for item in items:
+                vid = item[0]
+                qty = float(item[1])
+                
+                # Trừ tồn kho (Revert Stock)
+                # Kiểm tra xem có đủ hàng để trừ không (đề phòng đã xuất bán mất rồi)
+                current_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:v"), {"w": wid, "v": vid}).scalar() or 0
+                
+                if current_stock < qty:
+                    raise Exception(f"Không thể xóa phiếu! Sản phẩm ID {vid} trong kho chỉ còn {current_stock}, nhưng phiếu này đã nhập {qty}. (Hàng đã bị xuất đi).")
+
+                # Thực hiện trừ
+                self.db.execute(text("""
+                    UPDATE inventory_stocks 
+                    SET quantity_on_hand = quantity_on_hand - :qty
+                    WHERE warehouse_id = :wid AND product_variant_id = :vid
+                """), {"qty": qty, "wid": wid, "vid": vid})
+
+                # Ghi log hoàn tác
+                self.db.execute(text("""
+                    INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
+                    VALUES (:wid, :vid, 'purchase_in', :qty, :ref, 'Xóa phiếu nhập (Hoàn tác)')
+                """), {"wid": wid, "vid": vid, "qty": -qty, "ref": po_id})
+
+            # 3. Xóa dữ liệu trong DB
+            self.db.execute(text("DELETE FROM purchase_order_items WHERE purchase_order_id = :id"), {"id": po_id})
+            self.db.execute(text("DELETE FROM purchase_orders WHERE id = :id"), {"id": po_id})
+            
+            self.db.commit()
+            return {"status": "success", "message": "Đã xóa phiếu nhập và hoàn tác kho thành công."}
+
+        except Exception as e:
+            self.db.rollback()
+            raise e 

@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date
 
+
 # --- 1. NHÀ CUNG CẤP (SUPPLIER) ---
 class SupplierCreateRequest(BaseModel):
     name: str
@@ -54,13 +55,14 @@ class PurchaseOrderCreateRequest(BaseModel):
     supplier_id: Optional[int] = None       # Chọn NCC cũ
     new_supplier_name: Optional[str] = None # Hoặc Nhập NCC mới
 
-class POItemUpdateRequest(BaseModel):
-    id: int         # Cần ID để biết sửa dòng nào
+class PurchaseItemUpdateRequest(BaseModel):
+    id: Optional[int] = None      
+    product_variant_id: Optional[int] = None
+    quantity: float
     unit_price: float
-    quantity: float # Cho phép sửa số lượng
 
 class PurchaseUpdateRequest(BaseModel):
     po_code: str
     supplier_id: int
     order_date: date
-    items: List[POItemUpdateRequest]
+    items: List[PurchaseItemUpdateRequest]
