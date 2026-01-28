@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Button, Modal, Form, Select, Input, Tabs, Tag, message, Divider, Space, InputNumber, Tooltip } from 'antd';
-import { SwapOutlined, PlusOutlined, DeleteOutlined, CrownOutlined } from '@ant-design/icons';
+import { Table, Card, Button, Modal, Form, Select, Input, Tabs, Tag, message, Divider, Space, InputNumber } from 'antd';
+import { SwapOutlined, PlusOutlined, DeleteOutlined, CrownOutlined, EditOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
 
@@ -13,13 +13,16 @@ const WarehousePage = () => {
     // Modal States
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false); // Tạo kho
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false); // Điều chuyển
-    const [isBrandModalOpen, setIsBrandModalOpen] = useState(false); // <--- MỚI: Modal tạo Brand
+    const [isBrandModalOpen, setIsBrandModalOpen] = useState(false); // Tạo Brand
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false); // Sửa kho
     
+    const [currentWarehouse, setCurrentWarehouse] = useState(null);
     const [loading, setLoading] = useState(false);
     
     const [createForm] = Form.useForm();
     const [transferForm] = Form.useForm();
-    const [brandForm] = Form.useForm(); // <--- MỚI
+    const [brandForm] = Form.useForm(); 
+    const [editForm] = Form.useForm();
 
     // 1. Load dữ liệu
     const fetchData = async () => {
@@ -46,16 +49,12 @@ const WarehousePage = () => {
     // 2. Tạo Kho Mới
     const handleCreateWarehouse = async (values) => {
         try {
-            // Logic kiểm tra sơ bộ (Client side validation)
             if (values.is_central) {
-                // Kiểm tra xem Brand này đã có Kho tổng chưa
                 const existingCentral = warehouses.find(w => w.brand_id === values.brand_id && w.type_name === 'Kho Tổng');
                 if (existingCentral) {
                     message.warning("Cảnh báo: Brand này đã có Kho Tổng rồi!");
-                    // Bạn có thể return để chặn luôn nếu muốn chặt chẽ
                 }
             }
-
             await warehouseApi.createWarehouse(values);
             message.success("Tạo kho thành công!");
             setIsCreateModalOpen(false);
@@ -66,20 +65,63 @@ const WarehousePage = () => {
         }
     };
 
-    // 3. Tạo Brand Mới (LOGIC MỚI)
+    // 3. Tạo Brand Mới
     const handleCreateBrand = async (values) => {
         try {
             await warehouseApi.createBrand(values);
             message.success("Tạo Brand mới thành công!");
             setIsBrandModalOpen(false);
             brandForm.resetFields();
-            fetchData(); // Load lại để Dropdown bên kia có dữ liệu mới
+            fetchData(); 
         } catch (error) {
             message.error("Lỗi: " + error.response?.data?.detail);
         }
     };
 
-    // 4. Điều Chuyển Kho
+    // 4. Sửa Kho (MỚI)
+    const openEditModal = (record) => {
+        setCurrentWarehouse(record);
+        editForm.setFieldsValue({
+            name: record.name,
+            address: record.address,
+            // Không set brand_id hay is_central để tránh sửa nhầm
+        });
+        setIsEditModalOpen(true);
+    };
+
+    const handleUpdateWarehouse = async (values) => {
+        try {
+            await warehouseApi.updateWarehouse(currentWarehouse.id, values);
+            message.success("Cập nhật kho thành công!");
+            setIsEditModalOpen(false);
+            fetchData();
+        } catch (error) {
+            message.error("Lỗi cập nhật: " + error.response?.data?.detail);
+        }
+    };
+
+    // 5. Xóa Kho (MỚI)
+    const handleDeleteWarehouse = (id) => {
+        Modal.confirm({
+            title: 'Xóa Kho/Xưởng này?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'CẢNH BÁO: Chỉ được xóa khi kho chưa có hàng tồn và chưa phát sinh đơn hàng. Hành động này không thể hoàn tác.',
+            okText: 'Xóa Vĩnh Viễn',
+            okType: 'danger',
+            cancelText: 'Hủy',
+            onOk: async () => {
+                try {
+                    await warehouseApi.deleteWarehouse(id);
+                    message.success("Đã xóa kho!");
+                    fetchData();
+                } catch (error) {
+                    message.error("Không thể xóa: " + (error.response?.data?.detail || "Lỗi server"));
+                }
+            }
+        });
+    };
+
+    // 6. Điều Chuyển Kho
     const handleTransfer = async (values) => {
         try {
             await warehouseApi.transferStock(values);
@@ -93,7 +135,7 @@ const WarehousePage = () => {
 
     // --- COLUMNS ---
     const columns = [
-        { title: 'ID', dataIndex: 'id', width: 50 },
+        { title: 'ID', dataIndex: 'id', width: 50, align: 'center' },
         { title: 'Tên Kho / Xưởng', dataIndex: 'name', key: 'name', render: t => <b>{t}</b> },
         { title: 'Thuộc Brand', dataIndex: 'brand_name', key: 'brand', render: t => <Tag color="purple">{t}</Tag> },
         { 
@@ -103,6 +145,18 @@ const WarehousePage = () => {
             render: (t) => <Tag color={t === 'Kho Tổng' ? 'blue' : 'orange'}>{t}</Tag>
         },
         { title: 'Địa chỉ', dataIndex: 'address', key: 'addr' },
+        {
+            title: 'Hành động',
+            key: 'action',
+            align: 'center',
+            width: 120,
+            render: (_, record) => (
+                <Space>
+                    <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
+                    <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteWarehouse(record.id)} />
+                </Space>
+            )
+        }
     ];
 
     return (
@@ -113,7 +167,6 @@ const WarehousePage = () => {
                     {/* TAB 1: DANH SÁCH KHO */}
                     <Tabs.TabPane tab="Danh sách Kho bãi" key="1">
                         <Space style={{ marginBottom: 16 }}>
-                            {/* Nút tạo Brand mới */}
                             <Button type="default" onClick={() => setIsBrandModalOpen(true)} icon={<CrownOutlined />}>
                                 Tạo Brand Mới
                             </Button>
@@ -126,13 +179,13 @@ const WarehousePage = () => {
                                 Tạo Lệnh Điều Chuyển
                             </Button>
                         </Space>
-                        <Table dataSource={warehouses} columns={columns} rowKey="id" loading={loading} />
+                        <Table dataSource={warehouses} columns={columns} rowKey="id" loading={loading} pagination={{pageSize: 10}} />
                     </Tabs.TabPane>
 
                 </Tabs>
             </Card>
 
-            {/* MODAL 0: TẠO BRAND MỚI (MỚI THÊM) */}
+            {/* MODAL TẠO BRAND */}
             <Modal title="Khai báo Brand (Nhãn hàng) Mới" open={isBrandModalOpen} onCancel={() => setIsBrandModalOpen(false)} footer={null}>
                 <Form layout="vertical" form={brandForm} onFinish={handleCreateBrand}>
                     <Form.Item label="Tên Brand" name="name" rules={[{ required: true, message: 'Vui lòng nhập tên Brand' }]}>
@@ -143,7 +196,7 @@ const WarehousePage = () => {
                 </Form>
             </Modal>
 
-            {/* MODAL 1: TẠO KHO MỚI */}
+            {/* MODAL TẠO KHO */}
             <Modal title="Thêm Kho / Xưởng Mới" open={isCreateModalOpen} onCancel={() => setIsCreateModalOpen(false)} footer={null}>
                 <Form layout="vertical" form={createForm} onFinish={handleCreateWarehouse}>
                     <Form.Item label="Thuộc Brand" name="brand_id" rules={[{ required: true }]}>
@@ -169,7 +222,22 @@ const WarehousePage = () => {
                 </Form>
             </Modal>
 
-            {/* MODAL 2: ĐIỀU CHUYỂN KHO */}
+            {/* MODAL SỬA KHO */}
+            <Modal title="Cập nhật thông tin Kho" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} footer={null}>
+                <Form layout="vertical" onFinish={handleUpdateWarehouse} form={editForm}>
+                    <Form.Item label="Tên Kho" name="name" rules={[{ required: true }]}><Input /></Form.Item>
+                    <Form.Item label="Địa chỉ" name="address"><Input.TextArea /></Form.Item>
+                    
+                    <div style={{marginTop: 15, padding: 10, background: '#f5f5f5', borderRadius: 4, fontSize: 12, color: '#666'}}>
+                        * Để đảm bảo tính toàn vẹn dữ liệu phân quyền, bạn không thể thay đổi <b>Thương hiệu</b> và <b>Loại kho</b> ở đây.
+                        Nếu cần thay đổi cấu trúc, hãy xóa kho cũ (nếu trống) và tạo mới.
+                    </div>
+
+                    <Button type="primary" htmlType="submit" block style={{marginTop: 15}}>Lưu Thay Đổi</Button>
+                </Form>
+            </Modal>
+
+            {/* MODAL ĐIỀU CHUYỂN */}
             <Modal title="Điều Chuyển Nội Bộ" open={isTransferModalOpen} onCancel={() => setIsTransferModalOpen(false)} footer={null} width={700}>
                 <Form layout="vertical" form={transferForm} onFinish={handleTransfer}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>

@@ -42,3 +42,6 @@ class TransferCreateRequest(BaseModel):
     from_warehouse_id: int  # Kho đi
     to_warehouse_id: int    # Kho đến
     items: List[TransferItem]
+class WarehouseUpdateRequest(BaseModel):
+    name: str
+    address: Optional[str] = None
