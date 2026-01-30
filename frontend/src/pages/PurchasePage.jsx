@@ -241,7 +241,7 @@ const PurchasePage = () => {
 
             {/* --- MODAL SỬA (CHO PHÉP SỬA & THÊM HÀNG MỚI) --- */}
             <Modal 
-                title="Chi Tiết / Chỉnh Sửa Phiếu Nhập" 
+                title="Chỉnh sửa" 
                 open={isEditModalOpen} 
                 onCancel={() => setIsEditModalOpen(false)} 
                 width={950} 

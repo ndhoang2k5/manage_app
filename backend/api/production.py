@@ -126,14 +126,16 @@ def get_receive_history(order_id: int, db: Session = Depends(get_db), user: dict
 
 # 5. API Cập nhật thông tin lệnh sản xuất (Chi phí và ngày tháng)
 @router.put("/production/orders/{order_id}")
-def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = Depends(get_db), admin: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.update_production_order(order_id, request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# 5.1 API Xoá lệnh sản xuất
 @router.delete("/production/orders/{order_id}")
-def delete_order(order_id: int, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+def delete_order(order_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.delete_production_order(order_id)
@@ -156,7 +158,7 @@ def revert_receive(log_id: int, db: Session = Depends(get_db), user: dict = Depe
         return service.revert_receive_log(log_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-        
+
 # 7. API Lấy danh sách đặt trước cho lệnh sản xuất
 @router.get("/production/orders/{order_id}/reservations")
 def get_order_reservations(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):

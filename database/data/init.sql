@@ -161,6 +161,7 @@ CREATE TABLE if not exists production_material_reservations (
     id INT PRIMARY KEY AUTO_INCREMENT,
     production_order_id INT,
     material_variant_id INT,
+    note TEXT,
     quantity_reserved DECIMAL(15, 2),
     FOREIGN KEY (production_order_id) REFERENCES production_orders(id),
     FOREIGN KEY (material_variant_id) REFERENCES product_variants(id)

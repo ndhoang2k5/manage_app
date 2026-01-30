@@ -161,7 +161,7 @@ class PurchaseService:
             ]
         }
 
-    # 5. Cập nhật PO (Phiên bản: TÍNH LẠI GIÁ VỐN TỪ LỊCH SỬ)
+    # 5. Cập nhật PO (Đã sửa lỗi tham số 'q' và làm tròn số)
     def update_po(self, po_id: int, data: PurchaseUpdateRequest):
         try:
             # 0. Lấy thông tin chung
@@ -178,7 +178,9 @@ class PurchaseService:
                     if old_data:
                         old_qty = float(old_data[0])
                         vid = old_data[2]
-                        qty_diff = item.quantity - old_qty
+                        
+                        # Làm tròn chênh lệch để tránh lỗi số lẻ (ví dụ 1.30000007)
+                        qty_diff = round(item.quantity - old_qty, 4)
                         
                         # Update Item
                         total_amount += (item.quantity * item.unit_price)
@@ -188,12 +190,18 @@ class PurchaseService:
                         # Update Kho
                         if qty_diff != 0:
                             self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :diff WHERE warehouse_id=:w AND product_variant_id=:v"), {"diff": qty_diff, "w": wid_header, "v": vid})
-                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Sửa phiếu nhập')"), {"w": wid_header, "v": vid, "diff": qty_diff, "ref": po_id})
+                            
+                            # Sửa lỗi 'diff' -> 'q' ở đây
+                            self.db.execute(text("""
+                                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) 
+                                VALUES (:w, :v, 'purchase_in', :q, :ref, 'Sửa phiếu nhập')
+                            """), {"w": wid_header, "v": vid, "q": qty_diff, "ref": po_id})
                 else:
                     # THÊM MỚI
                     if not item.product_variant_id: continue
                     vid = item.product_variant_id
                     total_amount += (item.quantity * item.unit_price)
+                    
                     self.db.execute(text("INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal) VALUES (:oid, :pid, :qty, :price, :sub)"), {"oid": po_id, "pid": vid, "qty": item.quantity, "price": item.unit_price, "sub": item.quantity * item.unit_price})
                     self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:w, :v, :q) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :q"), {"w": wid_header, "v": vid, "q": item.quantity})
                     self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Thêm mới vào phiếu')"), {"w": wid_header, "v": vid, "q": item.quantity, "ref": po_id})
@@ -201,28 +209,17 @@ class PurchaseService:
             # B. Cập nhật Header
             self.db.execute(text("UPDATE purchase_orders SET po_code=:c, supplier_id=:s, order_date=:d, total_amount=:t WHERE id=:id"), {"c": data.po_code, "s": data.supplier_id, "d": data.order_date, "t": total_amount, "id": po_id})
 
-            # C. [QUAN TRỌNG] TÍNH LẠI GIÁ VỐN CHO TẤT CẢ SẢN PHẨM TRONG PHIẾU
-            # Logic: Quét toàn bộ lịch sử nhập của sản phẩm đó để tính lại trung bình
-            # Công thức: Tổng tiền nhập / Tổng số lượng nhập
-            
-            # Lấy danh sách ID sản phẩm trong phiếu này
+            # C. TÍNH LẠI GIÁ VỐN (QUÉT TOÀN BỘ LỊCH SỬ)
             pids = [i.product_variant_id for i in data.items if i.product_variant_id]
-            # Hoặc lấy từ item.id nếu product_variant_id bị thiếu ở frontend (với dòng cũ)
             for item in data.items:
                 if item.id and not item.product_variant_id:
                     pid = self.db.execute(text("SELECT product_variant_id FROM purchase_order_items WHERE id=:id"), {"id": item.id}).scalar()
                     if pid: pids.append(pid)
             
-            # Loại bỏ trùng lặp
             pids = list(set(pids))
 
             for pid in pids:
-                # Tính tổng nhập trong lịch sử
-                history = self.db.execute(text("""
-                    SELECT SUM(quantity), SUM(subtotal) 
-                    FROM purchase_order_items 
-                    WHERE product_variant_id = :pid
-                """), {"pid": pid}).fetchone()
+                history = self.db.execute(text("SELECT SUM(quantity), SUM(subtotal) FROM purchase_order_items WHERE product_variant_id = :pid"), {"pid": pid}).fetchone()
                 
                 total_qty_history = float(history[0] or 0)
                 total_val_history = float(history[1] or 0)
@@ -231,7 +228,6 @@ class PurchaseService:
                     new_wac = total_val_history / total_qty_history
                     self.db.execute(text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"), {"cost": new_wac, "id": pid})
                 else:
-                    # Nếu không còn lịch sử nhập (đã xóa hết phiếu), set về 0
                     self.db.execute(text("UPDATE product_variants SET cost_price = 0 WHERE id = :id"), {"id": pid})
 
             self.db.commit()
