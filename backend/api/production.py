@@ -135,7 +135,7 @@ def update_order(order_id: int, request: ProductionUpdateRequest, db: Session = 
 
 # 5.1 API Xoá lệnh sản xuất
 @router.delete("/production/orders/{order_id}")
-def delete_order(order_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_user)):
+def delete_order(order_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductionService(db)
     try:
         return service.delete_production_order(order_id)

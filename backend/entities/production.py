@@ -98,3 +98,4 @@ class ProductionUpdateRequest(BaseModel):
     due_date: Optional[date] = None
     new_sku: Optional[str] = None
     materials: List[ProductionMaterialUpdateItem] = []
+    image_urls: Optional[List[str]] = None

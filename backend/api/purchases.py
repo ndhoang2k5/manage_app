@@ -59,7 +59,7 @@ def update_purchase_order(po_id: int, request: PurchaseUpdateRequest, db: Sessio
 
 # 5. Xóa Phiếu Nhập (Và hoàn tác kho)
 @router.delete("/purchases/{po_id}")
-def delete_purchase_order(po_id: int, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+def delete_purchase_order(po_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = PurchaseService(db)
     try:
         return service.delete_purchase_order(po_id)

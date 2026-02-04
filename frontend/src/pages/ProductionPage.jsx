@@ -1,4 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+import dayjs from 'dayjs'; 
+dayjs.extend(utc);
+dayjs.extend(timezone);
 import { 
     Table, Card, Button, Modal, Form, Select, Input, 
     InputNumber, DatePicker, Tag, message, Divider, Space, 
@@ -10,7 +15,6 @@ import {
     CheckCircleOutlined, SearchOutlined, HistoryOutlined, 
     EditOutlined, SaveOutlined, CalendarOutlined
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
@@ -275,6 +279,30 @@ const ProductionPage = () => {
         } catch (err) {
             message.error("Lỗi tải thông tin chi tiết: " + err.message);
         }
+
+
+        try {
+            const printRes = await productionApi.getPrintData(record.id);
+            const data = printRes.data;
+            
+            // Xử lý ảnh cũ để hiển thị trong Upload
+            const existingImages = (data.images || []).map((url, index) => ({
+                uid: index,
+                name: 'image.png',
+                status: 'done',
+                url: BASE_URL + url, // Hiển thị full path
+                response: { url: url } // Lưu path tương đối để gửi lại server
+            }));
+            
+            setFileList(existingImages); // <--- QUAN TRỌNG
+
+            editForm.setFieldsValue({
+                // ... (các field khác giữ nguyên) ...
+            });
+            setIsEditModalOpen(true);
+        } catch (err) {
+            message.error("Lỗi tải thông tin chi tiết: " + err.message);
+        }
     };
 
     // Cập nhật đơn
@@ -290,6 +318,16 @@ const ProductionPage = () => {
 
             console.log("DEBUG SENDING:", cleanMaterials); // Bật F12 xem dòng này có ID chưa?
 
+            const imageUrls = fileList.map(f => {
+                if (f.response && f.response.url) return f.response.url; // Ảnh mới up
+                if (f.url) {
+                    // Ảnh cũ: Cần cắt bỏ phần domain (BASE_URL) để chỉ lấy path tương đối lưu vào DB
+                    // Ví dụ: https://domain.com/static/img.jpg -> /static/img.jpg
+                    return f.url.replace(BASE_URL, ''); 
+                }
+                return null;
+            }).filter(url => url !== null);   
+
             const payload = {
                 start_date: values.start_date.format('YYYY-MM-DD'),
                 due_date: values.due_date.format('YYYY-MM-DD'),
@@ -300,7 +338,7 @@ const ProductionPage = () => {
                 packaging_fee: Number(values.packaging_fee || 0),
                 print_fee: Number(values.print_fee || 0),
                 new_sku: values.new_sku,
-                
+                image_urls: imageUrls, // Gửi danh sách ảnh
                 materials: cleanMaterials // Gửi danh sách đã làm sạch
             };
             
@@ -780,6 +818,26 @@ const ProductionPage = () => {
                              </Row>
                         </Col>
                     </Row>
+                    
+                    <Divider orientation="left">Hình ảnh mẫu</Divider>
+                    <Upload
+                        customRequest={handleUpload}
+                        listType="picture-card"
+                        fileList={fileList}
+                        onChange={handleFileChange}
+                        onRemove={(file) => {
+                            // Logic xóa ảnh khỏi list hiển thị
+                            const newFileList = fileList.filter(item => item.uid !== file.uid);
+                            setFileList(newFileList);
+                        }}
+                    >
+                        {fileList.length >= 5 ? null : (
+                            <div>
+                                <PlusOutlined />
+                                <div style={{ marginTop: 8 }}>Tải ảnh</div>
+                            </div>
+                        )}
+                    </Upload>
 
                     <Divider orientation="left">Điều chỉnh Nguyên Phụ Liệu (Tự động trừ/cộng kho)</Divider>
                     

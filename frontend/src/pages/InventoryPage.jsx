@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider, Tooltip } from 'antd';
 import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined, BgColorsOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
+import dayjs from 'dayjs';
+
 
 const InventoryPage = () => {
     // Data States

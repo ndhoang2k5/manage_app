@@ -636,6 +636,17 @@ class ProductionService:
             # 4. Cập nhật SKU (Giữ nguyên)
             if hasattr(data, 'new_sku') and data.new_sku:
                 self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {"sku": data.new_sku, "pid": pid})
+            
+            # 5. Cập nhật Ảnh (Logic mới)
+            if data.image_urls is not None:
+                # Xóa ảnh cũ
+                self.db.execute(text("DELETE FROM production_order_images WHERE production_order_id = :oid"), {"oid": order_id})
+                
+                # Thêm ảnh mới
+                if len(data.image_urls) > 0:
+                    query_img = text("INSERT INTO production_order_images (production_order_id, image_url) VALUES (:oid, :url)")
+                    for url in data.image_urls:
+                        self.db.execute(query_img, {"oid": order_id, "url": url})
 
             self.db.commit()
             return {"status": "success", "message": "Cập nhật thành công!"}

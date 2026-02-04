@@ -3,6 +3,12 @@ import { Table, Card, Button, Modal, Form, Select, Input, Tabs, Tag, message, Di
 import { SwapOutlined, PlusOutlined, DeleteOutlined, CrownOutlined, EditOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+import dayjs from 'dayjs';
+
 
 const WarehousePage = () => {
     const [activeTab, setActiveTab] = useState('1');

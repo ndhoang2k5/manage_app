@@ -40,6 +40,8 @@ services:
     restart: always
     # ports:
     #   - "80:80"
+    environment:
+      TZ: Asia/Ho_Chi_Minh  # <--- THÊM DÒNG NÀY
     depends_on:
       - backend
     # 4. Nginx (MỚI - Cổng chính HTTPS)
@@ -54,6 +56,8 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
+    environment:
+      TZ: Asia/Ho_Chi_Minh  # <--- THÊM DÒNG NÀY
     depends_on:
       - frontend
       - backend

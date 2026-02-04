@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 # CẤU HÌNH BẢO MẬT (Nên để trong biến môi trường .env)
 SECRET_KEY = "FASHION_WMS_SECRET_KEY_2025"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 ngày
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30 # 1 ngày
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

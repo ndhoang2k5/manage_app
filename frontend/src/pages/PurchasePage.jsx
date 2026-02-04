@@ -5,6 +5,10 @@ import dayjs from 'dayjs';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const PurchasePage = () => {
     // Data States

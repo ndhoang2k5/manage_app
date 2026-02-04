@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Card, Row, Col, Statistic, Tabs, Table, Tag, message, Spin, Typography, Alert, Button } from 'antd';
 import { GoldOutlined, ShopOutlined, ContainerOutlined, RocketOutlined, ReloadOutlined } from '@ant-design/icons';
 import reportApi from '../api/reportApi';
-
+import dayjs from 'dayjs';
 const { Title } = Typography;
 
 const CentralDashboard = () => {
