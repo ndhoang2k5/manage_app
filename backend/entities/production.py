@@ -86,6 +86,13 @@ class ProductionMaterialUpdateItem(BaseModel):
     quantity: float                # Số lượng thực tế cần dùng
     note: Optional[str] = ""
 
+# Cập nhật class ProductionSizeUpdateItem
+class ProductionSizeUpdateItem(BaseModel):
+    id: Optional[int] = None
+    size: str
+    quantity: int
+    note: Optional[str] = ""
+
 # Cập nhật class ProductionUpdateRequest
 class ProductionUpdateRequest(BaseModel):
     shipping_fee: float = 0
@@ -99,3 +106,4 @@ class ProductionUpdateRequest(BaseModel):
     new_sku: Optional[str] = None
     materials: List[ProductionMaterialUpdateItem] = []
     image_urls: Optional[List[str]] = None
+    sizes: List[ProductionSizeUpdateItem] = []

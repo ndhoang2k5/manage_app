@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import json
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem, ProductionMaterialUpdateItem, ProductionSizeUpdateItem
 from typing import List, Optional, Dict
 
 class ProductionService:
@@ -193,10 +193,10 @@ class ProductionService:
                 mat_id = item[0]
                 qty_needed_per_unit = float(item[1]) 
                 order_qty = float(order[4]) 
-                total_qty_needed = qty_needed_per_unit * order_qty # Định mức * Tổng SL
-                total_qty_needed = round(total_qty_needed, 4) 
+                raw_total = qty_needed_per_unit * order_qty
+               
+                total_qty_needed = round(raw_total, 4) 
 
-                # Kiểm tra tồn kho
                 stock = self.db.execute(text("""
                     SELECT quantity_on_hand
                     FROM inventory_stocks 
@@ -564,6 +564,23 @@ class ProductionService:
                 "start": data.start_date, "due": data.due_date, "id": order_id
             })
 
+            if data.sizes is not None:
+                total_qty_planned = 0
+                for s in data.sizes:
+                    total_qty_planned += s.quantity
+                    
+                    if s.id:
+                        # Cập nhật dòng cũ
+                        self.db.execute(text("UPDATE production_order_items SET size_label=:size, quantity_planned=:qty, note=:note WHERE id=:id"),
+                                        {"size": s.size, "qty": s.quantity, "note": s.note, "id": s.id})
+                    else:
+                        # Thêm size mới (nếu có logic thêm size)
+                        self.db.execute(text("INSERT INTO production_order_items (production_order_id, size_label, quantity_planned, quantity_finished, note) VALUES (:oid, :size, :qty, 0, :note)"),
+                                        {"oid": order_id, "size": s.size, "qty": s.quantity, "note": s.note})
+                
+                # Cập nhật tổng số lượng dự kiến vào bảng cha
+                self.db.execute(text("UPDATE production_orders SET quantity_planned = :q WHERE id = :id"), {"q": total_qty_planned, "id": order_id})
+
             # 3. XỬ LÝ NGUYÊN VẬT LIỆU
             if data.materials is not None: # Chỉ chạy nếu có gửi materials
                 print(f"Materials count: {len(data.materials)}") # <--- Log 3
@@ -836,7 +853,7 @@ class ProductionService:
                     "material_variant_id": r[1], 
                     "sku": r[2], 
                     "name": r[3], 
-                    "quantity": r[4], 
+                    "quantity": round(float(r[4]), 4) if r[4] is not None else 0,
                     "note": r[5], 
                     "unit_price": r[6] or 0
                 } for r in results
@@ -859,8 +876,7 @@ class ProductionService:
                     "material_variant_id": r[1],
                     "sku": r[2], 
                     "name": r[3],
-                    # Tính tổng lượng cần = Định mức * Số lượng đơn hàng
-                    "quantity": float(r[4]) * qty_planned, 
+                    "quantity": round(float(r[4]) * qty_planned, 4), 
                     "note": r[5], 
                     "unit_price": r[6] or 0
                 } for r in results

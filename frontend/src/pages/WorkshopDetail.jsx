@@ -3,6 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Row, Col, Statistic, Table, Tag, Button, Spin, Typography, Tabs } from 'antd';
 import { ArrowLeftOutlined, GoldOutlined, ShopOutlined } from '@ant-design/icons';
 import reportApi from '../api/reportApi';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+import dayjs from 'dayjs';
 
 const { Title } = Typography;
 
