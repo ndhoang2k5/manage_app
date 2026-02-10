@@ -870,15 +870,22 @@ const ProductionPage = () => {
                                                             min="0"
                                                             step="0.0001" 
                                                             stringMode 
-                                                            // --- THÊM DÒNG NÀY ---
-                                                            precision={4}  // Giới hạn hiển thị tối đa 4 số thập phân (tự động làm tròn)
-                                                            // ---------------------
+                                                            
+                                                            // --- SỬA ĐOẠN FORMATTER NÀY ---
                                                             formatter={value => {
                                                                 if (!value) return '';
-                                                                // Làm tròn và xóa số 0 thừa ở cuối
-                                                                return `${parseFloat(parseFloat(value).toFixed(4))}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                                                                const strValue = `${value}`;
+                                                                const parts = strValue.split('.'); // Tách phần nguyên và phần thập phân
+                                                                
+                                                                // Chỉ thêm dấu phẩy hàng nghìn cho phần nguyên (parts[0])
+                                                                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                                                                
+                                                                // Gộp lại (Nếu có phần thập phân thì nối vào)
+                                                                return parts.join('.');
                                                             }}
-                                                            parser={value => value.replace(/\$\s?|(,*)/g, '')}
+                                                            // -----------------------------
+
+                                                            parser={value => value.replace(/\$\s?|(,*)/g, '')} // Xóa dấu phẩy khi lưu giá trị
                                                         />
                                                     </Form.Item>
 
@@ -954,16 +961,21 @@ const ProductionPage = () => {
                                                             step="0.0001" 
                                                             stringMode 
                                                             
-                                                            // --- THÊM DÒNG NÀY ---
-                                                            precision={4} 
-                                                            // Nó sẽ tự động cắt 26.2000003 thành 26.2000
-                                                            // ---------------------
-                                                            
-                                                            // Nếu muốn xóa số 0 ở cuối (26.2000 -> 26.2) thì dùng formatter này:
+                                                            // --- SỬA ĐOẠN FORMATTER NÀY ---
                                                             formatter={value => {
                                                                 if (!value) return '';
-                                                                return `${parseFloat(value)}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                                                                const strValue = `${value}`;
+                                                                const parts = strValue.split('.'); // Tách phần nguyên và phần thập phân
+                                                                
+                                                                // Chỉ thêm dấu phẩy hàng nghìn cho phần nguyên (parts[0])
+                                                                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                                                                
+                                                                // Gộp lại (Nếu có phần thập phân thì nối vào)
+                                                                return parts.join('.');
                                                             }}
+                                                            // -----------------------------
+
+                                                            parser={value => value.replace(/\$\s?|(,*)/g, '')} // Xóa dấu phẩy khi lưu giá trị
                                                         />
                                                     </Form.Item>
                                                 </td>

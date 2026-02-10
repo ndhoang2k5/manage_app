@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError
 import json
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem, ProductionMaterialUpdateItem, ProductionSizeUpdateItem
 from typing import List, Optional, Dict
+from decimal import Decimal
+
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -540,15 +542,12 @@ class ProductionService:
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
         try:
             print(f"--- DEBUG UPDATE ORDER {order_id} ---")
-            # 1. Lấy thông tin cơ bản
             order = self.db.execute(text("SELECT warehouse_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy đơn hàng")
-            
             wid = order[0]
             status = order[1]
             pid = order[2]
-            qty_planned = order[3]
-            print(f"Status: {status}")
+            old_qty_planned = Decimal(str(order[3])) # Chuyển sang Decimal ngay
 
             # 2. Cập nhật Header
             query_header = text("""
@@ -564,102 +563,98 @@ class ProductionService:
                 "start": data.start_date, "due": data.due_date, "id": order_id
             })
 
+            total_qty_planned = Decimal("0")
             if data.sizes is not None:
-                total_qty_planned = 0
                 for s in data.sizes:
-                    total_qty_planned += s.quantity
-                    
+                    qty_decimal = Decimal(str(s.quantity))
+                    total_qty_planned += qty_decimal
                     if s.id:
-                        # Cập nhật dòng cũ
                         self.db.execute(text("UPDATE production_order_items SET size_label=:size, quantity_planned=:qty, note=:note WHERE id=:id"),
-                                        {"size": s.size, "qty": s.quantity, "note": s.note, "id": s.id})
+                                        {"size": s.size, "qty": qty_decimal, "note": s.note, "id": s.id})
                     else:
-                        # Thêm size mới (nếu có logic thêm size)
                         self.db.execute(text("INSERT INTO production_order_items (production_order_id, size_label, quantity_planned, quantity_finished, note) VALUES (:oid, :size, :qty, 0, :note)"),
-                                        {"oid": order_id, "size": s.size, "qty": s.quantity, "note": s.note})
+                                        {"oid": order_id, "size": s.size, "qty": qty_decimal, "note": s.note})
                 
-                # Cập nhật tổng số lượng dự kiến vào bảng cha
+                # Update tổng vào bảng cha
                 self.db.execute(text("UPDATE production_orders SET quantity_planned = :q WHERE id = :id"), {"q": total_qty_planned, "id": order_id})
 
+            current_qty_planned = total_qty_planned if (data.sizes is not None and total_qty_planned > 0) else old_qty_planned
+
             # 3. XỬ LÝ NGUYÊN VẬT LIỆU
-            if data.materials is not None: # Chỉ chạy nếu có gửi materials
-                print(f"Materials count: {len(data.materials)}") # <--- Log 3
+            if data.materials is not None:
+                print(f"Materials count: {len(data.materials)}")
                 for item in data.materials:
-                    
-                    # === TRƯỜNG HỢP A: ĐƠN ĐANG CHẠY (IN PROGRESS) -> Sửa bảng Reservation & Trừ kho ===
+                    req_qty = Decimal(str(item.quantity))
                     if status in ['in_progress', 'completed']:
-                        print("-> Branch: IN_PROGRESS") # <--- Log 5
-                        if item.id: 
-                            # Sửa dòng cũ
+                        print("-> Branch: IN_PROGRESS")
+                        
+                        if item.id:
                             old_res = self.db.execute(text("SELECT quantity_reserved, material_variant_id FROM production_material_reservations WHERE id=:id"), {"id": item.id}).fetchone()
                             if old_res:
-                                old_qty = float(old_res[0])
+                                old_qty = Decimal(str(old_res[0]))
                                 mat_id = old_res[1]
-                                new_qty_rounded = round(item.quantity, 4)
-                                old_qty_rounded = round(old_qty, 4)
-                                diff = round(new_qty_rounded - old_qty_rounded, 4)
+                                
+                                diff = req_qty - old_qty
 
-                                # Cập nhật kho nếu có chênh lệch
-                                if diff > 0: # Cần thêm -> Trừ kho
+                                if diff > 0:
                                     stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
-                                    if stock < diff: raise Exception(f"Kho không đủ hàng! Cần thêm {diff}, còn {stock}")
+                                    stock_dec = Decimal(str(stock))
+                                    
+                                    if stock_dec < diff: 
+                                        raise Exception(f"Kho không đủ hàng! Cần thêm {diff}, còn {stock_dec}")
+                                    
                                     self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": diff, "w": wid, "m": mat_id})
                                     self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Sửa lệnh: Cấp thêm')"), {"w": wid, "m": mat_id, "q": -diff, "ref": order_id})
-                                elif diff < 0: # Giảm -> Trả kho
-                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": abs(diff), "w": wid, "m": mat_id})
-                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Sửa lệnh: Hoàn trả')"), {"w": wid, "m": mat_id, "q": abs(diff), "ref": order_id})
                                 
-                                # Lưu vào reservation
-                                self.db.execute(text("UPDATE production_material_reservations SET quantity_reserved = :q, note = :n WHERE id = :id"), {"q": item.quantity, "n": item.note, "id": item.id})
+                                elif diff < 0:
+                                    return_qty = abs(diff)
+                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": return_qty, "w": wid, "m": mat_id})
+                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Sửa lệnh: Hoàn trả')"), {"w": wid, "m": mat_id, "q": return_qty, "ref": order_id})
+                                self.db.execute(text("UPDATE production_material_reservations SET quantity_reserved = :q, note = :n WHERE id = :id"), {"q": req_qty, "n": item.note, "id": item.id})
                         else: 
-                            # Thêm mới (khi đang chạy)
+                            # Thêm mới
                             if not item.material_variant_id: continue
                             mat_id = item.material_variant_id
-                            # Trừ kho ngay
+                            
                             stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
-                            if stock < item.quantity: raise Exception(f"Kho không đủ hàng mới! Cần {item.quantity}, còn {stock}")
+                            stock_dec = Decimal(str(stock))
+
+                            if stock_dec < req_qty: 
+                                raise Exception(f"Kho không đủ hàng mới! Cần {req_qty}, còn {stock_dec}")
                             
-                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": item.quantity, "w": wid, "m": mat_id})
-                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": wid, "m": mat_id, "q": -item.quantity, "ref": order_id})
+                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": wid, "m": mat_id})
+                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": wid, "m": mat_id, "q": -req_qty, "ref": order_id})
                             
-                            # Insert vào reservation
                             self.db.execute(text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"), 
-                                            {"oid": order_id, "mid": mat_id, "qty": item.quantity, "note": item.note})
+                                            {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note})
 
                     # === TRƯỜNG HỢP B: ĐƠN NHÁP (DRAFT) -> Sửa bảng BOM ===
                     else:
-                        print("-> Branch: DRAFT (BOM)") # <--- Log 6
-                        # Lấy BOM ID từ Product ID
+                        print("-> Branch: DRAFT (BOM)")
                         bom_id = self.db.execute(text("SELECT id FROM bom WHERE product_variant_id=:pid"), {"pid": pid}).scalar()
                         
                         if bom_id:
-                            # Tính lại định mức đơn vị (Backend lưu định mức/1 cái, nhưng Frontend gửi Tổng số lượng)
-                            # Định mức = Tổng cần / Số lượng đơn hàng
-                            print(f"   Calculating: RequestQty={item.quantity} / PlannedQty={qty_planned}")
-                            per_unit_qty = item.quantity / qty_planned if qty_planned > 0 else 0
-
+                            print(f"   Calculating: RequestQty={req_qty} / PlannedQty={current_qty_planned}")
+                            
+                            # Tính định mức bằng Decimal
+                            per_unit_qty = req_qty / current_qty_planned if current_qty_planned > 0 else Decimal("0")
+                            
                             if item.id:
                                 print(f"   Updating BOM Material ID={item.id}")
-                                # Update dòng BOM cũ
-                                # Lưu ý: item.id ở đây là ID của bom_materials (do hàm get_reservations trả về)
                                 self.db.execute(text("UPDATE bom_materials SET quantity_needed = :q, note = :n WHERE id = :id"), 
                                                 {"q": per_unit_qty, "n": item.note, "id": item.id})
                             else:
-                                # Thêm dòng BOM mới
                                 if item.material_variant_id:
                                     self.db.execute(text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
                                                     {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note})
 
-            # 4. Cập nhật SKU (Giữ nguyên)
+            # 4. Cập nhật SKU
             if hasattr(data, 'new_sku') and data.new_sku:
                 self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {"sku": data.new_sku, "pid": pid})
-            
-            # 5. Cập nhật Ảnh (Logic mới)
+
+            # 5. Cập nhật Ảnh
             if data.image_urls is not None:
-                # Xóa ảnh cũ
                 self.db.execute(text("DELETE FROM production_order_images WHERE production_order_id = :oid"), {"oid": order_id})
-                
-                # Thêm ảnh mới
                 if len(data.image_urls) > 0:
                     query_img = text("INSERT INTO production_order_images (production_order_id, image_url) VALUES (:oid, :url)")
                     for url in data.image_urls:
@@ -853,7 +848,7 @@ class ProductionService:
                     "material_variant_id": r[1], 
                     "sku": r[2], 
                     "name": r[3], 
-                    "quantity": round(float(r[4]), 4) if r[4] is not None else 0,
+                    "quantity": float(Decimal(str(r[4] or 0)).quantize(Decimal("0.0001"))), 
                     "note": r[5], 
                     "unit_price": r[6] or 0
                 } for r in results
@@ -872,13 +867,17 @@ class ProductionService:
             
             return [
                 {
-                    "id": r[0], # Đây là ID của dòng BOM (để biết đường update lại BOM)
+                    "id": r[0],
                     "material_variant_id": r[1],
-                    "sku": r[2], 
-                    "name": r[3],
-                    "quantity": round(float(r[4]) * qty_planned, 4), 
-                    "note": r[5], 
-                    "unit_price": r[6] or 0
+                    "sku": r[2], "name": r[3],
+                    
+                    # --- SỬA ĐOẠN NÀY: Dùng Decimal để nhân chính xác rồi mới làm tròn ---
+                    "quantity": float(
+                        (Decimal(str(r[4])) * Decimal(str(qty_planned))).quantize(Decimal("0.0001"))
+                    ),
+                    # -------------------------------------------------------------------
+                    
+                    "note": r[5], "unit_price": r[6] or 0
                 } for r in results
             ]
 
