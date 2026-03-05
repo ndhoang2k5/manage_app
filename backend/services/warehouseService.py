@@ -86,16 +86,17 @@ class WarehouseService:
         return [{"id": r[0], "name": r[1]} for r in results]
     
 
-    # 5. Tạo phiếu điều chuyển kho
+    # 5. Tạo phiếu điều chuyển kho (ĐÃ FIX LỖI SỐ LẺ)
     def create_transfer(self, data: TransferCreateRequest):
         try:
             if data.from_warehouse_id == data.to_warehouse_id:
                 raise Exception("Kho đi và Kho đến không được trùng nhau")
 
-            # Xử lý từng món hàng
             for item in data.items:
                 vid = item.product_variant_id
-                qty = item.quantity
+                
+                # Làm tròn số lượng cần chuyển (để tránh lỗi 49.200000001)
+                req_qty = round(float(item.quantity), 4)
 
                 # A. Kiểm tra Kho Đi có đủ hàng không
                 stock_check = self.db.execute(text("""
@@ -103,34 +104,32 @@ class WarehouseService:
                     WHERE warehouse_id = :wid AND product_variant_id = :vid
                 """), {"wid": data.from_warehouse_id, "vid": vid}).fetchone()
 
-                current_qty = stock_check[0] if stock_check else 0
-                if current_qty < qty:
-                    raise Exception(f"Kho nguồn không đủ hàng (ID {vid}). Có {current_qty}, cần {qty}")
+                # Lấy tồn kho và làm tròn luôn
+                current_qty = round(float(stock_check[0]), 4) if stock_check else 0.0
+                
+                # So sánh sau khi đã làm tròn
+                if current_qty < req_qty:
+                    raise Exception(f"Kho nguồn không đủ hàng (ID {vid}). Có {current_qty}, cần {req_qty}")
 
-                # B. Trừ Kho Đi
+                # B. Trừ Kho Đi (Dùng req_qty đã làm tròn)
                 self.db.execute(text("""
                     UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :qty
                     WHERE warehouse_id = :wid AND product_variant_id = :vid
-                """), {"qty": qty, "wid": data.from_warehouse_id, "vid": vid})
+                """), {"qty": req_qty, "wid": data.from_warehouse_id, "vid": vid})
 
+                # ... (Phần Ghi log và Cộng kho đến bên dưới giữ nguyên, nhớ dùng req_qty) ...
+                
                 # Ghi log Trừ
-                self.db.execute(text("""
-                    INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity)
-                    VALUES (:wid, :vid, 'transfer_out', :qty)
-                """), {"wid": data.from_warehouse_id, "vid": vid, "qty": -qty})
+                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity) VALUES (:wid, :vid, 'transfer_out', :qty)"), 
+                                {"wid": data.from_warehouse_id, "vid": vid, "qty": -req_qty})
 
-                # C. Cộng Kho Đến (Upsert)
-                self.db.execute(text("""
-                    INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
-                    VALUES (:wid, :vid, :qty)
-                    ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty
-                """), {"wid": data.to_warehouse_id, "vid": vid, "qty": qty})
+                # C. Cộng Kho Đến
+                self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:wid, :vid, :qty) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty"), 
+                                {"wid": data.to_warehouse_id, "vid": vid, "qty": req_qty})
 
                 # Ghi log Cộng
-                self.db.execute(text("""
-                    INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity)
-                    VALUES (:wid, :vid, 'transfer_in', :qty)
-                """), {"wid": data.to_warehouse_id, "vid": vid, "qty": qty})
+                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity) VALUES (:wid, :vid, 'transfer_in', :qty)"), 
+                                {"wid": data.to_warehouse_id, "vid": vid, "qty": req_qty})
 
             self.db.commit()
             return {"status": "success", "message": "Điều chuyển kho thành công!"}
