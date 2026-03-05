@@ -649,8 +649,26 @@ class ProductionService:
                                                     {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note})
 
             # 4. Cập nhật SKU
-            if hasattr(data, 'new_sku') and data.new_sku:
-                self.db.execute(text("UPDATE product_variants SET sku = :sku WHERE id = :pid"), {"sku": data.new_sku, "pid": pid})
+            if (hasattr(data, 'new_sku') and data.new_sku) or (hasattr(data, 'new_product_name') and data.new_product_name):
+                # Lấy PID
+                pid = self.db.execute(text("SELECT product_variant_id FROM production_orders WHERE id=:id"), {"id": order_id}).scalar()
+                
+                # Cập nhật bảng Variants
+                update_fields = {}
+                if data.new_sku: update_fields['sku'] = data.new_sku
+                if data.new_product_name: update_fields['name'] = data.new_product_name
+                
+                # Xây dựng câu SQL động
+                set_clause = ", ".join([f"variant_name = :{k}" if k=='name' else f"{k} = :{k}" for k in update_fields.keys()])
+                if set_clause:
+                    update_fields['pid'] = pid
+                    self.db.execute(text(f"UPDATE product_variants SET {set_clause} WHERE id = :pid"), update_fields)
+                    
+                    # Nếu muốn cập nhật luôn tên bảng cha (products) cho đồng bộ
+                    if data.new_product_name:
+                        parent_id = self.db.execute(text("SELECT product_id FROM product_variants WHERE id=:pid"), {"pid": pid}).scalar()
+                        self.db.execute(text("UPDATE products SET name = :name WHERE id = :pid"), {"name": data.new_product_name, "pid": parent_id})
+
 
             # 5. Cập nhật Ảnh
             if data.image_urls is not None:

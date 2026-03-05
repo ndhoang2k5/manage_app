@@ -107,3 +107,4 @@ class ProductionUpdateRequest(BaseModel):
     materials: List[ProductionMaterialUpdateItem] = []
     image_urls: Optional[List[str]] = None
     sizes: List[ProductionSizeUpdateItem] = []
+    new_product_name: Optional[str] = None
