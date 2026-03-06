@@ -564,18 +564,33 @@ class ProductionService:
             })
 
             total_qty_planned = Decimal("0")
+            
             if data.sizes is not None:
+                existing_items = self.db.execute(text("SELECT id FROM production_order_items WHERE production_order_id = :oid"), {"oid": order_id}).fetchall()
+                existing_ids = [r[0] for r in existing_items]
+                sent_ids = [s.id for s in data.sizes if s.id]
+                ids_to_delete = set(existing_ids) - set(sent_ids)
+                
+                for del_id in ids_to_delete:
+                    finished = self.db.execute(text("SELECT quantity_finished FROM production_order_items WHERE id = :id"), {"id": del_id}).scalar()
+                    if finished and finished > 0:
+                        raise Exception(f"Không thể xóa Size (ID {del_id}) vì đã có sản phẩm hoàn thành!")
+                    
+                    self.db.execute(text("DELETE FROM production_order_items WHERE id = :id"), {"id": del_id})
+                # -------------------------
+
+                # --- LOGIC THÊM / SỬA ---
                 for s in data.sizes:
                     qty_decimal = Decimal(str(s.quantity))
                     total_qty_planned += qty_decimal
+                    
                     if s.id:
                         self.db.execute(text("UPDATE production_order_items SET size_label=:size, quantity_planned=:qty, note=:note WHERE id=:id"),
                                         {"size": s.size, "qty": qty_decimal, "note": s.note, "id": s.id})
                     else:
+                        # Thêm size mới
                         self.db.execute(text("INSERT INTO production_order_items (production_order_id, size_label, quantity_planned, quantity_finished, note) VALUES (:oid, :size, :qty, 0, :note)"),
                                         {"oid": order_id, "size": s.size, "qty": qty_decimal, "note": s.note})
-                
-                # Update tổng vào bảng cha
                 self.db.execute(text("UPDATE production_orders SET quantity_planned = :q WHERE id = :id"), {"q": total_qty_planned, "id": order_id})
 
             current_qty_planned = total_qty_planned if (data.sizes is not None and total_qty_planned > 0) else old_qty_planned

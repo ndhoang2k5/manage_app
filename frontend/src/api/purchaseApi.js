@@ -5,7 +5,7 @@ const purchaseApi = {
     createSupplier: (data) => axiosClient.post('/suppliers/create', data),
     
     createPO: (data) => axiosClient.post('/purchases/create', data),
-    getAllPOs: () => axiosClient.get('/purchases'), 
+    getAllPOs: (search = '') => axiosClient.get(`/purchases`, { params: { search } }),
     getDetail: (id) => axiosClient.get(`/purchases/${id}`),
     update: (id, data) => axiosClient.put(`/purchases/${id}`, data),
     delete: (id) => axiosClient.delete(`/purchases/${id}`),

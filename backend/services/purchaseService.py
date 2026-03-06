@@ -106,17 +106,27 @@ class PurchaseService:
             self.db.rollback()
             raise Exception(f"Lỗi nhập hàng: {str(e)}")
 
-    # 3. Lấy danh sách PO
-    def get_all_orders(self):
-        query = text("""
+    # 3. Lấy danh sách PO (Cập nhật: Hỗ trợ Search)
+    def get_all_orders(self, search: str = None):
+        # Base query
+        sql = """
             SELECT po.id, po.po_code, s.name as supplier_name, w.name as warehouse_name, 
                    po.order_date, po.total_amount, po.status
             FROM purchase_orders po
             LEFT JOIN suppliers s ON po.supplier_id = s.id
             LEFT JOIN warehouses w ON po.warehouse_id = w.id
-            ORDER BY po.id DESC
-        """)
-        results = self.db.execute(query).fetchall()
+        """
+        
+        params = {}
+        
+        # Thêm điều kiện tìm kiếm nếu có
+        if search:
+            sql += " WHERE po.po_code LIKE :s OR s.name LIKE :s"
+            params["s"] = f"%{search}%"
+            
+        sql += " ORDER BY po.id DESC"
+        
+        results = self.db.execute(text(sql), params).fetchall()
         
         return [
             {

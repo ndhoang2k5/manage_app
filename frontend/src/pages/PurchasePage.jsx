@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio, Tag } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
@@ -28,16 +29,17 @@ const PurchasePage = () => {
 
     const [form] = Form.useForm();
     const [editForm] = Form.useForm(); 
+    const [searchText, setSearchText] = useState(''); 
 
     // 1. Tải dữ liệu
-    const fetchInitialData = async () => {
+    const fetchInitialData = async (search = '') => { // Nhận tham số search
         setLoading(true);
         try {
             const [suppRes, wareRes, prodRes, orderRes] = await Promise.all([
                 purchaseApi.getAllSuppliers(),
                 warehouseApi.getAllWarehouses(),
                 productApi.getAll(),
-                purchaseApi.getAllPOs()
+                purchaseApi.getAllPOs(search) // Truyền search vào API
             ]);
             setSuppliers(suppRes.data);
             setWarehouses(wareRes.data);
@@ -174,6 +176,11 @@ const PurchasePage = () => {
             },
         });
     };
+    // 6. Hàm xử lý tìm kiếm
+    const handleSearch = (value) => {
+        setSearchText(value);
+        fetchInitialData(value);
+    };
 
     // --- CỘT BẢNG ---
     const columns = [
@@ -197,9 +204,19 @@ const PurchasePage = () => {
 
     return (
         <div>
-            <Card title="Lịch Sử Nhập Hàng" bordered={false} style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
+            <Card title="Lịch Sử Nhập Hàng" bordered={false} 
                 extra={<Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Tạo Phiếu Nhập</Button>}
             >
+                {/* --- THANH TÌM KIẾM --- */}
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Input.Search 
+                        placeholder="Tìm theo Mã phiếu hoặc Nhà cung cấp..." 
+                        allowClear 
+                        onSearch={handleSearch} 
+                        style={{ width: 300 }} 
+                    />
+                </div>
+                {/* ---------------------- */}
                 <Table dataSource={orders} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
             </Card>
 

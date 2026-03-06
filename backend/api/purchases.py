@@ -5,6 +5,7 @@ from services.purchaseService import PurchaseService
 from drivers.dependencies import get_current_user, require_admin
 # Import đầy đủ các Entities
 from entities.purchase import SupplierCreateRequest, PurchaseOrderCreateRequest, SupplierResponse, PurchaseUpdateRequest
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -35,9 +36,9 @@ def create_purchase_order(request: PurchaseOrderCreateRequest, db: Session = Dep
 
 # 2. Lấy danh sách (List)
 @router.get("/purchases")
-def list_purchase_orders(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+def list_purchase_orders(search: Optional[str] = None, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = PurchaseService(db)
-    return service.get_all_orders()
+    return service.get_all_orders(search)
 
 # 3. Lấy chi tiết 1 phiếu 
 @router.get("/purchases/{po_id}")

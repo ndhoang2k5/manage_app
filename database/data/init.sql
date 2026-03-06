@@ -144,7 +144,7 @@ CREATE TABLE if not exists production_orders (
     start_date DATE,
     due_date DATE,
     progress_data TEXT,
-
+    note TEXT,
     shipping_fee DECIMAL(15, 2) DEFAULT 0,
     other_fee DECIMAL(15, 2) DEFAULT 0,
     labor_fee DECIMAL(15, 2) DEFAULT 0,

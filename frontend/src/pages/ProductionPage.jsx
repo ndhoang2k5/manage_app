@@ -251,6 +251,7 @@ const ProductionPage = () => {
             editForm.setFieldsValue({
                 code: data.code,
                 new_sku: data.sku,
+                new_product_name: data.product, 
                 start_date: dayjs(data.start_date),
                 due_date: dayjs(data.due_date),
                 shipping_fee: data.shipping_fee,
@@ -313,13 +314,19 @@ const ProductionPage = () => {
             }));
 
             // 2. Chuẩn bị dữ liệu Size
-            const cleanSizes = (values.sizes || []).map(s => ({
-                id: s.id ? parseInt(s.id) : null,
-                size: s.size,
-                quantity: parseNum(s.quantity), // Ép kiểu an toàn
-                note: s.note || ""
-            }));
-
+            const cleanSizes = (values.sizes || []).map(s => {
+                // Xử lý trường size: Nếu là mảng -> Lấy phần tử đầu tiên
+                let sizeVal = s.size;
+                if (Array.isArray(sizeVal)) {
+                    sizeVal = sizeVal[0] || ""; // Lấy cái đầu tiên
+                }
+                return {
+                    id: s.id ? parseInt(s.id) : null,
+                    size: String(sizeVal), // Đảm bảo là chuỗi
+                    quantity: parseInt(Number(s.quantity || 0)), 
+                    note: s.note || ""
+                };
+            });
             // 3. Chuẩn bị Ảnh
             const imageUrls = fileList.map(f => {
                 if (f.response && f.response.url) return f.response.url;
@@ -332,7 +339,7 @@ const ProductionPage = () => {
                 start_date: values.start_date ? values.start_date.format('YYYY-MM-DD') : null,
                 due_date: values.due_date ? values.due_date.format('YYYY-MM-DD') : null,
                 new_sku: values.new_sku,
-                
+                new_product_name: values.new_product_name,
                 shipping_fee: parseNum(values.shipping_fee),
                 other_fee: parseNum(values.other_fee),
                 labor_fee: parseNum(values.labor_fee),
@@ -756,13 +763,23 @@ const ProductionPage = () => {
                                                         <Select 
                                                             placeholder="Chọn NVL..." 
                                                             showSearch 
-                                                            optionFilterProp="children" 
+                                                            // --- SỬA ĐOẠN NÀY ---
+                                                            // 1. Định nghĩa logic lọc: So sánh từ khóa nhập vào với prop 'label'
+                                                            filterOption={(input, option) =>
+                                                                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                                                            }
                                                             dropdownMatchSelectWidth={false}
                                                             size="large"
                                                             onChange={(val) => handleMaterialSelect(val, name)}
                                                         >
                                                             {warehouseMaterials.map(p => (
-                                                                <Select.Option key={p.id} value={p.id}>
+                                                                <Select.Option 
+                                                                    key={p.id} 
+                                                                    value={p.id}
+                                                                    // 2. Thêm prop 'label' chứa text thuần túy (SKU + Tên) để tìm kiếm
+                                                                    label={`${p.sku} ${p.variant_name}`} 
+                                                                >
+                                                                    {/* Phần hiển thị giao diện đẹp giữ nguyên */}
                                                                     <div style={{display: 'flex', justifyContent: 'space-between', width: '500px'}}>
                                                                         <span>
                                                                             <b style={{color:'#1677ff'}}>[{p.sku}]</b> {p.variant_name} 
@@ -817,6 +834,7 @@ const ProductionPage = () => {
                     <Row gutter={16}>
                         <Col span={8}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item></Col>
                         <Col span={8}><Form.Item label="Mã SKU Sản phẩm" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item></Col>
+                        <Col span={6}><Form.Item label="Tên Sản Phẩm" name="new_product_name" rules={[{ required: true }]}><Input /></Form.Item></Col>
                         <Col span={8}>
                              <Row gutter={8}>
                                 <Col span={12}><Form.Item label="Bắt đầu" name="start_date"><DatePicker style={{width:'100%'}}/></Form.Item></Col>
@@ -850,53 +868,97 @@ const ProductionPage = () => {
                     <Form.List name="sizes">
                         {(fields, { add, remove }) => (
                             <div style={{marginBottom: 20}}>
-                                <Row gutter={[16, 8]}>
+                                <Row gutter={[12, 12]}>
                                     {fields.map(({ key, name, ...restField }) => (
                                         <Col span={12} key={key}>
-                                            <Card size="small" style={{background: '#f9f9f9'}}>
-                                                <Space align="baseline">
+                                            <Card 
+                                                size="small" 
+                                                style={{background: '#f9f9f9', border: '1px solid #d9d9d9'}}
+                                                // Nút xóa nằm ở góc trên bên phải của Card
+                                                extra={
+                                                    <DeleteOutlined 
+                                                        onClick={() => remove(name)} 
+                                                        style={{color: 'red', cursor: 'pointer'}} 
+                                                        title="Xóa size này"
+                                                    />
+                                                }
+                                            >
+                                                <Space direction="vertical" style={{width: '100%'}} size="small">
                                                     {/* Hidden ID */}
                                                     <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
                                                     
-                                                    {/* Ô Size */}
-                                                    <Form.Item {...restField} name={[name, 'size']} label="Size" style={{marginBottom: 0, width: 80}} rules={[{required: true}]}>
-                                                        <Input />
-                                                    </Form.Item>
-                                                    
-                                                    {/* Ô Số lượng (Hiển thị số đẹp) */}
-                                                    <Form.Item {...restField} name={[name, 'quantity']} label="SL" style={{marginBottom: 0, width: 100}} rules={[{required: true}]}>
-                                                        <InputNumber 
-                                                            style={{width: '100%'}} 
-                                                            min="0"
-                                                            step="0.0001" 
-                                                            stringMode 
-                                                            
-                                                            // --- SỬA ĐOẠN FORMATTER NÀY ---
-                                                            formatter={value => {
-                                                                if (!value) return '';
-                                                                const strValue = `${value}`;
-                                                                const parts = strValue.split('.'); // Tách phần nguyên và phần thập phân
+                                                    <div style={{display: 'flex', gap: 10}}>
+                                                        {/* Ô Chọn Size */}
+                                                        <Form.Item 
+                                                            {...restField} 
+                                                            name={[name, 'size']} 
+                                                            label="Size" 
+                                                            style={{marginBottom: 0, flex: 1}} 
+                                                            rules={[{required: true, message: 'Thiếu size'}]}
+                                                        >
+                                                            <Select 
+                                                                mode="tags" 
+                                                                placeholder="Chọn/Nhập size" 
+                                                                style={{width: '100%'}}
+                                                                tokenSeparators={[',']}
+                                                            >
+                                                                {/* sizeStandards lấy từ biến global ở đầu file */}
+                                                                {sizeStandards.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+                                                            </Select>
+                                                        </Form.Item>
+                                                        
+                                                        {/* Ô Số lượng (Hiển thị số đẹp) */}
+                                                        <Form.Item {...restField} name={[name, 'quantity']} label="SL" style={{marginBottom: 0, width: 100}} rules={[{required: true}]}>
+                                                            <InputNumber 
+                                                                style={{width: '100%'}} 
+                                                                min="0"
+                                                                step="0.0001" 
+                                                                stringMode 
                                                                 
-                                                                // Chỉ thêm dấu phẩy hàng nghìn cho phần nguyên (parts[0])
-                                                                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                                                                
-                                                                // Gộp lại (Nếu có phần thập phân thì nối vào)
-                                                                return parts.join('.');
-                                                            }}
-                                                            // -----------------------------
+                                                                // --- SỬA ĐOẠN FORMATTER NÀY ---
+                                                                formatter={value => {
+                                                                    if (!value) return '';
+                                                                    const strValue = `${value}`;
+                                                                    const parts = strValue.split('.'); // Tách phần nguyên và phần thập phân
+                                                                    
+                                                                    // Chỉ thêm dấu phẩy hàng nghìn cho phần nguyên (parts[0])
+                                                                    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                                                                    
+                                                                    // Gộp lại (Nếu có phần thập phân thì nối vào)
+                                                                    return parts.join('.');
+                                                                }}
+                                                                // -----------------------------
 
-                                                            parser={value => value.replace(/\$\s?|(,*)/g, '')} // Xóa dấu phẩy khi lưu giá trị
-                                                        />
-                                                    </Form.Item>
+                                                                parser={value => value.replace(/\$\s?|(,*)/g, '')} // Xóa dấu phẩy khi lưu giá trị
+                                                            />
+                                                        </Form.Item>
+                                                    </div>
 
                                                     {/* Ô Ghi chú */}
-                                                    <Form.Item {...restField} name={[name, 'note']} label="Ghi chú" style={{marginBottom: 0, width: 120}}>
-                                                        <Input />
+                                                    <Form.Item 
+                                                        {...restField} 
+                                                        name={[name, 'note']} 
+                                                        label="Ghi chú" 
+                                                        style={{marginBottom: 0}}
+                                                    >
+                                                        <Input placeholder="Note cho size này" />
                                                     </Form.Item>
                                                 </Space>
                                             </Card>
                                         </Col>
                                     ))}
+                                    
+                                    {/* Nút Thêm Size Mới - Dạng Card đứt nét */}
+                                    <Col span={12}>
+                                        <Button 
+                                            type="dashed" 
+                                            onClick={() => add()} 
+                                            style={{width: '100%', height: '100%', minHeight: 130, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}}
+                                            icon={<PlusOutlined style={{fontSize: 24}} />}
+                                        >
+                                            Thêm Size Mới
+                                        </Button>
+                                    </Col>
                                 </Row>
                             </div>
                         )}
