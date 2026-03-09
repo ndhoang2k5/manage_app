@@ -127,9 +127,9 @@ class ProductionService:
             query_order = text("""
                 INSERT INTO production_orders (
                     code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date, 
-                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee, created_by, progress_data
+                    shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee, created_by, progress_data, note
                 )
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print, :uid, :progress)
+                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print, :uid, :progress, :note)
             """)
             self.db.execute(query_order, {
                 "code": data.order_code, "wid": data.warehouse_id, "pid": product_variant_id,
@@ -137,7 +137,8 @@ class ProductionService:
                 "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee,
                 "mkt": data.marketing_fee, "pack": data.packaging_fee, "print": data.print_fee,
                 "uid": user_id if user_id else None,
-                "progress": progress_json
+                "progress": progress_json,
+                "note": data.note if data.note else ""
             })
             order_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
 
@@ -438,8 +439,9 @@ class ProductionService:
                    po.quantity_planned, po.start_date, po.due_date,
                    po.product_variant_id,
                    po.shipping_fee, po.other_fee,
-                   po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee,
-                   po.status
+                   po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee, 
+                   po.status,
+                   po.note
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id
@@ -528,14 +530,14 @@ class ProductionService:
             
             "shipping_fee": header[9],
             "other_fee": header[10],
-            "total_material_cost": total_material_cost, # Tổng tiền mới
             "labor_fee": header[11],
             "marketing_fee": header[12],
             "packaging_fee": header[13],
             "print_fee": header[14],
-            
+            "note": header[16] if header[16] else "",
+            "total_material_cost": total_material_cost,
             "sizes": list_sizes,
-            "materials": list_materials, # Danh sách mới
+            "materials": list_materials,
             "images": list_imgs
         }
     
@@ -554,13 +556,13 @@ class ProductionService:
                 UPDATE production_orders
                 SET shipping_fee = :ship, other_fee = :other, labor_fee = :labor, print_fee = :print,
                     marketing_fee = :mkt, packaging_fee = :pack,
-                    start_date = :start, due_date = :due
+                    start_date = :start, due_date = :due, note = :note
                 WHERE id = :id
             """)
             self.db.execute(query_header, {
                 "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee, "print": data.print_fee,
                 "mkt": data.marketing_fee, "pack": data.packaging_fee,
-                "start": data.start_date, "due": data.due_date, "id": order_id
+                "start": data.start_date, "due": data.due_date, "id": order_id, "note": data.note if data.note else ""
             })
 
             total_qty_planned = Decimal("0")

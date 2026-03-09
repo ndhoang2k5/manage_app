@@ -33,6 +33,7 @@ class ProductionOrderCreateRequest(BaseModel):
     quantity_planned: int    # Số lượng (100 cái)
     start_date: date
     due_date: date
+    note: Optional[str] = ""
 
 
 # --- MỚI THÊM: YÊU CẦU THEO SIZE VÀ SỐ LƯỢNG ---
@@ -66,6 +67,7 @@ class QuickProductionRequest(BaseModel):
     labor_fee: float = 0
     marketing_fee: float = 0
     packaging_fee: float = 0
+    note: Optional[str] = ""
 
 
 class ReceiveGoodsRequest(BaseModel):
@@ -108,3 +110,4 @@ class ProductionUpdateRequest(BaseModel):
     image_urls: Optional[List[str]] = None
     sizes: Optional[List[ProductionSizeUpdateItem]] = None
     new_product_name: Optional[str] = None
+    note: Optional[str] = ""

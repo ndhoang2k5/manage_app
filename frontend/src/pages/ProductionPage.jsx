@@ -196,7 +196,8 @@ const ProductionPage = () => {
                 labor_fee: Number(values.labor_fee || 0),
                 marketing_fee: Number(values.marketing_fee || 0),
                 packaging_fee: Number(values.packaging_fee || 0),
-                print_fee: Number(values.print_fee || 0)
+                print_fee: Number(values.print_fee || 0), 
+                note: values.note || ""
             };
 
             await productionApi.createQuickOrder(payload);
@@ -260,6 +261,7 @@ const ProductionPage = () => {
                 marketing_fee: data.marketing_fee || 0,
                 packaging_fee: data.packaging_fee || 0,
                 print_fee: data.print_fee || 0,
+                note: data.note || "",
                 
                 sizes: (sizes || []).map(s => ({
                     id: s.id,
@@ -346,7 +348,7 @@ const ProductionPage = () => {
                 marketing_fee: parseNum(values.marketing_fee),
                 packaging_fee: parseNum(values.packaging_fee),
                 print_fee: parseNum(values.print_fee),
-                
+                note: values.note || "",
                 image_urls: imageUrls,
                 materials: cleanMaterials,
                 sizes: cleanSizes
@@ -1073,7 +1075,13 @@ const ProductionPage = () => {
                     {/* --- 5. CHI PHÍ --- */}
                     <Divider orientation="left">Cập nhật Chi phí</Divider>
                     <Row gutter={16}><Col span={8}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row>
-                    
+                    <Row>
+                        <Col span={24}>
+                            <Form.Item label="Ghi chú chung (Phụ phí/Đơn hàng)" name="note">
+                                <Input.TextArea rows={2} placeholder="Nhập ghi chú cho đơn hàng này..." />
+                            </Form.Item>
+                        </Col>
+                    </Row>
                     <Button type="primary" htmlType="submit" block size="large">Lưu Thay Đổi</Button>
                 </Form>
             </Modal>
