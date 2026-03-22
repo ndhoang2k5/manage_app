@@ -9,6 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from urllib.parse import quote
 
 
 class ReportService:
@@ -252,7 +253,9 @@ class ReportService:
         output.seek(0)
 
         # Trả về file
+        # Use RFC 5987 filename* for Unicode names; keep ASCII fallback for compatibility.
+        encoded_name = quote(f"TonKho_{central_name.replace(' ', '')}.xlsx")
         headers = {
-            'Content-Disposition': f'attachment; filename="TonKho_{central_name.replace(" ", "")}.xlsx"'
+            "Content-Disposition": f"attachment; filename=\"TonKho.xlsx\"; filename*=UTF-8''{encoded_name}"
         }
         return StreamingResponse(output, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
