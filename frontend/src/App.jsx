@@ -26,11 +26,22 @@ const { Title, Text } = Typography;
 const App = () => {
   // --- KIỂM TRA ĐĂNG NHẬP ---
   const token = localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  let user = {};
+  try {
+      const storedUser = localStorage.getItem('user');
+      user = storedUser ? JSON.parse(storedUser) : {};
+  } catch (e) {
+      console.error("Lỗi parse user", e);
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login'; // Đá về login nếu lỗi
+  }
 
-  // Nếu không có token -> Trả về trang Login ngay lập tức
+  // Chặn ngay từ đầu nếu không có token
   if (!token) {
-      return <LoginPage />;
+      // return <LoginPage /> (Nếu bạn import LoginPage)
+      window.location.href = '/login'; 
+      return null;
   }
   // ---------------------------
 

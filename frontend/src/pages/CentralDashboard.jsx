@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Card, Row, Col, Statistic, Tabs, Table, Tag, message, Spin, Typography, Alert, Button } from 'antd';
-import { GoldOutlined, ShopOutlined, ContainerOutlined, RocketOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Row, Col, Card, Statistic, Table, Typography, Tag, Spin, Alert, List, Button, Tabs } from 'antd';
+import { ShopOutlined, CheckCircleOutlined, SyncOutlined, DatabaseOutlined, DollarOutlined, GoldOutlined, ContainerOutlined, RocketOutlined, DownloadOutlined } from '@ant-design/icons';
 import reportApi from '../api/reportApi';
+import axiosClient from '../api/axiosClient'; 
 import dayjs from 'dayjs';
 const { Title } = Typography;
-
 const CentralDashboard = () => {
+
     const { id } = useParams(); 
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState(null);
+    const [error, setError] = useState(null);
+
 
     const fetchDashboardData = async () => {
         setLoading(true);
@@ -27,13 +30,46 @@ const CentralDashboard = () => {
     };
 
     useEffect(() => {
-        fetchDashboardData();
+        let isMounted = true; // Tránh lỗi bộ nhớ khi chuyển trang nhanh
+
+        const fetchDashboard = async () => {
+            setLoading(true); // Bật xoay
+            setError(null);   // Reset lỗi cũ
+            try {
+                const res = await reportApi.getCentralDashboard(id);
+                if (isMounted) {
+                    setData(res.data);
+                }
+            } catch (err) {
+                if (isMounted) {
+                    console.error("Lỗi API Dashboard:", err);
+                    // Lấy câu thông báo lỗi từ Backend (nếu có)
+                    const errorMsg = err.response?.data?.detail || "Lỗi tải báo cáo! Vui lòng thử lại.";
+                    setError(errorMsg);
+                    // Hiển thị popup lỗi để user biết (Tùy chọn)
+                    message.error(errorMsg);
+                }
+            } finally {
+                // block finally LUÔN LUÔN CHẠY dù thành công hay lỗi
+                // Đảm bảo tắt vòng xoay
+                if (isMounted) {
+                    setLoading(false); 
+                }
+            }
+        };
+
+        if (id) {
+            fetchDashboard();
+        }
+
+        return () => { isMounted = false; };
     }, [id]);
+
 
     if (loading) return <div style={{height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center'}}><Spin size="large" tip="Đang tải dữ liệu..." /></div>;
     if (errorMsg) return <div style={{padding: 40}}><Alert message="Gặp lỗi khi tải dữ liệu" description={errorMsg} type="error" showIcon action={<Button size="small" type="primary" danger onClick={fetchDashboardData} icon={<ReloadOutlined />}>Thử lại</Button>} /></div>;
     if (!data) return <div>Không có dữ liệu hiển thị</div>;
-
+    
     // --- CẤU HÌNH CỘT BẢNG ---
 
     // 1. Bảng Tồn kho (Đã thêm cột Ghi chú)
@@ -72,8 +108,54 @@ const CentralDashboard = () => {
 
     const totalInventoryValue = data.total_inventory.reduce((sum, item) => sum + item.total_value, 0);
 
+    const handleExportExcel = () => {
+        // Vì API trả về File nhị phân (Binary), cách đơn giản nhất là mở URL trên trình duyệt
+        // Hoặc dùng thẻ <a> ẩn. Ở đây dùng window.open cho gọn.
+        
+        const token = localStorage.getItem('token');
+        // Gọi thẳng URL API kèm theo token (Cách này hơi trick nếu API chặn auth qua header)
+        // Cách chuẩn nhất với Axios là dùng responseType: 'blob'
+        
+        axiosClient.get(`/reports/export-inventory/${id}`, { responseType: 'blob' })
+            .then((response) => {
+                // Tạo một đường link ảo để tải file
+                const url = window.URL.createObjectURL(new Blob([response.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                
+                // Lấy tên file từ Header (nếu có) hoặc đặt mặc định
+                let fileName = `TonKho_${data?.info?.name || 'Kho'}.xlsx`;
+                
+                link.setAttribute('download', fileName);
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+            })
+            .catch(err => {
+                console.error(err);
+                alert("Lỗi khi xuất Excel!");
+            });
+    };
+
     return (
-        <div>
+        <div style={{ background: '#f0f2f5', minHeight: '100vh', padding: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+                <Title level={2} style={{ margin: 0 }}>
+                    <ShopOutlined /> {data.info.name} <Tag color="blue">{data.info.brand}</Tag>
+                </Title>
+                
+                {/* NÚT XUẤT EXCEL */}
+                <Button 
+                    type="primary" 
+                    icon={<DownloadOutlined />} 
+                    size="large"
+                    onClick={handleExportExcel}
+                    style={{ background: '#107c41', borderColor: '#107c41' }}
+                >
+                    Xuất Excel Tồn Kho Toàn Hệ Thống
+                </Button>
+            </div>
+            
             <div style={{ marginBottom: 24 }}>
                 <Title level={3} style={{ margin: 0 }}>📊 Dashboard: {data.info.name}</Title>
                 <span style={{ color: '#888' }}>Thương hiệu: {data.info.brand}</span>

@@ -3,8 +3,13 @@
 # Báo cáo theo SKU
 # Báo cáo sản xuất
 
+import io
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
 
 class ReportService:
     def __init__(self, db: Session):
@@ -161,3 +166,93 @@ class ReportService:
             "production": list_orders,
             "total_asset_value": sum(item['value'] for item in list_stocks)
         }
+    
+    def export_inventory_excel(self, central_warehouse_id: int):
+        # 1. Lấy thông tin Brand của Kho Tổng này
+        info = self.db.execute(text("SELECT brand_id, name FROM warehouses WHERE id = :id AND is_central = 1"), {"id": central_warehouse_id}).fetchone()
+        if not info:
+            raise Exception("Không tìm thấy Kho Tổng!")
+        brand_id = info[0]
+        central_name = info[1]
+
+        # 2. Lấy danh sách toàn bộ tồn kho của Brand này (Cả Kho Tổng + Xưởng Con)
+        # Bỏ qua những mã có tồn kho = 0 để file không bị rác
+        query = text("""
+            SELECT w.name as warehouse_name, 
+                   pv.sku, 
+                   pv.variant_name, 
+                   p.base_unit, 
+                   s.quantity_on_hand,
+                   pv.cost_price,
+                   (s.quantity_on_hand * pv.cost_price) as total_value,
+                   pv.note
+            FROM inventory_stocks s
+            JOIN warehouses w ON s.warehouse_id = w.id
+            JOIN product_variants pv ON s.product_variant_id = pv.id
+            JOIN products p ON pv.product_id = p.id
+            WHERE w.brand_id = :bid AND s.quantity_on_hand > 0
+            ORDER BY w.is_central DESC, w.name ASC, pv.variant_name ASC
+        """)
+        stocks = self.db.execute(query, {"bid": brand_id}).fetchall()
+
+        # 3. Tạo file Excel bằng openpyxl
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "BaoCaoTonKho"
+
+        # --- Định dạng style ---
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        center_align = Alignment(horizontal="center", vertical="center")
+
+        # --- Viết Tiêu đề báo cáo ---
+        ws.merge_cells('A1:G1')
+        ws['A1'] = f"BÁO CÁO TỒN KHO NGUYÊN PHỤ LIỆU - {central_name.upper()}"
+        ws['A1'].font = Font(bold=True, size=14)
+        ws['A1'].alignment = center_align
+
+        # --- Viết Header các cột ---
+        headers = ["Kho/Xưởng", "Mã SKU", "Tên Nguyên Phụ Liệu", "ĐVT", "Tồn Kho", "Đơn Giá Vốn", "Thành Tiền", "Ghi chú"]
+        ws.append([]) # Dòng trống
+        ws.append(headers)
+        
+        # Format Header row (Dòng 3)
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=3, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+
+        # --- Đổ dữ liệu vào các dòng ---
+        for row_data in stocks:
+            ws.append([
+                row_data[0], # Kho/Xưởng
+                row_data[1], # SKU
+                row_data[2], # Tên
+                row_data[3], # ĐVT
+                float(row_data[4]), # Tồn
+                float(row_data[5]), # Giá
+                float(row_data[6]), # Tổng tiền
+                row_data[7] or ""   # Note
+            ])
+
+        # --- Căn chỉnh độ rộng cột cho đẹp ---
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 40
+        ws.column_dimensions['D'].width = 10
+        ws.column_dimensions['E'].width = 12
+        ws.column_dimensions['F'].width = 15
+        ws.column_dimensions['G'].width = 18
+        ws.column_dimensions['H'].width = 20
+
+        # 4. Lưu file Excel vào bộ nhớ đệm (RAM) để trả về thẳng HTTP Response
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        # Trả về file
+        headers = {
+            'Content-Disposition': f'attachment; filename="TonKho_{central_name.replace(" ", "")}.xlsx"'
+        }
+        return StreamingResponse(output, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

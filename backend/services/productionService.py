@@ -6,7 +6,7 @@ import json
 from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem, ProductionMaterialUpdateItem, ProductionSizeUpdateItem
 from typing import List, Optional, Dict
 from decimal import Decimal
-
+import time
 
 class ProductionService:
     def __init__(self, db: Session):
@@ -356,6 +356,7 @@ class ProductionService:
         if warehouse_name:
             conditions.append("w.name = :wname")
             params["wname"] = warehouse_name
+        conditions.append("po.status != 'cancelled'")
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -707,15 +708,21 @@ class ProductionService:
     def delete_production_order(self, order_id: int):
         try:
             # A. Lấy thông tin lệnh
-            order = self.db.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+            order = self.db.execute(text("SELECT status, warehouse_id, product_variant_id, quantity_finished, code FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Đơn hàng không tồn tại")
-            
-            status = order[6] 
-            warehouse_id = order[2]
-            product_variant_id = order[3] # Lấy ID sản phẩm để xóa sau này
-            
-            # B. Hoàn trả NVL (Logic giữ nguyên)
+
+            status = order[0] 
+            warehouse_id = order[1]
+            product_variant_id = order[2] 
+            qty_finished = float(order[3]) if order[3] else 0.0
+            order_code = order[4]
+
+            if status == 'cancelled':
+                raise Exception("Đơn hàng này đã bị hủy từ trước.")
+
+            # B. Hoàn trả NVL & Thành phẩm (Chỉ áp dụng nếu đơn đã chạy)
             if status in ['in_progress', 'completed']:
+                # 1. Hoàn trả NVL đang giữ chỗ
                 reservations = self.db.execute(text("""
                     SELECT material_variant_id, quantity_reserved 
                     FROM production_material_reservations 
@@ -724,21 +731,24 @@ class ProductionService:
 
                 for res in reservations:
                     mat_id = res[0]
-                    qty_return = res[1]
+                    qty_return = float(res[1]) if res[1] else 0.0
                     
-                    self.db.execute(text("""
-                        UPDATE inventory_stocks 
-                        SET quantity_on_hand = quantity_on_hand + :qty
-                        WHERE warehouse_id = :wid AND product_variant_id = :mid
-                    """), {"qty": qty_return, "wid": warehouse_id, "mid": mat_id})
+                    if qty_return > 0:
+                        # Cộng lại tồn kho
+                        self.db.execute(text("""
+                            UPDATE inventory_stocks 
+                            SET quantity_on_hand = quantity_on_hand + :qty
+                            WHERE warehouse_id = :wid AND product_variant_id = :mid
+                        """), {"qty": qty_return, "wid": warehouse_id, "mid": mat_id})
 
-                    self.db.execute(text("""
-                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                        VALUES (:wid, :mid, 'production_in', :qty, :ref, 'Hoàn trả do xóa lệnh')
-                    """), {"wid": warehouse_id, "mid": mat_id, "qty": qty_return, "ref": order_id})
+                        # Ghi log hoàn trả
+                        self.db.execute(text("""
+                            INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
+                            VALUES (:wid, :mid, 'production_in', :qty, :ref, 'Hoàn trả NVL do Hủy đơn')
+                        """), {"wid": warehouse_id, "mid": mat_id, "qty": qty_return, "ref": order_id})
 
-                if order[5] > 0: # quantity_finished
-                     qty_finished = order[5]
+                # 2. Hoàn trả (Trừ đi) Thành phẩm đã nhập kho (nếu có)
+                if qty_finished > 0:
                      self.db.execute(text("""
                         UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :qty
                         WHERE warehouse_id = :wid AND product_variant_id = :pid
@@ -746,38 +756,34 @@ class ProductionService:
                      
                      self.db.execute(text("""
                         INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                        VALUES (:wid, :pid, 'production_out', :qty, :ref, 'Hủy nhập TP do xóa lệnh')
+                        VALUES (:wid, :pid, 'production_out', :qty, :ref, 'Hủy nhập TP do Hủy đơn')
                     """), {"wid": warehouse_id, "pid": product_variant_id, "qty": -qty_finished, "ref": order_id})
 
-            # C. Xóa dữ liệu bảng con của Lệnh SX
-            self.db.execute(text("DELETE FROM production_receive_logs WHERE production_order_id = :id"), {"id": order_id})
-            self.db.execute(text("DELETE FROM production_order_images WHERE production_order_id = :id"), {"id": order_id})
-            self.db.execute(text("DELETE FROM production_material_reservations WHERE production_order_id = :id"), {"id": order_id})
-            self.db.execute(text("DELETE FROM production_order_items WHERE production_order_id = :id"), {"id": order_id})
+            # C. ĐỔI TRẠNG THÁI VÀ GIẢI PHÓNG MÃ (CHỐNG TRÙNG LẶP)
+            # Tạo chuỗi duy nhất từ thời gian hiện tại
+            timestamp_suffix = f"_C_{int(time.time())}"
             
-            # D. Xóa Lệnh chính
-            self.db.execute(text("DELETE FROM production_orders WHERE id = :id"), {"id": order_id})
+            # Cắt ngắn mã cũ để không vượt quá giới hạn VARCHAR(50)
+            short_order_code = str(order_code)[:35]
+            new_code = f"{short_order_code}{timestamp_suffix}"
+            
+            # Đổi mã lệnh và chuyển trạng thái
+            self.db.execute(text("UPDATE production_orders SET status = 'cancelled', code = :new_code WHERE id = :id"), 
+                            {"new_code": new_code, "id": order_id})
 
-            # --- E. (MỚI) XÓA SẢN PHẨM & SKU NẾU ĐƯỢC TẠO TỪ QUICK ORDER ---
-            # Để tránh lỗi trùng SKU khi tạo lại, ta thử xóa sản phẩm đó đi.
-            # Dùng try/catch để nếu sản phẩm này đang dùng ở đơn khác thì bỏ qua không xóa.
-            try:
-                # 1. Xóa BOM (Công thức) trước
-                self.db.execute(text("""
-                    DELETE FROM bom_materials 
-                    WHERE bom_id IN (SELECT id FROM bom WHERE product_variant_id = :pid)
-                """), {"pid": product_variant_id})
-                
-                self.db.execute(text("DELETE FROM bom WHERE product_variant_id = :pid"), {"pid": product_variant_id})
+            # Đổi mã SKU sản phẩm
+            old_sku = self.db.execute(text("SELECT sku FROM product_variants WHERE id = :pid"), {"pid": product_variant_id}).scalar()
+            if old_sku:
+                short_sku = str(old_sku)[:35]
+                new_sku = f"{short_sku}{timestamp_suffix}"
+                self.db.execute(text("UPDATE product_variants SET sku = :new_sku WHERE id = :pid"), 
+                                {"new_sku": new_sku, "pid": product_variant_id})
 
-                # 2. Xóa Variant (SKU)
-                self.db.execute(text("DELETE FROM product_variants WHERE id = :pid"), {"pid": product_variant_id})
-            except Exception as e:
-                # Nếu không xóa được (do dính ràng buộc khác) thì thôi, in ra log để biết
-                print(f"Warning: Không thể xóa SKU sau khi xóa đơn (có thể đang được dùng nơi khác): {str(e)}")
+            # Đưa số lượng giữ chỗ (reservations) về 0 để số liệu báo cáo không bị ảo
+            self.db.execute(text("UPDATE production_material_reservations SET quantity_reserved = 0 WHERE production_order_id = :id"), {"id": order_id})
 
             self.db.commit()
-            return {"status": "success", "message": "Đã xóa đơn hàng, hoàn kho và dọn dẹp SKU."}
+            return {"status": "success", "message": "Đã Hủy đơn hàng và hoàn kho thành công. Bạn có thể dùng lại mã này."}
 
         except Exception as e:
             self.db.rollback()
