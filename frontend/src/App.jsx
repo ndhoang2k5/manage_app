@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
 import { Layout, Menu, theme, Avatar, Space, Typography, Spin, Button, Tag } from 'antd';
 import { 
   DatabaseOutlined, SkinOutlined, ShoppingCartOutlined, ShopOutlined,
@@ -34,14 +34,18 @@ const App = () => {
       console.error("Lỗi parse user", e);
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login'; // Đá về login nếu lỗi
   }
 
-  // Chặn ngay từ đầu nếu không có token
+  // Chặn ngay từ đầu nếu không có token (không dùng hard reload để tránh vòng lặp)
   if (!token) {
-      // return <LoginPage /> (Nếu bạn import LoginPage)
-      window.location.href = '/login'; 
-      return null;
+      return (
+        <Router>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </Router>
+      );
   }
   // ---------------------------
 
@@ -139,6 +143,7 @@ const App = () => {
           <Content style={{ margin: '24px 16px', overflow: 'initial' }}>
             <div style={{ padding: 24, minHeight: '80vh' }}>
               <Routes>
+                <Route path="/login" element={<Navigate to="/" replace />} />
                 <Route path="/dashboard/:id" element={<CentralDashboard />} />
                 <Route path="/workshop/:id" element={<WorkshopDetail />} />
                 <Route path="/" element={<InventoryPage />} />
