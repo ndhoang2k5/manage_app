@@ -25,7 +25,9 @@ axiosClient.interceptors.response.use((response) => {
         // Nếu Token hết hạn hoặc sai -> Xóa token và đá về trang Login
         localStorage.removeItem('token');
         localStorage.removeItem('user');
-        window.location.href = '/login'; 
+        if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+        }
     }
     return Promise.reject(error);
 });

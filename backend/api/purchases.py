@@ -48,7 +48,7 @@ def get_po_detail(po_id: int, db: Session = Depends(get_db), user: dict = Depend
         return service.get_po_detail(po_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
-
+ 
 # 4. Cập nhật phiếu (PUT)
 @router.put("/purchases/{po_id}")
 def update_purchase_order(po_id: int, request: PurchaseUpdateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):

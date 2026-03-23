@@ -1,7 +1,13 @@
 # --- START OF FILE authService.py ---
+from datetime import timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from security import verify_password, create_access_token, get_password_hash
+from security import (
+    verify_password,
+    create_access_token,
+    get_password_hash,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+)
 
 class AuthService:
     def __init__(self, db: Session):
@@ -40,7 +46,10 @@ class AuthService:
             "role": role,
             "wid": warehouse_id # Quan trọng để phân quyền
         }
-        access_token = create_access_token(token_data)
+        access_token = create_access_token(
+            token_data,
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
         
         return {
             "access_token": access_token,
