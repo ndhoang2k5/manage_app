@@ -50,8 +50,8 @@ services:
     container_name: fashion_nginx
     restart: always
     ports:
-      - "80:80"   # HTTP (Để chuyển hướng sang HTTPS)
-      - "443:443" # HTTPS (SSL)
+      - "45.117.177.181:80:80"
+      - "45.117.177.181:443:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - ./certbot/conf:/etc/letsencrypt
