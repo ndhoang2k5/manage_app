@@ -15,6 +15,7 @@ def list_orders(
     limit: int = 10, 
     search: Optional[str] = None, 
     warehouse: Optional[str] = None,
+    status: Optional[str] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user) # 1. Bắt buộc đăng nhập
 ):
@@ -23,7 +24,7 @@ def list_orders(
 
     service = ProductionService(db)
     # 3. Truyền quyền vào Service
-    return service.get_all_orders(page, limit, search, warehouse, allowed_warehouse_ids=allowed_ids)
+    return service.get_all_orders(page, limit, search, warehouse, status, allowed_warehouse_ids=allowed_ids)
 
 @router.get("/production/boms")
 def list_boms(

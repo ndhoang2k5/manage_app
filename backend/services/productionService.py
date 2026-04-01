@@ -336,7 +336,7 @@ class ProductionService:
         return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
 
 # 6. Lấy danh sách Lệnh SX (CHUẨN PHÂN TRANG)
-    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None, allowed_warehouse_ids: Optional[List[int]] = None):
+    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None, status=None, allowed_warehouse_ids: Optional[List[int]] = None):
         offset = (page - 1) * limit
         
         conditions = []
@@ -356,6 +356,9 @@ class ProductionService:
         if warehouse_name:
             conditions.append("w.name = :wname")
             params["wname"] = warehouse_name
+        if status:
+            conditions.append("po.status = :status")
+            params["status"] = status
         conditions.append("po.status != 'cancelled'")
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
@@ -378,7 +381,7 @@ class ProductionService:
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id 
             {where_clause}
-            ORDER BY po.id DESC
+            ORDER BY w.name ASC, po.id DESC
             LIMIT :limit OFFSET :offset
         """)
         results = self.db.execute(data_sql, params).fetchall()
