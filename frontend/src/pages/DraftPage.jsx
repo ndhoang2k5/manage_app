@@ -1,5 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Button, Modal, Form, Input, Upload, message, Select, Tag, Popconfirm, Image, Descriptions, Divider } from 'antd';
+import {
+    Table,
+    Card,
+    Button,
+    Modal,
+    Form,
+    Input,
+    Upload,
+    message,
+    Select,
+    Tag,
+    Popconfirm,
+    Image,
+    Descriptions,
+    Divider,
+} from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import draftApi from '../api/draftApi';
 import productionApi from '../api/productionApi';
@@ -28,7 +43,9 @@ const DraftPage = () => {
         } catch (error) { message.error("Lỗi tải dữ liệu"); }
     };
 
-    useEffect(() => { fetchDrafts(); }, []);
+    useEffect(() => {
+        fetchDrafts();
+    }, []);
 
     const handleUpload = async ({ file, onSuccess, onError }) => {
         const formData = new FormData();
