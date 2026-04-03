@@ -2,7 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from api import products, warehouses, purchases, production, reports, auth, drafts
+from api import products, warehouses, purchases, production, reports, auth, drafts, sales_management
+from jobs.sales_realtime_sync import start_sales_realtime_sync_worker
 import os 
 
 app = FastAPI(title="Fashion WMS API")
@@ -37,6 +38,14 @@ app.include_router(production.router, prefix="/api/v1", tags=["Production"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
 app.include_router(drafts.router,prefix="/api/v1", tags=["Auth"])
+app.include_router(sales_management.router, prefix="/api/v1", tags=["Sales Management"])
+
+
+@app.on_event("startup")
+def on_startup():
+    start_sales_realtime_sync_worker()
+
+
 @app.get("/")
 def health_check():
     return {"status": "ok", "system": "Fashion WMS Backend"}
