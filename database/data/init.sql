@@ -312,6 +312,47 @@ CREATE TABLE if not exists user_permissions (
     UNIQUE(user_id, warehouse_id)
 );
 
+-- 29. Lịch sử chạy báo cáo số bán từ Salework
+CREATE TABLE if not exists sales_report_runs (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    time_start BIGINT NOT NULL,
+    time_end BIGINT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'success',
+    raw_payload LONGTEXT,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_sales_report_period (time_start, time_end)
+);
+
+-- 30. Dữ liệu doanh số đã tổng hợp theo mã
+CREATE TABLE if not exists sales_report_items (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    run_id INT NOT NULL,
+    code VARCHAR(128) NOT NULL,
+    name VARCHAR(255) NULL,
+    sold_qty DECIMAL(18, 4) NOT NULL DEFAULT 0,
+    sold_revenue DECIMAL(18, 2) NOT NULL DEFAULT 0,
+    channels_json TEXT,
+    shops_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sales_report_items_run (run_id),
+    INDEX idx_sales_report_items_code (code),
+    CONSTRAINT fk_sales_report_items_run
+        FOREIGN KEY (run_id) REFERENCES sales_report_runs(id) ON DELETE CASCADE
+);
+
+-- 31. Danh sách mã ưu tiên để đánh dấu trên báo cáo bán
+CREATE TABLE if not exists sales_priority_codes (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    code VARCHAR(128) NOT NULL,
+    note VARCHAR(255) NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_sales_priority_code (code)
+);
+
 
 
 INSERT INTO categories (name) VALUES ('Vải Chính'), ('Vải Lót'), ('Phụ Liệu'), ('Thành Phẩm');
