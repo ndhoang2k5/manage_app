@@ -4,7 +4,7 @@ import { Layout, Menu, theme, Avatar, Space, Typography, Spin, Button, Tag } fro
 import { 
   DatabaseOutlined, SkinOutlined, ShoppingCartOutlined, ShopOutlined,
   UserOutlined, MenuUnfoldOutlined, MenuFoldOutlined,
-  PieChartOutlined, BarChartOutlined, LogoutOutlined, BulbOutlined
+  PieChartOutlined, BarChartOutlined, LogoutOutlined, BulbOutlined, LineChartOutlined
 } from '@ant-design/icons';
 
 
@@ -19,6 +19,7 @@ import WorkshopDetail from './pages/WorkshopDetail';
 import LoginPage from './pages/LoginPage';
 import warehouseApi from './api/warehouseApi';
 import DraftPage from './pages/DraftPage';
+import SalesManagementPage from './pages/SalesManagementPage';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -104,6 +105,7 @@ const App = () => {
     { key: '/purchases', icon: <ShoppingCartOutlined />, label: <Link to="/purchases">Nhập Hàng</Link> },
     { key: '/production', icon: <SkinOutlined />, label: <Link to="/production">Sản Xuất</Link> },
     { key: '/drafts', icon: <BulbOutlined />, label: <Link to="/drafts">Đơn Hàng Dự Kiến</Link> },
+    { key: '/sales-management', icon: <LineChartOutlined />, label: <Link to="/sales-management">Quản Lý Số Bán</Link> },
   ];
 
   return (
@@ -151,6 +153,7 @@ const App = () => {
                 <Route path="/purchases" element={<PurchasePage />} />
                 <Route path="/production" element={<ProductionPage />} />
                 <Route path="/drafts" element={<DraftPage />} />
+                <Route path="/sales-management" element={<SalesManagementPage />} />
               </Routes>
             </div>
           </Content>
