@@ -13,6 +13,7 @@ import {
     message,
 } from 'antd';
 import dayjs from 'dayjs';
+import * as XLSX from 'xlsx';
 import salesManagementApi from '../api/salesManagementApi';
 
 const SalesManagementPage = () => {
@@ -154,14 +155,43 @@ const SalesManagementPage = () => {
         });
     };
 
+    const looksLikeColumnHeader = (value) => {
+        const s = String(value || '').trim().toLowerCase();
+        if (!s) return false;
+        return /^(mã|ma\b|code|sku|mã\s*sp|mã\s*sản\s*phẩm|product|stt|#)/i.test(s);
+    };
+
+    const parseCodesFromExcelFirstColumn = (arrayBuffer) => {
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) {
+            return [];
+        }
+        const sheet = workbook.Sheets[firstSheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
+        let start = 0;
+        if (rows.length && looksLikeColumnHeader(rows[0]?.[0])) {
+            start = 1;
+        }
+        const cells = rows
+            .slice(start)
+            .map((row) => (Array.isArray(row) ? row[0] : undefined))
+            .filter((v) => v !== undefined && v !== null && String(v).trim() !== '');
+        return parseCodesFromText(cells.join('\n'));
+    };
+
     const handleUploadPriorityFile = async (file) => {
         try {
-            const text = await file.text();
-            const codes = parseCodesFromText(text);
+            const buf = await file.arrayBuffer();
+            const codes = parseCodesFromExcelFirstColumn(buf);
+            if (!codes.length) {
+                message.warning('Không tìm thấy mã ở cột đầu tiên (cột A) của sheet đầu tiên');
+                return false;
+            }
             setPriorityInput(codes.join('\n'));
-            message.success(`Đã nạp ${codes.length} mã từ file`);
+            message.success(`Đã nạp ${codes.length} mã từ cột đầu tiên (Excel)`);
         } catch (error) {
-            message.error('Không đọc được file');
+            message.error('Không đọc được file Excel (.xlsx)');
         }
         return false;
     };
@@ -350,7 +380,9 @@ const SalesManagementPage = () => {
             </div>
 
             <div style={{ marginBottom: 12 }}>
-                <div style={{ marginBottom: 6, fontWeight: 600 }}>Danh sách mã ưu tiên (mỗi dòng 1 mã)</div>
+                <div style={{ marginBottom: 6, fontWeight: 600 }}>
+                    Danh sách mã ưu tiên (mỗi dòng 1 mã; tải Excel: lấy cột A của sheet đầu tiên)
+                </div>
                 <Input.TextArea
                     rows={4}
                     placeholder={'PN05403\nQA13201\n...'}
@@ -358,8 +390,8 @@ const SalesManagementPage = () => {
                     onChange={(e) => setPriorityInput(e.target.value)}
                 />
                 <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <Upload beforeUpload={handleUploadPriorityFile} showUploadList={false} accept=".txt,.csv">
-                        <Button>Tải danh sách mã từ file</Button>
+                    <Upload beforeUpload={handleUploadPriorityFile} showUploadList={false} accept=".xlsx,.xls">
+                        <Button>Tải danh sách mã từ Excel</Button>
                     </Upload>
                     <Button type="primary" onClick={handleSavePriorityCodes}>Lưu mã ưu tiên</Button>
                 </div>
