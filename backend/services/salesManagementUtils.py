@@ -60,7 +60,7 @@ def aggregate_sales_report(product_report: Dict) -> List[Dict]:
             }
         )
 
-    results.sort(key=lambda x: (x["sold_revenue"], x["sold_qty"]), reverse=True)
+    results.sort(key=lambda x: (x["sold_qty"], x["sold_revenue"]), reverse=True)
     return results
 
 

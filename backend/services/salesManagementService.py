@@ -433,7 +433,7 @@ class SalesManagementService:
         min_revenue: float = 0,
         page: int = 1,
         page_size: int = 50,
-        sort_by: str = "sold_revenue",
+        sort_by: str = "sold_qty",
         sort_dir: str = "desc",
     ) -> Dict:
         if page < 1:
@@ -456,7 +456,7 @@ class SalesManagementService:
             "shops_count": "agg.shops_count",
             "current_stock": "agg.current_stock",
         }
-        sort_column = sort_map.get(sort_by, "agg.sold_revenue")
+        sort_column = sort_map.get(sort_by, "agg.sold_qty")
         direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 
         params = {"min_qty": min_qty, "min_revenue": min_revenue}
@@ -576,7 +576,7 @@ class SalesManagementService:
         only_priority_codes: bool = False,
         min_qty: float = 0,
         min_revenue: float = 0,
-        sort_by: str = "sold_revenue",
+        sort_by: str = "sold_qty",
         sort_dir: str = "desc",
         top_n: int = 0,
     ) -> List[Dict]:
