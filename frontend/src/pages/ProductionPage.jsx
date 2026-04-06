@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 import { 
-    Table, Card, Button, Modal, Form, Select, Input, 
+    Table, Card, Button, Modal, Form, Select, Input, AutoComplete,
     InputNumber, DatePicker, Tag, message, Divider, Space, 
     Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty, Spin, List
 } from 'antd';
@@ -60,6 +60,7 @@ const ProductionPage = () => {
     const [editForm] = Form.useForm();
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
+    const sizeStandardOptions = sizeStandards.map((s) => ({ value: s, label: s }));
 
     // --- HÀM LOAD DỮ LIỆU ---
     const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null, status = null) => {
@@ -753,10 +754,10 @@ const ProductionPage = () => {
             
 
             {/* MODAL 1: TẠO LỆNH (CẬP NHẬT: GHI CHÚ NVL) */}
-            <Modal title="Lên Mẫu Mới & Sản Xuất" open={isOrderModalOpen} onCancel={() => setIsOrderModalOpen(false)} footer={null} width={1400} style={{ top: 20 }}>
+            <Modal title="Lên Mẫu Mới & Sản Xuất" open={isOrderModalOpen} onCancel={() => setIsOrderModalOpen(false)} footer={null} width={1680} style={{ top: 16 }}>
                 <Form layout="vertical" form={orderForm} onFinish={handleCreateQuickOrder}>
-                    <Row gutter={24}>
-                        <Col span={6}>
+                    <Row gutter={[24, 16]}>
+                        <Col xs={24} lg={5}>
                             <Card size="small" title="1. Thông tin Chung" bordered={false} style={{background: '#f9f9f9', marginBottom: 16}}>
                                 <Form.Item label="Mã Lệnh" name="code" rules={[{ required: true }]}><Input placeholder="LSX-001" /></Form.Item>
                                 <Form.Item label="Xưởng May" name="warehouse_id" rules={[{ required: true }]}>
@@ -768,14 +769,24 @@ const ProductionPage = () => {
                             </Card>
                             <Card size="small" title="Hình ảnh Mẫu" bordered={false} style={{background: '#fff7e6', border: '1px solid #ffd591'}}><Upload customRequest={handleUpload} listType="picture-card" fileList={fileList} onChange={handleFileChange}>{fileList.length >= 5 ? null : <div><PlusOutlined /><div style={{ marginTop: 8 }}>Upload</div></div>}</Upload></Card>
                         </Col>
-                        <Col span={6}>
-                            <Card size="small" title="2. Size & Ghi chú" bordered={false} style={{background: '#e6f7ff', border: '1px solid #91d5ff', height: '100%'}}>
-                                <Form.List name="size_breakdown" initialValue={[{ size: '0-3m', quantity: 0 }]}>{(fields, { add, remove }) => (<div style={{ maxHeight: 600, overflowY: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline"><Form.Item {...restField} name={[name, 'size']} rules={[{ required: true }]} style={{width: 90}}><Select>{sizeStandards.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}</Select></Form.Item>
-                                <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true }]}><Input type="number" placeholder="SL" min={1} style={{width: 70}} /></Form.Item>
-                                <Form.Item {...restField} name={[name, 'note']}><Input placeholder="Ghi chú" style={{width: 120}} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{color:'red'}}/></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm Size</Button></div>)}</Form.List>
+                        <Col xs={24} lg={8}>
+                            <Card size="small" title="2. Size & Ghi chú" bordered={false} style={{background: '#e6f7ff', border: '1px solid #91d5ff', height: '100%', minHeight: 420 }}>
+                                <Form.List name="size_breakdown" initialValue={[{ size: '0-3m', quantity: 0 }]}>{(fields, { add, remove }) => (<div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 10, flexWrap: 'nowrap', alignItems: 'center', width: '100%' }} align="baseline"><Form.Item {...restField} name={[name, 'size']} rules={[{ required: true, message: 'Nhập size' }]} style={{ flex: '1 1 160px', minWidth: 160, maxWidth: 220, marginBottom: 0 }}>
+                                                                <AutoComplete
+                                                                    options={sizeStandardOptions}
+                                                                    placeholder="Chọn hoặc nhập"
+                                                                    style={{ width: '100%', minWidth: 160 }}
+                                                                    filterOption={(inputValue, option) =>
+                                                                        (option?.value ?? '').toLowerCase().includes(String(inputValue).toLowerCase())
+                                                                    }
+                                                                    allowClear
+                                                                />
+                                                            </Form.Item>
+                                <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true }]} style={{ flex: '0 0 76px', marginBottom: 0 }}><Input type="number" placeholder="SL" min={1} style={{ width: 76 }} /></Form.Item>
+                                <Form.Item {...restField} name={[name, 'note']} style={{ flex: '0 0 96px', marginBottom: 0 }}><Input placeholder="Ghi chú" style={{ width: 120 }} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{color:'red'}}/></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm Size</Button></div>)}</Form.List>
                             </Card>
                         </Col>
-                        <Col span={12}>
+                        <Col xs={24} lg={11}>
                             <Card size="small" title="3. Tổng lượng NVL (Cả lô)" bordered={false} style={{background: '#f9f9f9', height: '100%'}}>
                                 <Form.List name="materials">
                                     {(fields, { add, remove }) => (
@@ -924,15 +935,15 @@ const ProductionPage = () => {
                                                             style={{marginBottom: 0, flex: 1}} 
                                                             rules={[{required: true, message: 'Thiếu size'}]}
                                                         >
-                                                            <Select 
-                                                                mode="tags" 
-                                                                placeholder="Chọn/Nhập size" 
-                                                                style={{width: '100%'}}
-                                                                tokenSeparators={[',']}
-                                                            >
-                                                                {/* sizeStandards lấy từ biến global ở đầu file */}
-                                                                {sizeStandards.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
-                                                            </Select>
+                                                            <AutoComplete
+                                                                options={sizeStandardOptions}
+                                                                placeholder="Chọn size có sẵn hoặc gõ tay (hoạ tiết, mã riêng...)"
+                                                                style={{ width: '100%' }}
+                                                                filterOption={(inputValue, option) =>
+                                                                    (option?.value ?? '').toLowerCase().includes(String(inputValue).toLowerCase())
+                                                                }
+                                                                allowClear
+                                                            />
                                                         </Form.Item>
                                                         
                                                         {/* Ô Số lượng (Hiển thị số đẹp) */}
