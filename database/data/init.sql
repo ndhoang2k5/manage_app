@@ -137,6 +137,7 @@ CREATE TABLE if not exists production_orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     code VARCHAR(50) UNIQUE, 
     warehouse_id INT, 
+    owner_central_id INT NULL,
     product_variant_id INT, 
     quantity_planned INT, 
     quantity_finished INT DEFAULT 0, 
@@ -153,6 +154,7 @@ CREATE TABLE if not exists production_orders (
     print_fee DECIMAL(15, 2) DEFAULT 0,
     created_by INT, 
     FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+    FOREIGN KEY (owner_central_id) REFERENCES warehouses(id),
     FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
 );
 
