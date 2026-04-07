@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 import { 
-    Table, Card, Button, Modal, Form, Select, Input, AutoComplete,
+    Table, Card, Button, Modal, Form, Select, Input, AutoComplete, Popconfirm,
     InputNumber, DatePicker, Tag, message, Divider, Space, 
     Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty, Spin, List
 } from 'antd';
@@ -1020,10 +1020,23 @@ const ProductionPage = () => {
                                     </thead>
                                     <tbody>
                                         {fields.map(({ key, name, ...restField }) => (
-                                            <tr key={key}>
+                                            <Form.Item
+                                                key={key}
+                                                shouldUpdate={(prev, curr) =>
+                                                    prev.materials?.[name]?.deleted !== curr.materials?.[name]?.deleted
+                                                }
+                                                noStyle
+                                            >
+                                                {({ getFieldValue }) => {
+                                                    const isDeleted = !!getFieldValue(['materials', name, 'deleted']);
+                                                    if (isDeleted) return null;
+
+                                                    return (
+                                                        <tr>
                                                 {/* CỘT TÊN NVL */}
                                                 <td style={{padding: 5}}>
                                                     <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
+                                                    <Form.Item name={[name, 'deleted']} hidden><Input /></Form.Item>
                                                     
                                                     <Form.Item shouldUpdate={(prev, curr) => prev.materials?.[name]?.id !== curr.materials?.[name]?.id} noStyle>
                                                         {({ getFieldValue }) => {
@@ -1091,12 +1104,44 @@ const ProductionPage = () => {
                                                 {/* CỘT XÓA (Chỉ hiện cho dòng mới) */}
                                                 <td style={{textAlign: 'center'}}>
                                                     <Form.Item shouldUpdate={(prev, curr) => prev.materials?.[name]?.id !== curr.materials?.[name]?.id} noStyle>
-                                                        {({ getFieldValue }) => !getFieldValue(['materials', name, 'id']) ? (
-                                                            <DeleteOutlined onClick={() => remove(name)} style={{color: 'red', cursor: 'pointer'}} />
-                                                        ) : null}
+                                                        {({ getFieldValue, setFieldValue }) => {
+                                                            const existingId = getFieldValue(['materials', name, 'id']);
+                                                            if (!existingId) {
+                                                                return (
+                                                                    <DeleteOutlined
+                                                                        onClick={() => remove(name)}
+                                                                        style={{ color: 'red', cursor: 'pointer' }}
+                                                                        title="Xóa dòng NVL này"
+                                                                    />
+                                                                );
+                                                            }
+
+                                                            return (
+                                                                <Popconfirm
+                                                                    title="Xóa nguyên phụ liệu?"
+                                                                    description="Hệ thống sẽ hoàn nguyên NVL về kho sau khi bạn bấm Lưu."
+                                                                    okText="Xóa"
+                                                                    cancelText="Hủy"
+                                                                    onConfirm={() => {
+                                                                        // Không remove dòng khỏi form để backend nhận được `id` và hoàn kho.
+                                                                        setFieldValue(['materials', name, 'quantity'], 0);
+                                                                        setFieldValue(['materials', name, 'deleted'], true);
+                                                                        message.info("Đã đánh dấu xóa NVL. Bấm 'Lưu Thay Đổi' để hoàn kho.");
+                                                                    }}
+                                                                >
+                                                                    <DeleteOutlined
+                                                                        style={{ color: 'red', cursor: 'pointer' }}
+                                                                        title="Xóa & hoàn kho"
+                                                                    />
+                                                                </Popconfirm>
+                                                            );
+                                                        }}
                                                     </Form.Item>
                                                 </td>
-                                            </tr>
+                                                        </tr>
+                                                    );
+                                                }}
+                                            </Form.Item>
                                         ))}
                                         <tr>
                                             <td colSpan={4} style={{textAlign: 'center', paddingTop: 10}}>
