@@ -50,6 +50,28 @@ class AuthService:
             token_data,
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
         )
+
+        module_rows = self.db.execute(text("""
+            SELECT module_key, can_view, can_manage
+            FROM account_module_permissions
+            WHERE user_id = :uid
+            ORDER BY module_key
+        """), {"uid": user_id}).fetchall()
+        module_permissions = [
+            {
+                "module_key": r[0],
+                "can_view": bool(r[1]),
+                "can_manage": bool(r[2]),
+            }
+            for r in module_rows
+        ]
+        permitted_modules = [m["module_key"] for m in module_permissions if m["can_view"]]
+
+        wh_rows = self.db.execute(
+            text("SELECT warehouse_id FROM user_permissions WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        warehouse_ids = [r[0] for r in wh_rows]
         
         return {
             "access_token": access_token,
@@ -58,7 +80,10 @@ class AuthService:
                 "id": user_id,
                 "name": full_name,
                 "role": role,
-                "warehouse_id": warehouse_id
+                "warehouse_id": warehouse_id,
+                "warehouse_ids": warehouse_ids,
+                "module_permissions": module_permissions,
+                "permitted_modules": permitted_modules,
             }
         }
     

@@ -8,15 +8,44 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from urllib.parse import quote
+from typing import Optional, List
 
 
 class ReportService:
     def __init__(self, db: Session):
         self.db = db
+        self._ensure_central_workshop_links_table()
 
-    def get_central_warehouse_dashboard(self, warehouse_id: int):
+    def _ensure_central_workshop_links_table(self):
+        self.db.execute(text("""
+            CREATE TABLE IF NOT EXISTS central_workshop_links (
+                central_warehouse_id INT NOT NULL,
+                workshop_warehouse_id INT NOT NULL,
+                PRIMARY KEY (central_warehouse_id, workshop_warehouse_id),
+                CONSTRAINT fk_cwl_central FOREIGN KEY (central_warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE,
+                CONSTRAINT fk_cwl_workshop FOREIGN KEY (workshop_warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE
+            )
+        """))
+        self.db.commit()
+
+    def _get_dashboard_warehouse_ids(self, central_warehouse_id: int, brand_id: int):
+        linked_rows = self.db.execute(text("""
+            SELECT workshop_warehouse_id
+            FROM central_workshop_links
+            WHERE central_warehouse_id = :cid
+        """), {"cid": central_warehouse_id}).fetchall()
+        linked_workshops = {int(r[0]) for r in linked_rows}
+        # luôn include dữ liệu theo brand cũ để tránh mất xưởng hiện tại
+        old_rows = self.db.execute(
+            text("SELECT id FROM warehouses WHERE brand_id = :bid"),
+            {"bid": brand_id},
+        ).fetchall()
+        old_ids = {int(r[0]) for r in old_rows}
+        return list({int(central_warehouse_id)} | old_ids | linked_workshops)
+
+    def get_central_warehouse_dashboard(self, warehouse_id: int, visible_warehouse_ids: Optional[List[int]] = None):
         # 1. Lấy thông tin Kho Tổng & Brand của nó
         query_info = text("""
             SELECT w.id, w.name, w.brand_id, b.name as brand_name 
@@ -29,15 +58,23 @@ class ReportService:
         if not info:
             raise Exception("Không tìm thấy Kho Tổng hoặc đây không phải là Kho Tổng!")
         
-        brand_id = info[2]
+        brand_id = int(info[2])
+        dashboard_wids = self._get_dashboard_warehouse_ids(warehouse_id, brand_id)
+        if visible_warehouse_ids is not None:
+            visible_set = {int(x) for x in visible_warehouse_ids}
+            dashboard_wids = [wid for wid in dashboard_wids if int(wid) in visible_set]
+            # vẫn giữ kho tổng hiện tại nếu user có quyền vào endpoint này
+            if int(warehouse_id) not in dashboard_wids:
+                dashboard_wids = [int(warehouse_id)] + dashboard_wids
 
         # 2. Lấy danh sách Xưởng Con (Các kho cùng Brand nhưng không phải Central)
         query_children = text("""
-            SELECT id, name, address 
-            FROM warehouses 
-            WHERE brand_id = :bid AND is_central = 0
-        """)
-        children = self.db.execute(query_children, {"bid": brand_id}).fetchall()
+            SELECT id, name, address
+            FROM warehouses
+            WHERE id IN :ids AND is_central = 0
+            ORDER BY name ASC
+        """).bindparams(bindparam("ids", expanding=True))
+        children = self.db.execute(query_children, {"ids": dashboard_wids}).fetchall()
         list_children = [{"id": r[0], "name": r[1], "address": r[2]} for r in children]
 
         # 3. Tổng hợp Tồn kho Toàn hệ thống (Kho Tổng + Tất cả Xưởng con)
@@ -51,11 +88,11 @@ class ReportService:
             JOIN warehouses w ON s.warehouse_id = w.id
             JOIN product_variants pv ON s.product_variant_id = pv.id
             JOIN products p ON pv.product_id = p.id
-            WHERE w.brand_id = :bid 
+            WHERE s.warehouse_id IN :ids
             GROUP BY pv.id, pv.sku, pv.variant_name, p.base_unit, pv.note -- Group by cả note
             HAVING total_qty > 0
-        """)
-        stocks = self.db.execute(query_total_stock, {"bid": brand_id}).fetchall()
+        """).bindparams(bindparam("ids", expanding=True))
+        stocks = self.db.execute(query_total_stock, {"ids": dashboard_wids}).fetchall()
         list_stocks = [
             {
                 "sku": r[0], 
@@ -95,11 +132,11 @@ class ReportService:
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
             JOIN product_variants pv ON po.product_variant_id = pv.id
-            WHERE w.brand_id = :bid 
+            WHERE po.warehouse_id IN :ids
             AND po.status IN ('in_progress', 'draft') -- Chỉ quan tâm cái đang làm
             ORDER BY po.due_date ASC
-        """)
-        productions = self.db.execute(query_production, {"bid": brand_id}).fetchall()
+        """).bindparams(bindparam("ids", expanding=True))
+        productions = self.db.execute(query_production, {"ids": dashboard_wids}).fetchall()
         list_production = [
             {
                 "code": r[0],
@@ -168,13 +205,19 @@ class ReportService:
             "total_asset_value": sum(item['value'] for item in list_stocks)
         }
     
-    def export_inventory_excel(self, central_warehouse_id: int):
+    def export_inventory_excel(self, central_warehouse_id: int, visible_warehouse_ids: Optional[List[int]] = None):
         # 1. Lấy thông tin Brand của Kho Tổng này
         info = self.db.execute(text("SELECT brand_id, name FROM warehouses WHERE id = :id AND is_central = 1"), {"id": central_warehouse_id}).fetchone()
         if not info:
             raise Exception("Không tìm thấy Kho Tổng!")
-        brand_id = info[0]
+        brand_id = int(info[0])
         central_name = info[1]
+        dashboard_wids = self._get_dashboard_warehouse_ids(central_warehouse_id, brand_id)
+        if visible_warehouse_ids is not None:
+            visible_set = {int(x) for x in visible_warehouse_ids}
+            dashboard_wids = [wid for wid in dashboard_wids if int(wid) in visible_set]
+            if int(central_warehouse_id) not in dashboard_wids:
+                dashboard_wids = [int(central_warehouse_id)] + dashboard_wids
 
         # 2. Lấy danh sách toàn bộ tồn kho của Brand này (Cả Kho Tổng + Xưởng Con)
         # Bỏ qua những mã có tồn kho = 0 để file không bị rác
@@ -191,10 +234,10 @@ class ReportService:
             JOIN warehouses w ON s.warehouse_id = w.id
             JOIN product_variants pv ON s.product_variant_id = pv.id
             JOIN products p ON pv.product_id = p.id
-            WHERE w.brand_id = :bid AND s.quantity_on_hand > 0
+            WHERE s.warehouse_id IN :ids AND s.quantity_on_hand > 0
             ORDER BY w.is_central DESC, w.name ASC, pv.variant_name ASC
-        """)
-        stocks = self.db.execute(query, {"bid": brand_id}).fetchall()
+        """).bindparams(bindparam("ids", expanding=True))
+        stocks = self.db.execute(query, {"ids": dashboard_wids}).fetchall()
 
         # 3. Tạo file Excel bằng openpyxl
         wb = Workbook()

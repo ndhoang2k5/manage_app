@@ -40,12 +40,13 @@ class ProductionService:
     def create_order(self, data: ProductionOrderCreateRequest):
         try:
             query = text("""
-                INSERT INTO production_orders (code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date)
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due)
+                INSERT INTO production_orders (code, warehouse_id, owner_central_id, product_variant_id, quantity_planned, status, start_date, due_date)
+                VALUES (:code, :wid, :owner_central_id, :pid, :qty, 'draft', :start, :due)
             """)
             self.db.execute(query, {
                 "code": data.code,
                 "wid": data.warehouse_id,
+                "owner_central_id": data.owner_central_id,
                 "pid": data.product_variant_id,
                 "qty": data.quantity_planned,
                 "start": data.start_date,
@@ -126,13 +127,14 @@ class ProductionService:
             # E. Tạo Lệnh SX
             query_order = text("""
                 INSERT INTO production_orders (
-                    code, warehouse_id, product_variant_id, quantity_planned, status, start_date, due_date, 
+                    code, warehouse_id, owner_central_id, product_variant_id, quantity_planned, status, start_date, due_date, 
                     shipping_fee, other_fee, labor_fee, marketing_fee, packaging_fee, print_fee, created_by, progress_data, note
                 )
-                VALUES (:code, :wid, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print, :uid, :progress, :note)
+                VALUES (:code, :wid, :owner_central_id, :pid, :qty, 'draft', :start, :due, :ship, :other, :labor, :mkt, :pack, :print, :uid, :progress, :note)
             """)
             self.db.execute(query_order, {
                 "code": data.order_code, "wid": data.warehouse_id, "pid": product_variant_id,
+                "owner_central_id": data.owner_central_id,
                 "qty": total_planned, "start": data.start_date, "due": data.due_date,
                 "ship": data.shipping_fee, "other": data.other_fee, "labor": data.labor_fee,
                 "mkt": data.marketing_fee, "pack": data.packaging_fee, "print": data.print_fee,
@@ -336,7 +338,16 @@ class ProductionService:
         return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
 
 # 6. Lấy danh sách Lệnh SX (CHUẨN PHÂN TRANG)
-    def get_all_orders(self, page=1, limit=10, search=None, warehouse_name=None, status=None, allowed_warehouse_ids: Optional[List[int]] = None):
+    def get_all_orders(
+        self,
+        page=1,
+        limit=10,
+        search=None,
+        warehouse_name=None,
+        status=None,
+        allowed_warehouse_ids: Optional[List[int]] = None,
+        allowed_central_ids: Optional[List[int]] = None,
+    ):
         offset = (page - 1) * limit
         
         conditions = []
@@ -348,6 +359,13 @@ class ProductionService:
 
             ids_str = ",".join(map(str, allowed_warehouse_ids))
             conditions.append(f"po.warehouse_id IN ({ids_str})")
+
+        if allowed_central_ids is not None:
+            if len(allowed_central_ids) == 0:
+                conditions.append("po.owner_central_id IS NULL")
+            else:
+                cids_str = ",".join(map(str, allowed_central_ids))
+                conditions.append(f"(po.owner_central_id IS NULL OR po.owner_central_id IN ({cids_str}))")
 
         if search:
             conditions.append("(po.code LIKE :search OR pv.variant_name LIKE :search)")

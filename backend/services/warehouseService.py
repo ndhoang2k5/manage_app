@@ -5,7 +5,7 @@
 # Check kho có hợp lệ không
 # Liên kết kho–sản phẩm
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from entities.warehouse import WarehouseCreateRequest, BrandCreateRequest
 from entities.warehouse import TransferCreateRequest, WarehouseUpdateRequest
 from typing import List, Optional
@@ -14,6 +14,19 @@ from typing import List, Optional
 class WarehouseService:
     def __init__(self, db: Session):
         self.db = db
+        self._ensure_central_workshop_links_table()
+
+    def _ensure_central_workshop_links_table(self):
+        self.db.execute(text("""
+            CREATE TABLE IF NOT EXISTS central_workshop_links (
+                central_warehouse_id INT NOT NULL,
+                workshop_warehouse_id INT NOT NULL,
+                PRIMARY KEY (central_warehouse_id, workshop_warehouse_id),
+                CONSTRAINT fk_cwl_central FOREIGN KEY (central_warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE,
+                CONSTRAINT fk_cwl_workshop FOREIGN KEY (workshop_warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE
+            )
+        """))
+        self.db.commit()
 
     # 1. Tạo Brand mới
     def create_brand(self, data: BrandCreateRequest):
@@ -54,6 +67,7 @@ class WarehouseService:
     def get_all_warehouses(self, allowed_ids: Optional[List[int]] = None):
         sql = """
             SELECT w.id, w.name, b.name as brand_name, w.address,
+                   w.brand_id,
                    CASE WHEN w.is_central = 1 THEN 'Kho Tổng' ELSE 'Xưởng May' END as type_name
             FROM warehouses w
             JOIN brands b ON w.brand_id = b.id
@@ -68,6 +82,13 @@ class WarehouseService:
         sql += " ORDER BY w.brand_id, w.is_central DESC"
 
         results = self.db.execute(text(sql)).fetchall()
+        link_rows = self.db.execute(text("""
+            SELECT workshop_warehouse_id, central_warehouse_id
+            FROM central_workshop_links
+        """)).fetchall()
+        managed_by_map = {}
+        for workshop_id, central_id in link_rows:
+            managed_by_map.setdefault(int(workshop_id), []).append(int(central_id))
         
         return [
             {
@@ -75,7 +96,9 @@ class WarehouseService:
                 "name": row[1],
                 "brand_name": row[2],
                 "address": row[3],
-                "type_name": row[4]
+                "brand_id": row[4],
+                "type_name": row[5],
+                "managed_by_central_ids": managed_by_map.get(int(row[0]), []),
             } for row in results
         ]
         
@@ -145,6 +168,46 @@ class WarehouseService:
             self.db.execute(query, {"name": data.name, "addr": data.address, "id": warehouse_id})
             self.db.commit()
             return {"status": "success", "message": "Cập nhật thông tin kho thành công"}
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def update_workshop_central_links(self, workshop_id: int, central_ids: List[int]):
+        try:
+            # Chỉ cho phép thao tác với xưởng con
+            workshop = self.db.execute(
+                text("SELECT id, is_central FROM warehouses WHERE id = :id"),
+                {"id": workshop_id},
+            ).fetchone()
+            if not workshop:
+                raise Exception("Không tìm thấy xưởng")
+            if bool(workshop[1]):
+                raise Exception("Chỉ có thể gán liên kết cho xưởng con")
+
+            # Validate danh sách kho tổng
+            if central_ids:
+                rows = self.db.execute(
+                    text("SELECT id FROM warehouses WHERE id IN :ids AND is_central = 1")
+                    .bindparams(bindparam("ids", expanding=True)),
+                    {"ids": central_ids},
+                ).fetchall()
+                found = {int(r[0]) for r in rows}
+                missing = [cid for cid in central_ids if cid not in found]
+                if missing:
+                    raise Exception(f"Các kho tổng không hợp lệ: {missing}")
+
+            self.db.execute(
+                text("DELETE FROM central_workshop_links WHERE workshop_warehouse_id = :wid"),
+                {"wid": workshop_id},
+            )
+            for cid in central_ids:
+                self.db.execute(text("""
+                    INSERT INTO central_workshop_links (central_warehouse_id, workshop_warehouse_id)
+                    VALUES (:cid, :wid)
+                """), {"cid": cid, "wid": workshop_id})
+
+            self.db.commit()
+            return {"status": "success", "message": "Đã cập nhật kho tổng quản lý xưởng"}
         except Exception as e:
             self.db.rollback()
             raise e
