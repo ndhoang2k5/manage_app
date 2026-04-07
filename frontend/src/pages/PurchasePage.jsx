@@ -6,12 +6,16 @@ import dayjs from 'dayjs';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
+import { getStoredUser, canManageModule } from '../utils/permissions';
+import AccessModeBadge from '../components/AccessModeBadge';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const PurchasePage = () => {
+    const user = getStoredUser();
+    const canManagePurchases = canManageModule(user, 'purchases');
     // Data States
     const [suppliers, setSuppliers] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
@@ -195,8 +199,12 @@ const PurchasePage = () => {
             key: 'action',
             render: (_, record) => (
                 <Space>
-                    <Button icon={<EditOutlined />} onClick={() => handleOpenEdit(record.id)} size="small">Chi tiết/Sửa</Button>
-                    <Button icon={<DeleteOutlined />} onClick={() => handleDeletePO(record.id)} size="small" danger type="primary" ghost />
+                    {canManagePurchases && (
+                        <>
+                            <Button icon={<EditOutlined />} onClick={() => handleOpenEdit(record.id)} size="small">Chi tiết/Sửa</Button>
+                            <Button icon={<DeleteOutlined />} onClick={() => handleDeletePO(record.id)} size="small" danger type="primary" ghost />
+                        </>
+                    )}
                 </Space>
             )
         }
@@ -204,8 +212,8 @@ const PurchasePage = () => {
 
     return (
         <div>
-            <Card title="Lịch Sử Nhập Hàng" bordered={false} 
-                extra={<Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Tạo Phiếu Nhập</Button>}
+            <Card title={<span>Lịch Sử Nhập Hàng <AccessModeBadge canManage={canManagePurchases} label="Nhập hàng" /></span>} bordered={false} 
+                extra={canManagePurchases ? <Button type="primary" onClick={() => setIsModalOpen(true)} icon={<PlusOutlined />}>Tạo Phiếu Nhập</Button> : null}
             >
                 {/* --- THANH TÌM KIẾM --- */}
                 <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>

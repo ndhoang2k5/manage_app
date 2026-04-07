@@ -90,6 +90,7 @@ const WarehousePage = () => {
         editForm.setFieldsValue({
             name: record.name,
             address: record.address,
+            central_ids: record.managed_by_central_ids || [],
             // Không set brand_id hay is_central để tránh sửa nhầm
         });
         setIsEditModalOpen(true);
@@ -97,7 +98,16 @@ const WarehousePage = () => {
 
     const handleUpdateWarehouse = async (values) => {
         try {
-            await warehouseApi.updateWarehouse(currentWarehouse.id, values);
+            await warehouseApi.updateWarehouse(currentWarehouse.id, {
+                name: values.name,
+                address: values.address,
+            });
+            if (currentWarehouse.type_name !== 'Kho Tổng') {
+                await warehouseApi.updateWorkshopCentralLinks(
+                    currentWarehouse.id,
+                    values.central_ids || []
+                );
+            }
             message.success("Cập nhật kho thành công!");
             setIsEditModalOpen(false);
             fetchData();
@@ -149,6 +159,20 @@ const WarehousePage = () => {
             dataIndex: 'type_name', 
             key: 'type',
             render: (t) => <Tag color={t === 'Kho Tổng' ? 'blue' : 'orange'}>{t}</Tag>
+        },
+        {
+            title: 'Kho Tổng quản lý',
+            key: 'managed',
+            render: (_, record) => {
+                if (record.type_name === 'Kho Tổng') return <span>-</span>;
+                const ids = record.managed_by_central_ids || [];
+                const names = warehouses
+                    .filter((w) => w.type_name === 'Kho Tổng' && ids.includes(w.id))
+                    .map((w) => w.name);
+                return names.length
+                    ? names.map((n) => <Tag key={n} color="geekblue">{n}</Tag>)
+                    : <Tag color="default">Chưa gán</Tag>;
+            }
         },
         { title: 'Địa chỉ', dataIndex: 'address', key: 'addr' },
         {
@@ -233,6 +257,22 @@ const WarehousePage = () => {
                 <Form layout="vertical" onFinish={handleUpdateWarehouse} form={editForm}>
                     <Form.Item label="Tên Kho" name="name" rules={[{ required: true }]}><Input /></Form.Item>
                     <Form.Item label="Địa chỉ" name="address"><Input.TextArea /></Form.Item>
+                    {currentWarehouse?.type_name !== 'Kho Tổng' && (
+                        <Form.Item
+                            label="Kho tổng cùng quản lý xưởng này"
+                            name="central_ids"
+                            extra="Có thể chọn nhiều kho tổng cho cùng một xưởng con."
+                        >
+                            <Select
+                                mode="multiple"
+                                allowClear
+                                placeholder="Chọn kho tổng"
+                                options={warehouses
+                                    .filter((w) => w.type_name === 'Kho Tổng')
+                                    .map((w) => ({ label: `${w.name} (${w.brand_name})`, value: w.id }))}
+                            />
+                        </Form.Item>
+                    )}
                     
                     <div style={{marginTop: 15, padding: 10, background: '#f5f5f5', borderRadius: 4, fontSize: 12, color: '#666'}}>
                         * Để đảm bảo tính toàn vẹn dữ liệu phân quyền, bạn không thể thay đổi <b>Thương hiệu</b> và <b>Loại kho</b> ở đây.

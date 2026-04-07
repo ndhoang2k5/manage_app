@@ -18,10 +18,14 @@ import {
 import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
+import { getStoredUser, canManageModule } from '../utils/permissions';
+import AccessModeBadge from '../components/AccessModeBadge';
 
 const BASE_URL = window.location.origin; 
 
 const ProductionPage = () => {
+    const user = getStoredUser();
+    const canManageProduction = canManageModule(user, 'production');
     // 1. Data States
     const [orders, setOrders] = useState([]);
     const [products, setProducts] = useState([]); 
@@ -61,6 +65,7 @@ const ProductionPage = () => {
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
     const sizeStandardOptions = sizeStandards.map((s) => ({ value: s, label: s }));
+    const centralOptions = warehouses.filter(w => w.type_name === 'Kho Tổng');
 
     // --- HÀM LOAD DỮ LIỆU ---
     const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null, status = null) => {
@@ -205,6 +210,7 @@ const ProductionPage = () => {
                 new_product_sku: values.new_product_sku,
                 order_code: values.code,
                 warehouse_id: values.warehouse_id,
+                owner_central_id: values.owner_central_id || null,
                 start_date: values.start_date.format('YYYY-MM-DD'),
                 due_date: values.due_date.format('YYYY-MM-DD'),
                 materials: (values.materials || []).map(m => ({...m, quantity_needed: Number(m.quantity_needed)})),
@@ -656,7 +662,10 @@ const ProductionPage = () => {
                 if (r.status === 'completed') color = 'green';
 
                 return (
-                    <div style={{cursor: 'pointer'}} onClick={() => openTodoModal(r)}>
+                    <div
+                        style={{cursor: canManageProduction ? 'pointer' : 'default'}}
+                        onClick={() => openTodoModal(r)}
+                    >
                         <Tag color={color} style={{fontSize: 13, padding: '4px 10px'}}>
                             {r.status === 'completed' ? 'HOÀN THÀNH' : `Bước ${doneCount}/${totalCount}`}
                         </Tag>
@@ -673,18 +682,22 @@ const ProductionPage = () => {
                 <Space>
                     <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} />
                     <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
-                    <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
-                    <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteOrder(record.id)} />
-                    
-                    {/* Logic nút bấm */}
-                    {record.status === 'draft' && (
-                        <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>
-                    )}
-                    {record.status === 'in_progress' && (
+                    {canManageProduction && (
                         <>
-                            <Button size="small" icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
-                            {/* Nút Chốt đơn sẽ gọi API forceFinish, Backend sẽ check đủ bước chưa */}
-                            <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleForceFinish(record.id)} />
+                            <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)} />
+                            <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDeleteOrder(record.id)} />
+                            
+                            {/* Logic nút bấm */}
+                            {record.status === 'draft' && (
+                                <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>Start</Button>
+                            )}
+                            {record.status === 'in_progress' && (
+                                <>
+                                    <Button size="small" icon={<DownloadOutlined />} onClick={() => openReceiveModal(record)}>Nhập</Button>
+                                    {/* Nút Chốt đơn sẽ gọi API forceFinish, Backend sẽ check đủ bước chưa */}
+                                    <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleForceFinish(record.id)} />
+                                </>
+                            )}
                         </>
                     )}
                 </Space>
@@ -694,8 +707,8 @@ const ProductionPage = () => {
 
     return (
         <div>
-            <Card title="Quản Lý Sản Xuất" bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
-                extra={<Button type="primary" onClick={handleOpenCreateModal} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button>}
+            <Card title={<span>Quản Lý Sản Xuất <AccessModeBadge canManage={canManageProduction} label="Sản xuất" /></span>} bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
+                extra={canManageProduction ? <Button type="primary" onClick={handleOpenCreateModal} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button> : null}
             >
                 <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <Input.Search placeholder="Tìm theo Mã/Tên..." style={{ width: 300 }} value={searchText} onChange={e => setSearchText(e.target.value)} onSearch={handleSearch} enterButton allowClear />
@@ -724,8 +737,9 @@ const ProductionPage = () => {
                 title={`Tiến độ đơn hàng: ${currentOrder?.code}`} 
                 open={isTodoModalOpen} 
                 onCancel={() => setIsTodoModalOpen(false)}
-                onOk={handleSaveProgress}
-                okText="Lưu Tiến Độ"
+                onOk={canManageProduction ? handleSaveProgress : () => setIsTodoModalOpen(false)}
+                okText={canManageProduction ? "Lưu Tiến Độ" : "Đóng"}
+                okButtonProps={{ style: canManageProduction ? {} : { display: 'none' } }}
             >
                 <List
                     dataSource={currentTodos}
@@ -760,8 +774,17 @@ const ProductionPage = () => {
                         <Col xs={24} lg={5}>
                             <Card size="small" title="1. Thông tin Chung" bordered={false} style={{background: '#f9f9f9', marginBottom: 16}}>
                                 <Form.Item label="Mã Lệnh" name="code" rules={[{ required: true }]}><Input placeholder="LSX-001" /></Form.Item>
+                                <Form.Item label="Nhãn/Kho tổng quản lý" name="owner_central_id" rules={[{ required: true, message: 'Chọn kho tổng quản lý' }]}>
+                                    <Select placeholder="Chọn kho tổng">
+                                        {centralOptions.map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
+                                    </Select>
+                                </Form.Item>
                                 <Form.Item label="Xưởng May" name="warehouse_id" rules={[{ required: true }]}>
-                                    <Select placeholder="Chọn xưởng" onChange={handleWarehouseChange}>{warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}</Select>
+                                    <Select placeholder="Chọn xưởng" onChange={handleWarehouseChange}>
+                                        {warehouses
+                                            .filter(w => w.type_name !== 'Kho Tổng')
+                                            .map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
+                                    </Select>
                                 </Form.Item>
                                 <Form.Item label="Tên SP" name="new_product_name" rules={[{ required: true }]}><Input /></Form.Item>
                                 <Form.Item label="Mã SKU" name="new_product_sku" rules={[{ required: true }]}><Input /></Form.Item>

@@ -15,8 +15,12 @@ import {
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
 import salesManagementApi from '../api/salesManagementApi';
+import { getStoredUser, canManageModule } from '../utils/permissions';
+import AccessModeBadge from '../components/AccessModeBadge';
 
 const SalesManagementPage = () => {
+    const user = getStoredUser();
+    const canManageSales = canManageModule(user, 'sales-management');
     const [salesRange, setSalesRange] = useState([dayjs().startOf('month'), dayjs()]);
     const [salesData, setSalesData] = useState([]);
     const [salesTotal, setSalesTotal] = useState(0);
@@ -289,16 +293,18 @@ const SalesManagementPage = () => {
 
     return (
         <Card
-            title="Quản lý số bán"
+            title={<span>Quản lý số bán <AccessModeBadge canManage={canManageSales} label="Số bán" /></span>}
             extra={
-                <div style={{ display: 'flex', gap: 8 }}>
-                    <Button onClick={handleBackfillFrom2026} loading={salesLoading}>
-                        Backfill từ 01/01/2026
-                    </Button>
-                    <Button type="primary" onClick={handleRealtimeSyncNow} loading={salesLoading}>
-                        Đồng bộ realtime
-                    </Button>
-                </div>
+                canManageSales ? (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <Button onClick={handleBackfillFrom2026} loading={salesLoading}>
+                            Backfill từ 01/01/2026
+                        </Button>
+                        <Button type="primary" onClick={handleRealtimeSyncNow} loading={salesLoading}>
+                            Đồng bộ realtime
+                        </Button>
+                    </div>
+                ) : null
             }
         >
             <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -379,23 +385,25 @@ const SalesManagementPage = () => {
                 ) : null}
             </div>
 
-            <div style={{ marginBottom: 12 }}>
-                <div style={{ marginBottom: 6, fontWeight: 600 }}>
-                    Danh sách mã ưu tiên (mỗi dòng 1 mã; tải Excel: lấy cột A của sheet đầu tiên)
+            {canManageSales && (
+                <div style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: 6, fontWeight: 600 }}>
+                        Danh sách mã ưu tiên (mỗi dòng 1 mã; tải Excel: lấy cột A của sheet đầu tiên)
+                    </div>
+                    <Input.TextArea
+                        rows={4}
+                        placeholder={'PN05403\nQA13201\n...'}
+                        value={priorityInput}
+                        onChange={(e) => setPriorityInput(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                        <Upload beforeUpload={handleUploadPriorityFile} showUploadList={false} accept=".xlsx,.xls">
+                            <Button>Tải danh sách mã từ Excel</Button>
+                        </Upload>
+                        <Button type="primary" onClick={handleSavePriorityCodes}>Lưu mã ưu tiên</Button>
+                    </div>
                 </div>
-                <Input.TextArea
-                    rows={4}
-                    placeholder={'PN05403\nQA13201\n...'}
-                    value={priorityInput}
-                    onChange={(e) => setPriorityInput(e.target.value)}
-                />
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <Upload beforeUpload={handleUploadPriorityFile} showUploadList={false} accept=".xlsx,.xls">
-                        <Button>Tải danh sách mã từ Excel</Button>
-                    </Upload>
-                    <Button type="primary" onClick={handleSavePriorityCodes}>Lưu mã ưu tiên</Button>
-                </div>
-            </div>
+            )}
 
             <Table
                 rowKey={(row) => row.code}

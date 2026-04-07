@@ -19,10 +19,14 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-de
 import draftApi from '../api/draftApi';
 import productionApi from '../api/productionApi';
 import dayjs from 'dayjs';
+import { getStoredUser, canManageModule } from '../utils/permissions';
+import AccessModeBadge from '../components/AccessModeBadge';
 
 const BASE_URL = window.location.origin; 
 
 const DraftPage = () => {
+    const user = getStoredUser();
+    const canManageDrafts = canManageModule(user, 'drafts');
     const [drafts, setDrafts] = useState([]);
     
     // State cho Modal Tạo/Sửa
@@ -143,11 +147,14 @@ const DraftPage = () => {
                 <div style={{display: 'flex', gap: 8, justifyContent: 'center'}}>
                     {/* Nút Xem Chi Tiết */}
                     <Button icon={<EyeOutlined />} size="small" onClick={() => openDetailModal(r)} title="Xem chi tiết" />
-                    
-                    <Button icon={<EditOutlined />} size="small" onClick={() => openModal(r)} />
-                    <Popconfirm title="Xóa mẫu này?" onConfirm={() => handleDelete(r.id)}>
-                        <Button icon={<DeleteOutlined />} size="small" danger />
-                    </Popconfirm>
+                    {canManageDrafts && (
+                        <>
+                            <Button icon={<EditOutlined />} size="small" onClick={() => openModal(r)} />
+                            <Popconfirm title="Xóa mẫu này?" onConfirm={() => handleDelete(r.id)}>
+                                <Button icon={<DeleteOutlined />} size="small" danger />
+                            </Popconfirm>
+                        </>
+                    )}
                 </div>
             )
         }
@@ -155,7 +162,10 @@ const DraftPage = () => {
 
     return (
         <div style={{padding: 0}}>
-            <Card title="Danh sách Mẫu Dự Kiến & Ý Tưởng" extra={<Button type="primary" onClick={() => openModal()}>+ Thêm Ý Tưởng</Button>}>
+            <Card
+                title={<span>Danh sách Mẫu Dự Kiến & Ý Tưởng <AccessModeBadge canManage={canManageDrafts} label="Dự kiến" /></span>}
+                extra={canManageDrafts ? <Button type="primary" onClick={() => openModal()}>+ Thêm Ý Tưởng</Button> : null}
+            >
                 <Table dataSource={drafts} columns={columns} rowKey="id" pagination={{pageSize: 8}} />
             </Card>
 
