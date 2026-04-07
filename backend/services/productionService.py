@@ -631,7 +631,18 @@ class ProductionService:
                                     return_qty = abs(diff)
                                     self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": return_qty, "w": wid, "m": mat_id})
                                     self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Sửa lệnh: Hoàn trả')"), {"w": wid, "m": mat_id, "q": return_qty, "ref": order_id})
-                                self.db.execute(text("UPDATE production_material_reservations SET quantity_reserved = :q, note = :n WHERE id = :id"), {"q": req_qty, "n": item.note, "id": item.id})
+
+                                # Nếu người dùng xóa NVL (set về 0) thì xóa luôn reservation để sạch kế hoạch
+                                if req_qty <= 0:
+                                    self.db.execute(
+                                        text("DELETE FROM production_material_reservations WHERE id = :id"),
+                                        {"id": item.id},
+                                    )
+                                else:
+                                    self.db.execute(
+                                        text("UPDATE production_material_reservations SET quantity_reserved = :q, note = :n WHERE id = :id"),
+                                        {"q": req_qty, "n": item.note, "id": item.id},
+                                    )
                         else: 
                             # Thêm mới
                             if not item.material_variant_id: continue
@@ -662,12 +673,17 @@ class ProductionService:
                             
                             if item.id:
                                 print(f"   Updating BOM Material ID={item.id}")
-                                self.db.execute(text("UPDATE bom_materials SET quantity_needed = :q, note = :n WHERE id = :id"), 
-                                                {"q": per_unit_qty, "n": item.note, "id": item.id})
+                                if req_qty <= 0:
+                                    # Xóa dòng BOM nếu user xóa NVL khỏi kế hoạch
+                                    self.db.execute(text("DELETE FROM bom_materials WHERE id = :id"), {"id": item.id})
+                                else:
+                                    self.db.execute(text("UPDATE bom_materials SET quantity_needed = :q, note = :n WHERE id = :id"), 
+                                                    {"q": per_unit_qty, "n": item.note, "id": item.id})
                             else:
                                 if item.material_variant_id:
-                                    self.db.execute(text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
-                                                    {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note})
+                                    if req_qty > 0:
+                                        self.db.execute(text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
+                                                        {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note})
 
             # 4. Cập nhật SKU
             if (hasattr(data, 'new_sku') and data.new_sku) or (hasattr(data, 'new_product_name') and data.new_product_name):
