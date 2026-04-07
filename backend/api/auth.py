@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.authService import AuthService 
-from drivers.dependencies import get_current_user
+from drivers.dependencies import get_current_user, require_admin
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -36,7 +36,7 @@ def read_users_me(current_user: dict = Depends(get_current_user)):
     return current_user
 
 @router.post("/auth/register")
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
+def register(req: RegisterRequest, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
     service = AuthService(db)
     try:
         # Gọi hàm create_user mới (sẽ sửa ở bước 4)

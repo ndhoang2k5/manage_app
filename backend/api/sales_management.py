@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from openpyxl import Workbook
 
 from drivers.db_client import get_db
-from drivers.dependencies import get_current_user
+from drivers.dependencies import require_module_access
 from entities.sales_management import SalesFetchRequest, PriorityCodesUpsertRequest, SalesBackfillRequest
 from services.salesManagementService import SalesManagementService
 
@@ -18,7 +18,7 @@ router = APIRouter()
 def fetch_sales_report(
     req: SalesFetchRequest,
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
         service = SalesManagementService(db)
@@ -47,7 +47,7 @@ def get_sales_report(
     sort_by: str = Query("sold_qty"),
     sort_dir: str = Query("desc"),
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
         service = SalesManagementService(db)
@@ -72,7 +72,7 @@ def get_sales_report(
 @router.get("/sales-management/sync-status")
 def get_sync_status(
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
         service = SalesManagementService(db)
@@ -85,7 +85,7 @@ def get_sync_status(
 @router.post("/sales-management/sync-now")
 def sync_now(
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
         service = SalesManagementService(db)
@@ -98,7 +98,7 @@ def sync_now(
 @router.post("/sales-management/sync-stock")
 def sync_stock(
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
         service = SalesManagementService(db)
@@ -112,7 +112,7 @@ def sync_stock(
 def backfill_history(
     req: SalesBackfillRequest,
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
         service = SalesManagementService(db)
@@ -131,7 +131,7 @@ def backfill_history(
 @router.get("/sales-management/priority-codes")
 def get_priority_codes(
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
         service = SalesManagementService(db)
@@ -145,7 +145,7 @@ def get_priority_codes(
 def upsert_priority_codes(
     req: PriorityCodesUpsertRequest,
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
         service = SalesManagementService(db)
@@ -173,7 +173,7 @@ def export_sales_report(
     sort_dir: str = Query("desc"),
     top_n: int = Query(0),
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
         service = SalesManagementService(db)
