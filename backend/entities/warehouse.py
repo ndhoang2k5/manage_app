@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from typing import List
 
@@ -32,6 +32,8 @@ class WarehouseResponse(BaseModel):
     type_name: str  # Trả về chữ "Kho Tổng" hoặc "Xưởng" cho dễ đọc
     brand_name: str
     address: str
+    brand_id: Optional[int] = None
+    managed_by_central_ids: List[int] = Field(default_factory=list)
 
 # --- 3. TRANSFER (ĐIỀU CHUYỂN) ---
 class TransferItem(BaseModel):

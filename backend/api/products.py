@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from drivers.dependencies import get_current_user
+from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope
 from drivers.db_client import get_db
 from services.productService import ProductService
 from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse, MaterialUpdateRequest
@@ -48,6 +48,11 @@ def update_material(material_id: int, request: MaterialUpdateRequest, db: Sessio
 
 # 6. API Lấy danh sách NVL theo kho
 @router.get("/materials/warehouse/{warehouse_id}")
-def get_materials_by_warehouse(warehouse_id: int, db: Session = Depends(get_db)):
+def get_materials_by_warehouse(
+    warehouse_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("inventory")),
+):
     service = ProductService(db)
+    assert_warehouse_scope(user, db, warehouse_id)
     return service.get_materials_by_warehouse(warehouse_id)

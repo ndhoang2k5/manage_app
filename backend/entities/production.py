@@ -29,6 +29,7 @@ class BOMCreateRequest(BaseModel):
 class ProductionOrderCreateRequest(BaseModel):
     code: str                # Mã lệnh: LSX-001
     warehouse_id: int        # Xưởng nào may (VD: Xưởng 1)
+    owner_central_id: Optional[int] = None  # Nhãn kho tổng sở hữu đơn
     product_variant_id: int  # May cái gì (Áo Sơ mi)
     quantity_planned: int    # Số lượng (100 cái)
     start_date: date
@@ -52,6 +53,7 @@ class QuickProductionRequest(BaseModel):
     
     order_code: str
     warehouse_id: int
+    owner_central_id: Optional[int] = None  # Nhãn kho tổng sở hữu đơn
     quantity_planned: int = 0
     start_date: date
     due_date: date

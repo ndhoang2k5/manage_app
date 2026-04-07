@@ -60,3 +60,23 @@ def delete_warehouse(id: int, db: Session = Depends(get_db), admin: dict = Depen
         return service.delete_warehouse(id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/warehouses/{id}/central-links")
+def update_workshop_central_links(
+    id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    service = WarehouseService(db)
+    try:
+        central_ids = payload.get("central_ids") if isinstance(payload, dict) else None
+        if central_ids is None:
+            raise Exception("Thiếu central_ids")
+        if not isinstance(central_ids, list):
+            raise Exception("central_ids phải là mảng")
+        normalized = [int(v) for v in central_ids]
+        return service.update_workshop_central_links(id, normalized)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
