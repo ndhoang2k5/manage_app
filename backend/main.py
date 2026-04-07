@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from api import products, warehouses, purchases, production, reports, auth, drafts, sales_management
+from api import products, warehouses, purchases, production, reports, auth, drafts, sales_management, accounts
 from jobs.sales_realtime_sync import start_sales_realtime_sync_worker
 import os 
 
@@ -39,6 +39,7 @@ app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
 app.include_router(drafts.router,prefix="/api/v1", tags=["Auth"])
 app.include_router(sales_management.router, prefix="/api/v1", tags=["Sales Management"])
+app.include_router(accounts.router, prefix="/api/v1", tags=["Account Management"])
 
 
 @app.on_event("startup")
