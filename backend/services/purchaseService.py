@@ -111,7 +111,7 @@ class PurchaseService:
         # Base query
         sql = """
             SELECT po.id, po.po_code, s.name as supplier_name, w.name as warehouse_name, 
-                   po.order_date, po.total_amount, po.status
+                   po.order_date, po.total_amount, po.status, w.brand_id
             FROM purchase_orders po
             LEFT JOIN suppliers s ON po.supplier_id = s.id
             LEFT JOIN warehouses w ON po.warehouse_id = w.id
@@ -131,14 +131,20 @@ class PurchaseService:
         return [
             {
                 "id": r[0], "po_code": r[1], "supplier_name": r[2],
-                "warehouse_name": r[3], "order_date": r[4], "total_amount": r[5], "status": r[6]
+                "warehouse_name": r[3], "order_date": r[4], "total_amount": r[5], "status": r[6],
+                "brand_id": int(r[7]) if r[7] is not None else None,
             } for r in results
         ]
 
     # --- 4. HÀM MỚI: LẤY CHI TIẾT PO (GET DETAIL) ---
     def get_po_detail(self, po_id: int):
         # A. Header
-        query_header = text("SELECT id, po_code, supplier_id, warehouse_id, order_date FROM purchase_orders WHERE id = :id")
+        query_header = text("""
+            SELECT po.id, po.po_code, po.supplier_id, po.warehouse_id, po.order_date, w.brand_id
+            FROM purchase_orders po
+            LEFT JOIN warehouses w ON w.id = po.warehouse_id
+            WHERE po.id = :id
+        """)
         header = self.db.execute(query_header, {"id": po_id}).fetchone()
         if not header: raise Exception("Phiếu nhập không tồn tại")
 
@@ -158,6 +164,7 @@ class PurchaseService:
             "supplier_id": header[2],
             "warehouse_id": header[3],
             "order_date": header[4],
+            "brand_id": int(header[5]) if header[5] is not None else None,
             "items": [
                 {
                     "id": r[0],

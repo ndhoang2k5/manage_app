@@ -151,7 +151,7 @@ class ReportService:
 
         # Trả về cục dữ liệu tổng hợp
         return {
-            "info": {"id": info[0], "name": info[1], "brand": info[3]},
+            "info": {"id": info[0], "name": info[1], "brand_id": info[2], "brand": info[3]},
             "workshops": list_children,
             "total_inventory": list_stocks,
             "recent_purchases": list_pos,
@@ -160,7 +160,7 @@ class ReportService:
     
     def get_workshop_detail(self, warehouse_id: int):
         # A. Thông tin cơ bản
-        info = self.db.execute(text("SELECT id, name, address FROM warehouses WHERE id = :wid"), {"wid": warehouse_id}).fetchone()
+        info = self.db.execute(text("SELECT id, name, address, brand_id FROM warehouses WHERE id = :wid"), {"wid": warehouse_id}).fetchone()
         if not info: raise Exception("Không tìm thấy kho")
 
         # B. Tồn kho tại xưởng (Kèm giá trị)
@@ -199,7 +199,7 @@ class ReportService:
         } for r in orders]
 
         return {
-            "info": {"id": info[0], "name": info[1], "address": info[2]},
+            "info": {"id": info[0], "name": info[1], "address": info[2], "brand_id": info[3]},
             "inventory": list_stocks,
             "production": list_orders,
             "total_asset_value": sum(item['value'] for item in list_stocks)

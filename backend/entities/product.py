@@ -12,6 +12,7 @@ class ProductVariantResponse(BaseModel):
     cost_price: float = 0 
     note: Optional[str] = ""
     color: Optional[str] = "" # Thêm trường màu để hiển thị nếu cần
+    brand_ids: List[int] = []
     
     class Config:
         from_attributes = True

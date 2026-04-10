@@ -7,6 +7,7 @@ class WorkshopInfo(BaseModel):
     id: int
     name: str
     address: Optional[str] = None
+    brand_id: Optional[int] = None
 
 class WorkshopInventoryItem(BaseModel):
     sku: str

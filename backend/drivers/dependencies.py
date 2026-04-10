@@ -88,12 +88,36 @@ def get_allowed_warehouse_ids(user: dict, db: Session):
         return []
 
     # Chỉ lấy đúng kho/xưởng đã được cấp trực tiếp cho tài khoản
-    # (không tự nới rộng theo brand/kho tổng nữa).
+    # Sau đó mở rộng theo liên kết kho tổng -> xưởng trong central_workshop_links
+    # để user được cấp kho tổng có thể nhìn thấy các xưởng được kho tổng đó quản lý.
     direct_ids = [int(row[0]) for row in assigned_warehouses]
     if not direct_ids:
         return []
+    allowed = set(direct_ids)
 
-    return list(set(direct_ids))
+    try:
+        ids_str = ",".join(str(int(x)) for x in direct_ids)
+        central_rows = db.execute(text(f"""
+            SELECT id
+            FROM warehouses
+            WHERE id IN ({ids_str})
+              AND is_central = 1
+        """)).fetchall()
+        central_ids = [int(r[0]) for r in central_rows]
+        if central_ids:
+            cids_str = ",".join(str(int(x)) for x in central_ids)
+            linked_rows = db.execute(text(f"""
+                SELECT workshop_warehouse_id
+                FROM central_workshop_links
+                WHERE central_warehouse_id IN ({cids_str})
+            """)).fetchall()
+            for row in linked_rows:
+                allowed.add(int(row[0]))
+    except Exception:
+        # Nếu bảng link chưa tồn tại hoặc query lỗi, fallback về quyền trực tiếp.
+        pass
+
+    return list(allowed)
 
 
 def get_allowed_central_ids(user: dict, db: Session):
