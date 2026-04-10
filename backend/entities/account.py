@@ -15,6 +15,7 @@ class AccountCreateRequest(BaseModel):
     role: str = "staff"
     warehouse_ids: List[int] = []
     module_permissions: List[ModulePermissionItem] = []
+    material_cost_brand_ids: List[int] = []
 
 
 class AccountUpdateRequest(BaseModel):
@@ -23,6 +24,7 @@ class AccountUpdateRequest(BaseModel):
     role: Optional[str] = None
     warehouse_ids: Optional[List[int]] = None
     module_permissions: Optional[List[ModulePermissionItem]] = None
+    material_cost_brand_ids: Optional[List[int]] = None
 
 
 class ModulePermissionsUpdateRequest(BaseModel):

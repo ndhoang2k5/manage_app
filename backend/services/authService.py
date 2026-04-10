@@ -72,6 +72,17 @@ class AuthService:
             {"uid": user_id},
         ).fetchall()
         warehouse_ids = [r[0] for r in wh_rows]
+        try:
+            brand_rows = self.db.execute(text("""
+                SELECT brand_id
+                FROM account_material_cost_brand_permissions
+                WHERE user_id = :uid
+                ORDER BY brand_id
+            """), {"uid": user_id}).fetchall()
+            material_cost_brand_ids = [int(r[0]) for r in brand_rows]
+        except Exception:
+            # Backward compatibility when table is not created yet.
+            material_cost_brand_ids = []
         
         return {
             "access_token": access_token,
@@ -84,6 +95,7 @@ class AuthService:
                 "warehouse_ids": warehouse_ids,
                 "module_permissions": module_permissions,
                 "permitted_modules": permitted_modules,
+                "material_cost_brand_ids": material_cost_brand_ids,
             }
         }
     

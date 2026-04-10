@@ -23,6 +23,17 @@ class AccountService:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """))
+        self.db.execute(text("""
+            CREATE TABLE IF NOT EXISTS account_material_cost_brand_permissions (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                user_id INT NOT NULL,
+                brand_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, brand_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+            )
+        """))
         self.db.commit()
 
     def _save_module_permissions(self, user_id: int, module_permissions: list):
@@ -59,6 +70,21 @@ class AccountService:
         for wid in warehouse_ids:
             self.db.execute(query, {"uid": user_id, "wid": wid})
 
+    def _save_material_cost_brand_permissions(self, user_id: int, brand_ids: list):
+        self.db.execute(
+            text("DELETE FROM account_material_cost_brand_permissions WHERE user_id = :uid"),
+            {"uid": user_id},
+        )
+        if not brand_ids:
+            return
+
+        query = text("""
+            INSERT IGNORE INTO account_material_cost_brand_permissions (user_id, brand_id)
+            VALUES (:uid, :bid)
+        """)
+        for bid in brand_ids:
+            self.db.execute(query, {"uid": user_id, "bid": int(bid)})
+
     def list_accounts(self):
         rows = self.db.execute(text("""
             SELECT u.id, u.username, u.full_name, u.role, u.created_at
@@ -89,6 +115,14 @@ class AccountService:
                 for m in module_rows
             ]
 
+            brand_rows = self.db.execute(text("""
+                SELECT brand_id
+                FROM account_material_cost_brand_permissions
+                WHERE user_id = :uid
+                ORDER BY brand_id ASC
+            """), {"uid": row[0]}).fetchall()
+            material_cost_brand_ids = [int(r[0]) for r in brand_rows]
+
             result.append({
                 "id": row[0],
                 "username": row[1],
@@ -97,6 +131,7 @@ class AccountService:
                 "created_at": row[4],
                 "warehouse_ids": warehouses,
                 "module_permissions": modules,
+                "material_cost_brand_ids": material_cost_brand_ids,
             })
         return result
 
@@ -122,6 +157,7 @@ class AccountService:
 
             self._save_warehouse_scopes(user_id, req.warehouse_ids or [])
             self._save_module_permissions(user_id, req.module_permissions or [])
+            self._save_material_cost_brand_permissions(user_id, req.material_cost_brand_ids or [])
             self.db.commit()
             return {"status": "success", "message": "Tạo tài khoản thành công", "user_id": user_id}
         except Exception as e:
@@ -159,6 +195,8 @@ class AccountService:
                 self._save_warehouse_scopes(account_id, req.warehouse_ids)
             if req.module_permissions is not None:
                 self._save_module_permissions(account_id, req.module_permissions)
+            if req.material_cost_brand_ids is not None:
+                self._save_material_cost_brand_permissions(account_id, req.material_cost_brand_ids)
 
             self.db.commit()
             return {"status": "success", "message": "Cập nhật tài khoản thành công"}
@@ -210,6 +248,12 @@ class AccountService:
             WHERE user_id = :id
             ORDER BY module_key
         """), {"id": account_id}).fetchall()
+        brand_rows = self.db.execute(text("""
+            SELECT brand_id
+            FROM account_material_cost_brand_permissions
+            WHERE user_id = :id
+            ORDER BY brand_id
+        """), {"id": account_id}).fetchall()
 
         return {
             "id": user[0],
@@ -221,6 +265,7 @@ class AccountService:
                 {"module_key": m[0], "can_view": bool(m[1]), "can_manage": bool(m[2])}
                 for m in modules
             ],
+            "material_cost_brand_ids": [int(r[0]) for r in brand_rows],
         }
 
     def update_module_permissions(self, account_id: int, module_permissions: list):
