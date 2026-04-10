@@ -27,7 +27,10 @@ def list_brands(db: Session = Depends(get_db), user: dict = Depends(get_current_
 def create_warehouse(request: WarehouseCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = WarehouseService(db)
     try:
-        return service.create_warehouse(request)
+        # Nhân viên tạo kho/xưởng mới phải được gán quyền truy cập ngay (user_permissions),
+        # vì GET /warehouses chỉ trả về kho đã được cấp — admin không cần vì xem toàn bộ.
+        grant_uid = None if user.get("role") == "admin" else user.get("id")
+        return service.create_warehouse(request, grant_to_user_id=grant_uid)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

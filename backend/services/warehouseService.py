@@ -40,7 +40,7 @@ class WarehouseService:
             raise e
 
     # 2. Tạo Kho mới
-    def create_warehouse(self, data: WarehouseCreateRequest):
+    def create_warehouse(self, data: WarehouseCreateRequest, grant_to_user_id: Optional[int] = None):
         try:
             # Kiểm tra xem Brand ID có tồn tại không
             check_brand = self.db.execute(text("SELECT id FROM brands WHERE id = :bid"), {"bid": data.brand_id}).fetchone()
@@ -57,8 +57,24 @@ class WarehouseService:
                 "central": data.is_central,
                 "addr": data.address
             })
+            row = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()
+            new_id = int(row[0]) if row and row[0] is not None else None
+
+            if grant_to_user_id is not None and new_id is not None:
+                self.db.execute(
+                    text("""
+                        INSERT IGNORE INTO user_permissions (user_id, warehouse_id)
+                        VALUES (:uid, :wid)
+                    """),
+                    {"uid": int(grant_to_user_id), "wid": new_id},
+                )
+
             self.db.commit()
-            return {"status": "success", "message": f"Đã tạo kho: {data.name}"}
+            return {
+                "status": "success",
+                "message": f"Đã tạo kho: {data.name}",
+                "warehouse_id": new_id,
+            }
         except Exception as e:
             self.db.rollback()
             raise e
