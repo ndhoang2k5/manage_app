@@ -116,10 +116,12 @@ class ProductService:
         query = text("""
             SELECT v.id, v.sku, v.variant_name, p.name as category_name, 
                    IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand,
-                   v.cost_price, v.note, v.color
+                   v.cost_price, v.note, v.color,
+                   GROUP_CONCAT(DISTINCT w.brand_id ORDER BY w.brand_id SEPARATOR ',') as brand_ids_csv
             FROM product_variants v
             JOIN products p ON v.product_id = p.id
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
+            LEFT JOIN warehouses w ON w.id = s.warehouse_id
             WHERE p.type = 'material'
             GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price, v.note, v.color
             ORDER BY v.id DESC
@@ -129,7 +131,8 @@ class ProductService:
             {
                 "id": row[0], "sku": row[1], "variant_name": row[2], 
                 "category_name": row[3], "quantity_on_hand": row[4], 
-                "cost_price": row[5], "note": row[6], "color": row[7] # Map color
+                "cost_price": row[5], "note": row[6], "color": row[7],
+                "brand_ids": [int(x) for x in str(row[8]).split(",") if str(x).strip()] if row[8] else [],
             } for row in results
         ]
     

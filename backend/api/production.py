@@ -6,6 +6,8 @@ from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, 
 import shutil
 import uuid
 from typing import Optional
+from datetime import date
+from fastapi.responses import StreamingResponse
 from drivers.dependencies import (
     get_current_user,
     get_allowed_warehouse_ids,
@@ -43,6 +45,35 @@ def list_orders(
         allowed_warehouse_ids=allowed_ids,
         allowed_central_ids=allowed_central_ids,
     )
+
+
+@router.get("/production/orders/export")
+def export_orders_excel(
+    start_date_from: Optional[date] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management", require_manage=True)),
+):
+    """
+    Export production orders to Excel.
+    Filter: start_date >= start_date_from (only start time, no end filter).
+    """
+    allowed_ids = get_allowed_warehouse_ids(user, db)
+    allowed_central_ids = get_allowed_central_ids(user, db)
+    service = ProductionService(db)
+    try:
+        data = service.export_orders_excel(
+            start_date_from=start_date_from,
+            allowed_warehouse_ids=allowed_ids,
+            allowed_central_ids=allowed_central_ids,
+        )
+        filename = "xuat-lenh-san-xuat.xlsx"
+        return StreamingResponse(
+            iter([data]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/production/boms")
 def list_boms(
