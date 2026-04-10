@@ -36,3 +36,29 @@ export const canManageModule = (user, moduleKey) => {
   if (!Array.isArray(user?.module_permissions)) return true;
   return !!map[moduleKey]?.can_manage;
 };
+
+export const canViewMaterialCost = (user) => {
+  if (user?.role === 'admin') return true;
+  const map = getModulePermissionMap(user);
+  if (!Array.isArray(user?.module_permissions)) return false;
+  if (!map['material-cost']?.can_view) return false;
+  if (!Array.isArray(user?.material_cost_brand_ids)) return false;
+  return user.material_cost_brand_ids.length > 0;
+};
+
+export const canViewMaterialCostForBrand = (user, brandId) => {
+  if (user?.role === 'admin') return true;
+  if (!canViewMaterialCost(user)) return false;
+  if (!Array.isArray(user?.material_cost_brand_ids)) return false;
+  if (!brandId) return false;
+  return user.material_cost_brand_ids.map((x) => Number(x)).includes(Number(brandId));
+};
+
+export const canViewMaterialCostForAnyBrand = (user, brandIds) => {
+  if (user?.role === 'admin') return true;
+  if (!canViewMaterialCost(user)) return false;
+  if (!Array.isArray(user?.material_cost_brand_ids)) return false;
+  if (!Array.isArray(brandIds) || brandIds.length === 0) return false;
+  const allowed = new Set(user.material_cost_brand_ids.map((x) => Number(x)));
+  return brandIds.every((id) => allowed.has(Number(id)));
+};

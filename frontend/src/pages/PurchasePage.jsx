@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import purchaseApi from '../api/purchaseApi';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
-import { getStoredUser, canManageModule } from '../utils/permissions';
+import { getStoredUser, canManageModule, canViewMaterialCostForBrand } from '../utils/permissions';
 import AccessModeBadge from '../components/AccessModeBadge';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -34,6 +34,15 @@ const PurchasePage = () => {
     const [form] = Form.useForm();
     const [editForm] = Form.useForm(); 
     const [searchText, setSearchText] = useState(''); 
+    const selectedCreateWarehouseId = Form.useWatch('warehouse_id', form);
+
+    const selectedCreateWarehouse = warehouses.find((w) => Number(w.id) === Number(selectedCreateWarehouseId));
+    const canViewCreatePrice = selectedCreateWarehouse
+        ? canViewMaterialCostForBrand(user, selectedCreateWarehouse.brand_id)
+        : false;
+    const canViewCurrentOrderPrice = currentOrder
+        ? canViewMaterialCostForBrand(user, currentOrder.brand_id)
+        : false;
 
     // 1. Tải dữ liệu
     const fetchInitialData = async (search = '') => { // Nhận tham số search
@@ -192,7 +201,14 @@ const PurchasePage = () => {
         { title: 'Nhà Cung Cấp', dataIndex: 'supplier_name', key: 'supplier' },
         { title: 'Nhập Kho', dataIndex: 'warehouse_name', key: 'warehouse' },
         { title: 'Ngày Nhập', dataIndex: 'order_date', key: 'date' },
-        { title: 'Tổng Tiền', dataIndex: 'total_amount', align: 'right', render: v => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v) },
+        {
+            title: 'Tổng Tiền',
+            dataIndex: 'total_amount',
+            align: 'right',
+            render: (v, row) => (canViewMaterialCostForBrand(user, row.brand_id)
+                ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v)
+                : '***'),
+        },
         { title: 'Trạng thái', dataIndex: 'status', render: s => <Tag color="success">{s}</Tag> },
         {
             title: 'Hành động',
@@ -256,7 +272,13 @@ const PurchasePage = () => {
                                     <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
                                         <Form.Item {...restField} name={[name, 'product_variant_id']} rules={[{ required: true, message: 'Chọn hàng' }]} style={{ width: 320 }}><Select placeholder="Chọn Nguyên Vật Liệu" showSearch optionFilterProp="children">{products.map(p => <Select.Option key={p.id} value={p.id}>{p.sku} - {p.variant_name}</Select.Option>)}</Select></Form.Item>
                                         <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true, message: 'Nhập SL' }]}><InputNumber placeholder="Số lượng" min={0} style={{ width: 120 }} /></Form.Item>
-                                        <Form.Item {...restField} name={[name, 'unit_price']} rules={[{ required: true, message: 'Nhập giá' }]}><InputNumber placeholder="Đơn giá" min={0} style={{ width: 150 }} /></Form.Item>
+                                        <Form.Item {...restField} name={[name, 'unit_price']} rules={[{ required: true, message: 'Nhập giá' }]}>
+                                            {canViewCreatePrice ? (
+                                                <InputNumber placeholder="Đơn giá" min={0} style={{ width: 150 }} />
+                                            ) : (
+                                                <Input placeholder="***" disabled style={{ width: 150 }} />
+                                            )}
+                                        </Form.Item>
                                         <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red', cursor: 'pointer' }} />
                                     </Space>
                                 ))}
@@ -353,14 +375,20 @@ const PurchasePage = () => {
 
                                                     <td style={{padding: 8}}>
                                                         <Form.Item {...restField} name={[name, 'unit_price']} style={{marginBottom: 0}} rules={[{ required: true }]}>
-                                                            <InputNumber min={0} style={{width: '100%'}} 
-                                                                formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                                                                parser={value => value.replace(/\$\s?|(,*)/g, '')}
-                                                            />
+                                                            {canViewCurrentOrderPrice ? (
+                                                                <InputNumber min={0} style={{width: '100%'}} 
+                                                                    formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                                                                    parser={value => value.replace(/\$\s?|(,*)/g, '')}
+                                                                />
+                                                            ) : (
+                                                                <Input value="***" disabled />
+                                                            )}
                                                         </Form.Item>
                                                     </td>
                                                     <td style={{padding: 8, textAlign: 'right', color: '#888'}}>
-                                                        {new Intl.NumberFormat('vi-VN').format((editForm.getFieldValue(['items', name, 'quantity']) || 0) * (editForm.getFieldValue(['items', name, 'unit_price']) || 0))}
+                                                        {canViewCurrentOrderPrice
+                                                            ? new Intl.NumberFormat('vi-VN').format((editForm.getFieldValue(['items', name, 'quantity']) || 0) * (editForm.getFieldValue(['items', name, 'unit_price']) || 0))
+                                                            : '***'}
                                                     </td>
                                                     <td style={{padding: 8, textAlign: 'center'}}>
                                                         {!isExisting && (

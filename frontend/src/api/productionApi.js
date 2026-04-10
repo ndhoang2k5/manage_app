@@ -30,6 +30,9 @@ const productionApi = {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
     updateProgress: (id, data) => axiosClient.put(`/production/orders/${id}/progress`, data),
+
+    exportOrdersExcel: (params) =>
+        axiosClient.get('/production/orders/export', { params, responseType: 'blob' }),
 };
 
 export default productionApi;

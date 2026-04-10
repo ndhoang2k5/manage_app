@@ -55,6 +55,7 @@ const App = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [centralWarehouses, setCentralWarehouses] = useState([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
+  const canViewReports = canViewModule(user, 'reports');
 
   const { token: { colorBgContainer } } = theme.useToken();
 
@@ -92,16 +93,18 @@ const App = () => {
   }, []);
 
   const menuItems = [
-    {
-      key: 'dashboard',
-      icon: <PieChartOutlined />,
-      label: 'Báo cáo Tổng quan',
-      children: centralWarehouses.map(w => ({
-        key: `/dashboard/${w.id}`,
-        label: <Link to={`/dashboard/${w.id}`}>{w.name}</Link>,
-        icon: <BarChartOutlined />
-      }))
-    },
+    ...(canViewReports
+      ? [{
+          key: 'dashboard',
+          icon: <PieChartOutlined />,
+          label: 'Báo cáo Tổng quan',
+          children: centralWarehouses.map(w => ({
+            key: `/dashboard/${w.id}`,
+            label: <Link to={`/dashboard/${w.id}`}>{w.name}</Link>,
+            icon: <BarChartOutlined />
+          }))
+        }]
+      : []),
     { key: '/', icon: <DatabaseOutlined />, label: <Link to="/">Kho Vật Tư</Link> },
     { key: '/warehouses', icon: <ShopOutlined />, label: <Link to="/warehouses">Kho & Xưởng</Link> },
     ...(canViewModule(user, 'purchases')
@@ -130,7 +133,7 @@ const App = () => {
           </div>
 
           {loadingMenu ? <div style={{textAlign: 'center', marginTop: 20}}><Spin /></div> : 
-            <Menu theme="dark" mode="inline" defaultOpenKeys={['dashboard']} items={menuItems} style={{ fontSize: 15, fontWeight: 500 }} />
+            <Menu theme="dark" mode="inline" defaultOpenKeys={canViewReports ? ['dashboard'] : []} items={menuItems} style={{ fontSize: 15, fontWeight: 500 }} />
           }
         </Sider>
 
@@ -159,8 +162,8 @@ const App = () => {
             <div style={{ padding: 24, minHeight: '80vh' }}>
               <Routes>
                 <Route path="/login" element={<Navigate to="/" replace />} />
-                <Route path="/dashboard/:id" element={<CentralDashboard />} />
-                <Route path="/workshop/:id" element={<WorkshopDetail />} />
+                <Route path="/dashboard/:id" element={canViewReports ? <CentralDashboard /> : <Navigate to="/" replace />} />
+                <Route path="/workshop/:id" element={canViewReports ? <WorkshopDetail /> : <Navigate to="/" replace />} />
                 <Route path="/" element={<InventoryPage />} />
                 <Route path="/warehouses" element={<WarehousePage />} />
                 <Route path="/purchases" element={canViewModule(user, 'purchases') ? <PurchasePage /> : <Navigate to="/" replace />} />

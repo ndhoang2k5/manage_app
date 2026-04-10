@@ -3,9 +3,12 @@ import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tab
 import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined, BgColorsOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
 import dayjs from 'dayjs';
+import { getStoredUser, canViewMaterialCost, canViewMaterialCostForAnyBrand } from '../utils/permissions';
 
 
 const InventoryPage = () => {
+    const user = getStoredUser();
+    const canViewCost = canViewMaterialCost(user);
     // Data States
     const [materials, setMaterials] = useState([]);
     const [groups, setGroups] = useState([]);
@@ -21,6 +24,9 @@ const InventoryPage = () => {
 
     const [form] = Form.useForm();
     const [groupForm] = Form.useForm();
+    const canViewEditingItemCost = editingItem
+        ? (canViewCost && canViewMaterialCostForAnyBrand(user, editingItem.brand_ids || []))
+        : false;
 
     const fetchData = async () => {
         setLoading(true);
@@ -125,7 +131,14 @@ const InventoryPage = () => {
         },
         
         { title: 'Ghi chú', dataIndex: 'note', render: (t) => t ? <span style={{color: '#666', fontStyle: 'italic'}}>{t}</span> : '-' },
-        { title: 'Giá Vốn', dataIndex: 'cost_price', align: 'right', render: v => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v || 0) },
+        {
+            title: 'Giá Vốn',
+            dataIndex: 'cost_price',
+            align: 'right',
+            render: (v, row) => (canViewCost && canViewMaterialCostForAnyBrand(user, row.brand_ids || [])
+                ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v || 0)
+                : <Tag color="default">***</Tag>),
+        },
         { title: 'Tồn kho', dataIndex: 'quantity_on_hand', align: 'center', render: q => <Tag color={q > 0 ? 'success' : 'error'}>{q > 0 ? q : 'Hết'}</Tag> },
         { title: '', key: 'action', width: 50, render: (_, record) => <Button type="text" icon={<EditOutlined />} onClick={() => openEditModal(record)} style={{color: '#1677ff'}} /> }
     ];
@@ -185,9 +198,13 @@ const InventoryPage = () => {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                                 <Form.Item label="Mã SKU" name="sku"><Input /></Form.Item>
                                 
-                                <Tooltip title="Giá vốn được tính tự động từ phiếu nhập">
+                                <Tooltip title={canViewEditingItemCost ? 'Giá vốn được tính tự động từ phiếu nhập' : 'Bạn không có quyền xem giá vốn'}>
                                     <Form.Item label="Giá Vốn" name="cost_price">
-                                        <InputNumber disabled style={{width: '100%'}} />
+                                        {canViewEditingItemCost ? (
+                                            <InputNumber disabled style={{width: '100%'}} />
+                                        ) : (
+                                            <Input value="***" disabled />
+                                        )}
                                     </Form.Item>
                                 </Tooltip>
                             </div>
@@ -210,7 +227,11 @@ const InventoryPage = () => {
                                                     <Input placeholder="Mã SKU (VD: LINEN-01)" style={{width: 180}} />
                                                 </Form.Item>
                                                 <Form.Item {...restField} name={[name, 'cost_price']} initialValue={0}>
-                                                    <InputNumber placeholder="Giá vốn" style={{width: 120}} />
+                                                    {canViewCost ? (
+                                                        <InputNumber placeholder="Giá vốn" style={{width: 120}} />
+                                                    ) : (
+                                                        <Input placeholder="***" disabled style={{width: 120}} />
+                                                    )}
                                                 </Form.Item>
                                                 <Form.Item {...restField} name={[name, 'note']}>
                                                     <Input placeholder="Ghi chú" />

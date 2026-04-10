@@ -26,6 +26,7 @@ const MODULE_OPTIONS = [
   { key: 'reports', label: 'Báo cáo' },
   { key: 'drafts', label: 'Đơn hàng dự kiến' },
   { key: 'sales-management', label: 'Quản lý số bán' },
+  { key: 'material-cost', label: 'Xem giá vốn nguyên phụ liệu' },
 ];
 
 const EMPTY_MODULE_MAP = MODULE_OPTIONS.reduce((acc, m) => {
@@ -36,6 +37,7 @@ const EMPTY_MODULE_MAP = MODULE_OPTIONS.reduce((acc, m) => {
 const AccountManagementPage = () => {
   const [accounts, setAccounts] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  const [brands, setBrands] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openModal, setOpenModal] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -45,6 +47,8 @@ const AccountManagementPage = () => {
   const [form] = Form.useForm();
   const selectedCentralIds = Form.useWatch('central_ids', form) || [];
   const selectedRole = Form.useWatch('role', form) || 'staff';
+  const selectedMaterialCostView = !!modulePermissionMap['material-cost']?.can_view;
+  const selectedMaterialCostBrandIds = Form.useWatch('material_cost_brand_ids', form) || [];
 
   const moduleLabelMap = MODULE_OPTIONS.reduce((acc, m) => {
     acc[m.key] = m.label;
@@ -79,12 +83,14 @@ const AccountManagementPage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [accRes, whRes] = await Promise.all([
+      const [accRes, whRes, brandRes] = await Promise.all([
         accountApi.getAll(),
         warehouseApi.getAllWarehouses(),
+        warehouseApi.getAllBrands(),
       ]);
       setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
       setWarehouses(Array.isArray(whRes.data) ? whRes.data : []);
+      setBrands(Array.isArray(brandRes.data) ? brandRes.data : []);
     } catch (err) {
       message.error(err.response?.data?.detail || 'Lỗi tải dữ liệu tài khoản');
     }
@@ -99,8 +105,19 @@ const AccountManagementPage = () => {
     setEditing(null);
     setModulePermissionMap(EMPTY_MODULE_MAP);
     form.resetFields();
-    form.setFieldsValue({ role: 'staff', central_ids: [], workshop_ids: [] });
+    form.setFieldsValue({ role: 'staff', central_ids: [], workshop_ids: [], material_cost_brand_ids: [] });
     setOpenModal(true);
+  };
+
+  const setMaterialCostModuleByBrandSelection = (brandIds = []) => {
+    const hasAnyBrand = Array.isArray(brandIds) && brandIds.length > 0;
+    setModulePermissionMap((prev) => ({
+      ...prev,
+      'material-cost': {
+        can_view: hasAnyBrand,
+        can_manage: false,
+      },
+    }));
   };
 
   const buildMapFromModulePermissions = (modulePermissions = []) => {
@@ -132,6 +149,7 @@ const AccountManagementPage = () => {
       role: row.role,
       central_ids: centralIds,
       workshop_ids: workshopIds,
+      material_cost_brand_ids: Array.isArray(row.material_cost_brand_ids) ? row.material_cost_brand_ids : [],
       password: '',
     });
     setOpenModal(true);
@@ -146,6 +164,9 @@ const AccountManagementPage = () => {
       full_name: values.full_name,
       role: values.role,
       warehouse_ids: mergedWarehouseIds,
+      material_cost_brand_ids: modulePermissionMap['material-cost']?.can_view
+        ? (values.material_cost_brand_ids || [])
+        : [],
       module_permissions: MODULE_OPTIONS.map((m) => ({
         module_key: m.key,
         can_view: !!modulePermissionMap[m.key]?.can_view,
@@ -351,22 +372,26 @@ const AccountManagementPage = () => {
                     <b>{m.label}</b>
                     <Checkbox
                       checked={perm.can_view}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const checked = e.target.checked;
                         setModulePermissionMap((prev) => ({
                           ...prev,
                           [m.key]: {
                             ...prev[m.key],
-                            can_view: e.target.checked,
-                            can_manage: e.target.checked ? prev[m.key]?.can_manage : false,
+                            can_view: checked,
+                            can_manage: checked ? prev[m.key]?.can_manage : false,
                           },
-                        }))
-                      }
+                        }));
+                        if (m.key === 'material-cost' && !checked) {
+                          form.setFieldsValue({ material_cost_brand_ids: [] });
+                        }
+                      }}
                     >
                       Xem
                     </Checkbox>
                     <Checkbox
                       checked={perm.can_manage}
-                      disabled={!perm.can_view}
+                      disabled={!perm.can_view || m.key === 'material-cost'}
                       onChange={(e) =>
                         setModulePermissionMap((prev) => ({
                           ...prev,
@@ -383,6 +408,57 @@ const AccountManagementPage = () => {
                   </div>
                 );
               })}
+            </div>
+          </Form.Item>
+          <Form.Item
+            label="Bật/Tắt quyền xem giá vốn theo nhãn hàng"
+            extra="Tài khoản có thể dùng nhiều brand nhưng chỉ xem giá vốn ở các brand được tick."
+          >
+            <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    const allIds = brands.map((b) => Number(b.id));
+                    form.setFieldsValue({ material_cost_brand_ids: allIds });
+                    setMaterialCostModuleByBrandSelection(allIds);
+                  }}
+                >
+                  Chọn tất cả brand
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    form.setFieldsValue({ material_cost_brand_ids: [] });
+                    setMaterialCostModuleByBrandSelection([]);
+                  }}
+                >
+                  Bỏ hết quyền xem giá
+                </Button>
+              </div>
+              <Form.Item name="material_cost_brand_ids" noStyle>
+                <Checkbox.Group
+                  style={{ width: '100%' }}
+                  value={selectedMaterialCostBrandIds}
+                  onChange={(checkedIds) => {
+                    form.setFieldsValue({ material_cost_brand_ids: checkedIds });
+                    setMaterialCostModuleByBrandSelection(checkedIds);
+                  }}
+                >
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                    {brands.map((b) => (
+                      <Checkbox key={b.id} value={Number(b.id)}>
+                        {b.name}
+                      </Checkbox>
+                    ))}
+                  </div>
+                </Checkbox.Group>
+              </Form.Item>
+              {!selectedMaterialCostView ? (
+                <div style={{ marginTop: 8, color: '#faad14', fontSize: 12 }}>
+                  Chưa có brand nào được cấp nên quyền "Xem giá vốn nguyên phụ liệu" đang tắt.
+                </div>
+              ) : null}
             </div>
           </Form.Item>
         </Form>
@@ -418,6 +494,15 @@ const AccountManagementPage = () => {
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {renderPermissionTags(detailRecord.module_permissions || [])}
               </div>
+            </Descriptions.Item>
+            <Descriptions.Item label="Brand được xem giá vốn">
+              {(() => {
+                const ids = Array.isArray(detailRecord.material_cost_brand_ids) ? detailRecord.material_cost_brand_ids : [];
+                if (!ids.length) return 'Không cấu hình';
+                const idSet = new Set(ids.map((x) => Number(x)));
+                const names = brands.filter((b) => idSet.has(Number(b.id))).map((b) => b.name);
+                return names.length ? names.join(', ') : ids.join(', ');
+              })()}
             </Descriptions.Item>
           </Descriptions>
         )}

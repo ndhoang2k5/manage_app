@@ -18,7 +18,7 @@ import {
 import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
-import { getStoredUser, canManageModule } from '../utils/permissions';
+import { getStoredUser, canManageModule, canViewMaterialCost, canViewMaterialCostForBrand } from '../utils/permissions';
 import AccessModeBadge from '../components/AccessModeBadge';
 
 const BASE_URL = window.location.origin; 
@@ -26,6 +26,7 @@ const BASE_URL = window.location.origin;
 const ProductionPage = () => {
     const user = getStoredUser();
     const canManageProduction = canManageModule(user, 'production');
+    const canExportProductionExcel = canManageModule(user, 'sales-management');
     // 1. Data States
     const [orders, setOrders] = useState([]);
     const [products, setProducts] = useState([]); 
@@ -38,6 +39,7 @@ const ProductionPage = () => {
     const [filterWarehouse, setFilterWarehouse] = useState(null);
     const [statusFilter, setStatusFilter] = useState(null);
     const [completedTotal, setCompletedTotal] = useState(0);
+    const [exportStartDateFrom, setExportStartDateFrom] = useState(null);
 
     // 3. UI States
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -62,10 +64,15 @@ const ProductionPage = () => {
 
     const [orderForm] = Form.useForm();
     const [editForm] = Form.useForm();
+    const selectedOwnerCentralId = Form.useWatch('owner_central_id', orderForm);
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
     const sizeStandardOptions = sizeStandards.map((s) => ({ value: s, label: s }));
     const centralOptions = warehouses.filter(w => w.type_name === 'Kho Tổng');
+    const selectedOwnerCentral = centralOptions.find((w) => Number(w.id) === Number(selectedOwnerCentralId));
+    const canViewCreateCost = selectedOwnerCentral
+        ? canViewMaterialCostForBrand(user, selectedOwnerCentral.brand_id)
+        : canViewMaterialCost(user);
 
     // --- HÀM LOAD DỮ LIỆU ---
     const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null, status = null) => {
@@ -111,6 +118,30 @@ const ProductionPage = () => {
             console.error("Lỗi fetch data:", error);
         }
         setLoading(false);
+    };
+
+    const handleExportOrdersExcel = async () => {
+        try {
+            const startDateParam = exportStartDateFrom
+                ? dayjs(exportStartDateFrom).format('YYYY-MM-DD')
+                : undefined;
+            const res = await productionApi.exportOrdersExcel({
+                start_date_from: startDateParam,
+            });
+            const blob = new Blob([res.data], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'xuat-lenh-san-xuat.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            message.error('Lỗi xuất Excel: ' + (error.response?.data?.detail || error.message));
+        }
     };
 
     useEffect(() => {
@@ -398,7 +429,19 @@ const ProductionPage = () => {
     const openReceiveModal = async (order) => { setCurrentOrder(order); try { const res = await productionApi.getOrderDetails(order.id); const data = res.data.map(item => ({...item, receiving: 0})); setOrderSizes(data); setIsReceiveModalOpen(true); } catch (error) { message.error("Lỗi tải chi tiết"); } };
     const handleReceiveGoods = async () => { try { const itemsToReceive = orderSizes.filter(s => s.receiving > 0).map(s => ({ id: s.id, size: s.size, quantity: Number(s.receiving) })); if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!"); await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive }); message.success("Đã nhập kho!"); setIsReceiveModalOpen(false); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
     const handleViewHistory = async (id) => { try { const res = await productionApi.getReceiveHistory(id); setHistoryData(res.data); setIsHistoryModalOpen(true); } catch (error) { message.error("Lỗi tải lịch sử"); } };
-    const handlePrintOrder = async (id) => { try { const res = await productionApi.getPrintData(id); setPrintData(res.data); setIsPrintModalOpen(true); } catch (error) { message.error("Lỗi tải dữ liệu in"); } };
+    const handlePrintOrder = async (record) => {
+        if (!canViewMaterialCostForBrand(user, record?.owner_brand_id)) {
+            message.warning('Bạn không có quyền xem bảng chi phí/giá vốn của nhãn hàng này');
+            return;
+        }
+        try {
+            const res = await productionApi.getPrintData(record.id);
+            setPrintData(res.data);
+            setIsPrintModalOpen(true);
+        } catch (error) {
+            message.error("Lỗi tải dữ liệu in");
+        }
+    };
 
 
     const openTodoModal = (record) => {
@@ -449,6 +492,7 @@ const ProductionPage = () => {
 // --- HÀM IN (CẬP NHẬT: THÊM BẢNG ĐỊNH MỨC RIÊNG) ---
     const printContent = () => {
         if (!printData) return;
+        const canViewPrintCost = canViewMaterialCostForBrand(user, printData?.owner_brand_id);
         const printWindow = window.open('', '', 'width=950,height=800');
         printWindow.document.write('<html><head><title>PO - ' + (printData.code || '') + '</title>');
         printWindow.document.write(`
@@ -553,66 +597,78 @@ const ProductionPage = () => {
             </table>
         `);
 
-        // --- BẢNG 3: CHI PHÍ & GIÁ THÀNH (BẢNG CŨ ĐẨY XUỐNG) ---
-        printWindow.document.write(`
-            <br/>
-            <h3>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Khoản mục chi phí</th>
-                        <th width="20%">Đơn giá vốn</th>
-                        <th width="20%">Thành tiền</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <!-- Phần Nguyên vật liệu -->
-                    ${(printData.materials || []).map(m => `
+        // --- BẢNG 3: CHI PHÍ & GIÁ THÀNH ---
+        if (canViewPrintCost) {
+            printWindow.document.write(`
+                <br/>
+                <h3>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h3>
+                <table>
+                    <thead>
                         <tr>
-                            <td>${m.name}</td>
-                            <td class="text-right">${safeMoney(m.unit_cost)}</td>
-                            <td class="text-right">${safeMoney(m.total_cost)}</td>
+                            <th>Khoản mục chi phí</th>
+                            <th width="20%">Đơn giá vốn</th>
+                            <th width="20%">Thành tiền</th>
                         </tr>
-                    `).join('')}
-                    
-                    <tr style="background-color: #f9f9f9; font-weight: bold;">
-                        <td class="text-right">Tổng tiền NVL:</td>
-                        <td></td>
-                        <td class="text-right">${safeMoney(printData.total_material_cost)}</td>
-                    </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Phần Nguyên vật liệu -->
+                        ${(printData.materials || []).map(m => `
+                            <tr>
+                                <td>${m.name}</td>
+                                <td class="text-right">${safeMoney(m.unit_cost)}</td>
+                                <td class="text-right">${safeMoney(m.total_cost)}</td>
+                            </tr>
+                        `).join('')}
+                        
+                        <tr style="background-color: #f9f9f9; font-weight: bold;">
+                            <td class="text-right">Tổng tiền NVL:</td>
+                            <td></td>
+                            <td class="text-right">${safeMoney(printData.total_material_cost)}</td>
+                        </tr>
 
-                    <!-- Phần Chi phí khác -->
-                    <tr><td>Phí Gia Công</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.labor_fee)}</td></tr>
-                    <tr><td>Phí In/Thêu</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.print_fee)}</td></tr>
-                    <tr><td>Phí Vận Chuyển</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.shipping_fee)}</td></tr>
-                    <tr><td>Phí Marketing</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.marketing_fee)}</td></tr>
-                    <tr><td>Phí Đóng Gói</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.packaging_fee)}</td></tr>
-                    <tr><td>Phụ phí khác</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.other_fee)}</td></tr>
+                        <!-- Phần Chi phí khác -->
+                        <tr><td>Phí Gia Công</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.labor_fee)}</td></tr>
+                        <tr><td>Phí In/Thêu</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.print_fee)}</td></tr>
+                        <tr><td>Phí Vận Chuyển</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.shipping_fee)}</td></tr>
+                        <tr><td>Phí Marketing</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.marketing_fee)}</td></tr>
+                        <tr><td>Phí Đóng Gói</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.packaging_fee)}</td></tr>
+                        <tr><td>Phụ phí khác</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.other_fee)}</td></tr>
 
-                    <!-- TỔNG CỘNG -->
-                    <tr style="background-color: #e6f7ff; font-size: 16px;">
-                        <td><b>TỔNG CHI PHÍ TOÀN BỘ:</b></td>
-                        <td></td>
-                        <td class="text-right"><b style="color: #d4380d;">${safeMoney(
-                            printData.total_material_cost + 
-                            (printData.labor_fee||0) + (printData.print_fee||0) + 
-                            (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
-                            (printData.packaging_fee||0) + (printData.other_fee||0)
-                        )}</b></td>
-                    </tr>
-                </tbody>
-            </table>
+                        <!-- TỔNG CỘNG -->
+                        <tr style="background-color: #e6f7ff; font-size: 16px;">
+                            <td><b>TỔNG CHI PHÍ TOÀN BỘ:</b></td>
+                            <td></td>
+                            <td class="text-right"><b style="color: #d4380d;">${safeMoney(
+                                printData.total_material_cost + 
+                                (printData.labor_fee||0) + (printData.print_fee||0) + 
+                                (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
+                                (printData.packaging_fee||0) + (printData.other_fee||0)
+                            )}</b></td>
+                        </tr>
+                    </tbody>
+                </table>
 
-            <div style="text-align: right; margin-top: 10px; font-size: 16px; border: 2px solid #000; display: inline-block; padding: 10px 20px; float: right;">
-                GIÁ VỐN / 1 SẢN PHẨM: <b>${safeMoney(
-                    printData.total_qty > 0 
-                    ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
-                    : 0
-                )}</b>
-            </div>
+                <div style="text-align: right; margin-top: 10px; font-size: 16px; border: 2px solid #000; display: inline-block; padding: 10px 20px; float: right;">
+                    GIÁ VỐN / 1 SẢN PHẨM: <b>${safeMoney(
+                        printData.total_qty > 0 
+                        ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
+                        : 0
+                    )}</b>
+                </div>
 
-            <div style="clear: both;"></div>
+                <div style="clear: both;"></div>
+            `);
+        } else {
+            printWindow.document.write(`
+                <br/>
+                <h3>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h3>
+                <div style="border: 1px dashed #999; padding: 12px; text-align: center; color: #666; margin-bottom: 20px;">
+                    Bạn không có quyền xem giá vốn nguyên phụ liệu.
+                </div>
+            `);
+        }
 
+        printWindow.document.write(`
             <div class="footer">
                 <div class="signature"><p><b>Người Lập Lệnh</b></p><br/><br/><br/></div>
                 <div class="signature"><p><b>Xưởng Xác Nhận</b></p><br/><br/><br/></div>
@@ -680,7 +736,13 @@ const ProductionPage = () => {
             title: 'Hành động', key: 'action', align: 'center', width: 220,
             render: (_, record) => (
                 <Space>
-                    <Button icon={<PrinterOutlined />} size="small" onClick={() => handlePrintOrder(record.id)} />
+                    <Button
+                        icon={<PrinterOutlined />}
+                        size="small"
+                        onClick={() => handlePrintOrder(record)}
+                        disabled={!canViewMaterialCostForBrand(user, record?.owner_brand_id)}
+                        title={!canViewMaterialCostForBrand(user, record?.owner_brand_id) ? 'Không có quyền xem giá vốn nhãn hàng này' : 'In'}
+                    />
                     <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
                     {canManageProduction && (
                         <>
@@ -715,6 +777,19 @@ const ProductionPage = () => {
                     <Select placeholder="Lọc theo Xưởng" style={{ width: 200 }} allowClear onChange={handleFilterWarehouse} value={filterWarehouse}>
                         {warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
                     </Select>
+                    {canExportProductionExcel && (
+                        <>
+                            <DatePicker
+                                placeholder="Từ ngày (bắt đầu)"
+                                value={exportStartDateFrom}
+                                onChange={(v) => setExportStartDateFrom(v)}
+                                style={{ width: 180 }}
+                            />
+                            <Button icon={<DownloadOutlined />} onClick={handleExportOrdersExcel}>
+                                Xuất Excel
+                            </Button>
+                        </>
+                    )}
                     <Tag color="blue">Tổng: {pagination.total} đơn</Tag>
                     <Tag
                         color={statusFilter === 'completed' ? 'green' : 'default'}
@@ -878,7 +953,11 @@ const ProductionPage = () => {
                                 <Row gutter={8}><Col span={8}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col></Row>
                                 
                                 <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}>
-                                    <Statistic title="Giá vốn ƯỚC TÍNH (1 SP)" value={estimatedCost} precision={0} valueStyle={{ color: '#3f8600', fontWeight: 'bold' }} suffix="₫" />
+                                    {canViewCreateCost ? (
+                                        <Statistic title="Giá vốn ƯỚC TÍNH (1 SP)" value={estimatedCost} precision={0} valueStyle={{ color: '#3f8600', fontWeight: 'bold' }} suffix="₫" />
+                                    ) : (
+                                        <Statistic title="Giá vốn ƯỚC TÍNH (1 SP)" value="***" valueStyle={{ color: '#999' }} />
+                                    )}
                                 </div>
                                 <div style={{marginTop: 20}}><Form.Item name="auto_start" valuePropName="checked"><Checkbox>Xuất kho vải & Chạy ngay?</Checkbox></Form.Item></div>
                             </Card>
@@ -1278,74 +1357,82 @@ const ProductionPage = () => {
                             </tbody>
                         </table>
 
-                        {/* BẢNG 3: TÀI CHÍNH (KẾ TOÁN - HIỆN GIÁ VỐN) */}
+                        {/* BẢNG 3: TÀI CHÍNH (KẾ TOÁN - PHỤ THUỘC QUYỀN XEM GIÁ) */}
                         <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5 }}>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h4>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
-                            <thead style={{ background: '#f5f5f5' }}>
-                                <tr>
-                                    <th style={{ border: '1px solid #333', padding: '8px' }}>Khoản mục chi phí</th>
-                                    <th style={{ border: '1px solid #333', padding: '8px', width: '20%', textAlign: 'right' }}>Đơn giá vốn</th>
-                                    <th style={{ border: '1px solid #333', padding: '8px', width: '20%', textAlign: 'right' }}>Thành tiền</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {/* List NVL có giá */}
-                                {printData.materials.map((m, idx) => (
-                                    <tr key={idx}>
-                                        <td style={{ border: '1px solid #333', padding: '8px' }}>{m.name}</td>
-                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
-                                            {new Intl.NumberFormat('vi-VN').format(m.unit_cost)}
-                                        </td>
-                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
-                                            {new Intl.NumberFormat('vi-VN').format(m.total_cost)}
-                                        </td>
-                                    </tr>
-                                ))}
+                        {canViewMaterialCostForBrand(user, printData?.owner_brand_id) ? (
+                            <>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
+                                    <thead style={{ background: '#f5f5f5' }}>
+                                        <tr>
+                                            <th style={{ border: '1px solid #333', padding: '8px' }}>Khoản mục chi phí</th>
+                                            <th style={{ border: '1px solid #333', padding: '8px', width: '20%', textAlign: 'right' }}>Đơn giá vốn</th>
+                                            <th style={{ border: '1px solid #333', padding: '8px', width: '20%', textAlign: 'right' }}>Thành tiền</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {/* List NVL có giá */}
+                                        {printData.materials.map((m, idx) => (
+                                            <tr key={idx}>
+                                                <td style={{ border: '1px solid #333', padding: '8px' }}>{m.name}</td>
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
+                                                    {new Intl.NumberFormat('vi-VN').format(m.unit_cost)}
+                                                </td>
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
+                                                    {new Intl.NumberFormat('vi-VN').format(m.total_cost)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        
+                                        <tr style={{background: '#fafafa', fontWeight: 'bold'}}>
+                                            <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>Tổng tiền NVL:</td>
+                                            <td style={{ border: '1px solid #333' }}></td>
+                                            <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
+                                                {new Intl.NumberFormat('vi-VN').format(printData.total_material_cost)}
+                                            </td>
+                                        </tr>
+
+                                        {/* Các chi phí khác */}
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Gia Công</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.labor_fee)}</td></tr>
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí In/Thêu</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.print_fee)}</td></tr>
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Vận Chuyển</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.shipping_fee)}</td></tr>
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Đóng Gói</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.packaging_fee)}</td></tr>
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
+
+                                        {/* TỔNG KẾT */}
+                                        <tr style={{ background: '#e6f7ff', fontSize: 16 }}>
+                                            <td style={{ border: '1px solid #333', padding: '10px' }}><b>TỔNG CHI PHÍ:</b></td>
+                                            <td style={{ border: '1px solid #333' }}></td>
+                                            <td style={{ border: '1px solid #333', padding: '10px', textAlign: 'right', color: '#d4380d' }}>
+                                                <b>
+                                                    {new Intl.NumberFormat('vi-VN').format(
+                                                        printData.total_material_cost + 
+                                                        (printData.labor_fee||0) + (printData.print_fee||0) + 
+                                                        (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
+                                                        (printData.packaging_fee||0) + (printData.other_fee||0)
+                                                    )}
+                                                </b>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                                 
-                                <tr style={{background: '#fafafa', fontWeight: 'bold'}}>
-                                    <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>Tổng tiền NVL:</td>
-                                    <td style={{ border: '1px solid #333' }}></td>
-                                    <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'right' }}>
-                                        {new Intl.NumberFormat('vi-VN').format(printData.total_material_cost)}
-                                    </td>
-                                </tr>
-
-                                {/* Các chi phí khác */}
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Gia Công</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.labor_fee)}</td></tr>
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí In/Thêu</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.print_fee)}</td></tr>
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Vận Chuyển</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.shipping_fee)}</td></tr>
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Đóng Gói</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.packaging_fee)}</td></tr>
-                                <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
-
-                                {/* TỔNG KẾT */}
-                                <tr style={{ background: '#e6f7ff', fontSize: 16 }}>
-                                    <td style={{ border: '1px solid #333', padding: '10px' }}><b>TỔNG CHI PHÍ:</b></td>
-                                    <td style={{ border: '1px solid #333' }}></td>
-                                    <td style={{ border: '1px solid #333', padding: '10px', textAlign: 'right', color: '#d4380d' }}>
-                                        <b>
-                                            {new Intl.NumberFormat('vi-VN').format(
-                                                printData.total_material_cost + 
-                                                (printData.labor_fee||0) + (printData.print_fee||0) + 
-                                                (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
-                                                (printData.packaging_fee||0) + (printData.other_fee||0)
-                                            )}
-                                        </b>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                        
-                        {/* GIÁ VỐN ĐƠN VỊ */}
-                        <div style={{marginTop: 15, textAlign: 'right'}}>
-                            <Tag color="blue" style={{fontSize: 16, padding: '8px 15px'}}>
-                                GIÁ VỐN / 1 SP: <b>{new Intl.NumberFormat('vi-VN').format(
-                                    printData.total_qty > 0 
-                                    ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
-                                    : 0
-                                )} ₫</b>
-                            </Tag>
-                        </div>
+                                {/* GIÁ VỐN ĐƠN VỊ */}
+                                <div style={{marginTop: 15, textAlign: 'right'}}>
+                                    <Tag color="blue" style={{fontSize: 16, padding: '8px 15px'}}>
+                                        GIÁ VỐN / 1 SP: <b>{new Intl.NumberFormat('vi-VN').format(
+                                            printData.total_qty > 0 
+                                            ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
+                                            : 0
+                                        )} ₫</b>
+                                    </Tag>
+                                </div>
+                            </>
+                        ) : (
+                            <div style={{ border: '1px dashed #999', padding: 12, textAlign: 'center', color: '#666', marginBottom: 20 }}>
+                                Bạn không có quyền xem bảng chi phí và giá vốn.
+                            </div>
+                        )}
 
                         {/* SIGNATURE */}
                         <div style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}>

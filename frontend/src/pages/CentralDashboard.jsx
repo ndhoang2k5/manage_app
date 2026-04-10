@@ -1,18 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Row, Col, Card, Statistic, Table, Typography, Tag, Spin, Alert, List, Button, Tabs } from 'antd';
-import { ShopOutlined, CheckCircleOutlined, SyncOutlined, DatabaseOutlined, DollarOutlined, GoldOutlined, ContainerOutlined, RocketOutlined, DownloadOutlined } from '@ant-design/icons';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Row, Col, Card, Statistic, Table, Typography, Tag, Spin, Alert, Button, Tabs, message } from 'antd';
+import { ShopOutlined, GoldOutlined, ContainerOutlined, RocketOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import reportApi from '../api/reportApi';
 import axiosClient from '../api/axiosClient'; 
-import dayjs from 'dayjs';
+import { getStoredUser, canViewMaterialCostForBrand } from '../utils/permissions';
 const { Title } = Typography;
 const CentralDashboard = () => {
+    const user = getStoredUser();
+    const navigate = useNavigate();
 
     const { id } = useParams(); 
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState(null);
-    const [error, setError] = useState(null);
+    const canViewCost = canViewMaterialCostForBrand(user, data?.info?.brand_id);
 
 
     const fetchDashboardData = async () => {
@@ -34,7 +36,7 @@ const CentralDashboard = () => {
 
         const fetchDashboard = async () => {
             setLoading(true); // Bật xoay
-            setError(null);   // Reset lỗi cũ
+            setErrorMsg(null);
             try {
                 const res = await reportApi.getCentralDashboard(id);
                 if (isMounted) {
@@ -44,10 +46,10 @@ const CentralDashboard = () => {
                 if (isMounted) {
                     console.error("Lỗi API Dashboard:", err);
                     // Lấy câu thông báo lỗi từ Backend (nếu có)
-                    const errorMsg = err.response?.data?.detail || "Lỗi tải báo cáo! Vui lòng thử lại.";
-                    setError(errorMsg);
+                    const detail = err.response?.data?.detail || "Lỗi tải báo cáo! Vui lòng thử lại.";
+                    setErrorMsg(detail);
                     // Hiển thị popup lỗi để user biết (Tùy chọn)
-                    message.error(errorMsg);
+                    message.error(detail);
                 }
             } finally {
                 // block finally LUÔN LUÔN CHẠY dù thành công hay lỗi
@@ -88,7 +90,15 @@ const CentralDashboard = () => {
 
         { title: 'Đơn vị', dataIndex: 'unit', key: 'unit', align: 'center' },
         { title: 'Tổng Tồn', dataIndex: 'total_quantity', key: 'qty', align: 'center', render: (qty) => <Tag color="blue">{qty}</Tag> },
-        { title: 'Tổng Giá Trị', dataIndex: 'total_value', key: 'val', align: 'right', render: (val) => <span style={{color: 'green', fontWeight: 'bold'}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)}</span> },
+        {
+            title: 'Tổng Giá Trị',
+            dataIndex: 'total_value',
+            key: 'val',
+            align: 'right',
+            render: (val) => (canViewCost
+                ? <span style={{color: 'green', fontWeight: 'bold'}}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)}</span>
+                : <Tag color="default">***</Tag>),
+        },
     ];
 
     const productionColumns = [
@@ -103,7 +113,15 @@ const CentralDashboard = () => {
         { title: 'Mã PO', dataIndex: 'code', key: 'code' },
         { title: 'Nhà Cung Cấp', dataIndex: 'supplier', key: 'sup' },
         { title: 'Ngày nhập', dataIndex: 'date', key: 'date' },
-        { title: 'Tổng tiền', dataIndex: 'amount', key: 'amt', align: 'right', render: (val) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val) },
+        {
+            title: 'Tổng tiền',
+            dataIndex: 'amount',
+            key: 'amt',
+            align: 'right',
+            render: (val) => (canViewCost
+                ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)
+                : '***'),
+        },
     ];
 
     const totalInventoryValue = data.total_inventory.reduce((sum, item) => sum + item.total_value, 0);
@@ -145,15 +163,17 @@ const CentralDashboard = () => {
                 </Title>
                 
                 {/* NÚT XUẤT EXCEL */}
-                <Button 
-                    type="primary" 
-                    icon={<DownloadOutlined />} 
-                    size="large"
-                    onClick={handleExportExcel}
-                    style={{ background: '#107c41', borderColor: '#107c41' }}
-                >
-                    Xuất Excel Tồn Kho Toàn Hệ Thống
-                </Button>
+                {canViewCost ? (
+                    <Button 
+                        type="primary" 
+                        icon={<DownloadOutlined />} 
+                        size="large"
+                        onClick={handleExportExcel}
+                        style={{ background: '#107c41', borderColor: '#107c41' }}
+                    >
+                        Xuất Excel Tồn Kho Toàn Hệ Thống
+                    </Button>
+                ) : null}
             </div>
             
             <div style={{ marginBottom: 24 }}>
@@ -164,7 +184,11 @@ const CentralDashboard = () => {
             <Row gutter={[16, 16]}>
                 <Col span={6}>
                     <Card bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)'}}>
-                        <Statistic title="Tổng Giá Trị Tài Sản" value={totalInventoryValue} precision={0} valueStyle={{ color: '#3f8600' }} prefix={<GoldOutlined />} formatter={(val) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)} />
+                        {canViewCost ? (
+                            <Statistic title="Tổng Giá Trị Tài Sản" value={totalInventoryValue} precision={0} valueStyle={{ color: '#3f8600' }} prefix={<GoldOutlined />} formatter={(val) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)} />
+                        ) : (
+                            <Statistic title="Tổng Giá Trị Tài Sản" value="***" prefix={<GoldOutlined />} valueStyle={{ color: '#999' }} />
+                        )}
                     </Card>
                 </Col>
                 <Col span={6}>
@@ -196,7 +220,7 @@ const CentralDashboard = () => {
                             <Row gutter={[16, 16]}>
                                 {data.workshops.map(w => (
                                     <Col span={8} key={w.id}>
-                                        <Card hoverable onClick={() => window.location.href = `/workshop/${w.id}`} style={{borderRadius: 8, borderColor: '#d9d9d9'}}>
+                                        <Card hoverable onClick={() => navigate(`/workshop/${w.id}`)} style={{borderRadius: 8, borderColor: '#d9d9d9'}}>
                                             <Card.Meta avatar={<ShopOutlined style={{fontSize: 24, color: '#1677ff'}} />} title={w.name} description={w.address || "Chưa cập nhật địa chỉ"} />
                                             <div style={{marginTop: 10, textAlign: 'right', color: '#1677ff'}}>Xem chi tiết &rarr;</div>
                                         </Card>
