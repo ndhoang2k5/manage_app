@@ -17,6 +17,7 @@ from drivers.dependencies import (
     assert_receive_log_scope,
     get_allowed_central_ids,
     assert_central_scope,
+    get_allowed_material_cost_brand_ids,
 )
 router = APIRouter()
 
@@ -197,7 +198,33 @@ def get_order_print_data(
 ):
     service = ProductionService(db)
     assert_production_order_scope(user, db, order_id)
-    return service.get_order_print_data(order_id)
+    data = service.get_order_print_data(order_id)
+
+    # Vẫn cho phép in lệnh sản xuất, nhưng ẩn dữ liệu chi phí nếu user không có quyền xem giá vốn theo nhãn.
+    allowed_brand_ids = get_allowed_material_cost_brand_ids(user, db)
+    owner_brand_id = data.get("owner_brand_id")
+    can_view_cost = (
+        allowed_brand_ids is None
+        or (
+            owner_brand_id is not None
+            and int(owner_brand_id) in set(int(x) for x in allowed_brand_ids)
+        )
+    )
+    data["can_view_cost"] = can_view_cost
+
+    if not can_view_cost:
+        for m in data.get("materials", []):
+            m["unit_cost"] = None
+            m["total_cost"] = None
+        data["total_material_cost"] = None
+        data["shipping_fee"] = None
+        data["other_fee"] = None
+        data["labor_fee"] = None
+        data["marketing_fee"] = None
+        data["packaging_fee"] = None
+        data["print_fee"] = None
+
+    return data
 
 @router.post("/production/upload")
 def upload_image(

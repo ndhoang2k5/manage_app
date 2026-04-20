@@ -185,3 +185,40 @@ def assert_receive_log_scope(user: dict, db: Session, log_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy log nhập hàng")
     assert_production_order_scope(user, db, int(row[0]))
+
+
+def get_allowed_material_cost_brand_ids(user: dict, db: Session):
+    """
+    Trả về danh sách brand_id được phép xem giá vốn.
+    - Admin: None (full access)
+    - User thường: [] nếu không có quyền material-cost hoặc không có brand nào được cấp
+    """
+    if user.get("role") == "admin":
+        return None
+
+    user_id = user.get("id")
+    if not user_id:
+        return []
+
+    module_map = get_user_module_permissions(int(user_id), db)
+    material_cost_perm = module_map.get("material-cost")
+    if not material_cost_perm or not material_cost_perm.get("can_view", False):
+        return []
+
+    rows = db.execute(text("""
+        SELECT brand_id
+        FROM account_material_cost_brand_permissions
+        WHERE user_id = :uid
+    """), {"uid": int(user_id)}).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def assert_material_cost_brand_scope(user: dict, db: Session, brand_id: int):
+    allowed_brand_ids = get_allowed_material_cost_brand_ids(user, db)
+    if allowed_brand_ids is None:  # admin
+        return
+    if int(brand_id) not in set(allowed_brand_ids):
+        raise HTTPException(
+            status_code=403,
+            detail="Không có quyền xem/chỉnh sửa giá vốn của nhãn hàng này",
+        )

@@ -107,7 +107,12 @@ class PurchaseService:
             raise Exception(f"Lỗi nhập hàng: {str(e)}")
 
     # 3. Lấy danh sách PO (Cập nhật: Hỗ trợ Search)
-    def get_all_orders(self, search: str = None):
+    def get_all_orders(
+        self,
+        search: str = None,
+        allowed_warehouse_ids: list = None,
+        allowed_cost_brand_ids: list = None,
+    ):
         # Base query
         sql = """
             SELECT po.id, po.po_code, s.name as supplier_name, w.name as warehouse_name, 
@@ -118,23 +123,49 @@ class PurchaseService:
         """
         
         params = {}
+        conditions = []
+
+        if allowed_warehouse_ids is not None:
+            if len(allowed_warehouse_ids) == 0:
+                return []
+            ids_str = ",".join(map(str, allowed_warehouse_ids))
+            conditions.append(f"po.warehouse_id IN ({ids_str})")
         
         # Thêm điều kiện tìm kiếm nếu có
         if search:
-            sql += " WHERE po.po_code LIKE :s OR s.name LIKE :s"
+            conditions.append("(po.po_code LIKE :s OR s.name LIKE :s)")
             params["s"] = f"%{search}%"
+
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
             
         sql += " ORDER BY po.id DESC"
         
         results = self.db.execute(text(sql), params).fetchall()
         
-        return [
-            {
-                "id": r[0], "po_code": r[1], "supplier_name": r[2],
-                "warehouse_name": r[3], "order_date": r[4], "total_amount": r[5], "status": r[6],
-                "brand_id": int(r[7]) if r[7] is not None else None,
-            } for r in results
-        ]
+        allowed_brand_set = None if allowed_cost_brand_ids is None else set(int(x) for x in allowed_cost_brand_ids)
+
+        output = []
+        for r in results:
+            brand_id = int(r[7]) if r[7] is not None else None
+            can_view_cost = (
+                allowed_brand_set is None
+                or (brand_id is not None and brand_id in allowed_brand_set)
+            )
+            output.append(
+                {
+                    "id": r[0],
+                    "po_code": r[1],
+                    "supplier_name": r[2],
+                    "warehouse_name": r[3],
+                    "order_date": r[4],
+                    "total_amount": r[5] if can_view_cost else None,
+                    "status": r[6],
+                    "brand_id": brand_id,
+                    "can_view_cost": can_view_cost,
+                }
+            )
+        return output
 
     # --- 4. HÀM MỚI: LẤY CHI TIẾT PO (GET DETAIL) ---
     def get_po_detail(self, po_id: int):
