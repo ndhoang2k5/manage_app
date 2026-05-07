@@ -8,7 +8,7 @@ from typing import List, Optional, Dict
 from decimal import Decimal
 import time
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime
 
 from openpyxl import Workbook
 from copy import copy
@@ -65,6 +65,14 @@ class ProductionService:
 
     def create_quick_order(self, data: QuickProductionRequest, user_id: int = None):
         try:
+            # 0) Chặn trùng mã lệnh ngay từ đầu (tránh tạo product orphan)
+            existed = self.db.execute(
+                text("SELECT id FROM production_orders WHERE code = :code LIMIT 1"),
+                {"code": data.order_code},
+            ).fetchone()
+            if existed:
+                raise Exception("Mã lệnh đã tồn tại, vui lòng chọn mã khác")
+
             # A. Tính tổng số lượng sản phẩm
             if hasattr(data, 'size_breakdown') and data.size_breakdown:
                 total_planned = sum(item.quantity for item in data.size_breakdown)
@@ -168,7 +176,10 @@ class ProductionService:
 
         except IntegrityError as e:
             self.db.rollback()
-            if "Duplicate entry" in str(e): raise Exception(f"Lỗi: Mã SKU hoặc Mã lệnh đã tồn tại!")
+            if "Duplicate entry" in str(e):
+                # Sau migration 20260427_drop_unique_product_variants_sku.sql, SKU có thể trùng.
+                # Duplicate còn lại chủ yếu là mã lệnh (production_orders.code).
+                raise Exception("Lỗi: Mã lệnh đã tồn tại!")
             raise Exception(str(e))
         except Exception as e:
             self.db.rollback()
@@ -260,14 +271,16 @@ class ProductionService:
         try:
             # ... (Phần lấy thông tin lệnh giữ nguyên) ...
             order = self.db.execute(text("""
-                SELECT warehouse_id, product_variant_id
-                FROM production_orders
-                WHERE id = :id
+                SELECT po.warehouse_id, po.product_variant_id, po.code, pv.sku
+                FROM production_orders po
+                JOIN product_variants pv ON pv.id = po.product_variant_id
+                WHERE po.id = :id
             """), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy lệnh")
             
-            wid, pid = order
+            wid, pid, order_code, product_sku = order
             total_received_now = 0
+            qty_by_inventory_code: Dict[str, float] = {}
 
             for item in data.items:
                 if item.quantity <= 0: continue
@@ -292,6 +305,9 @@ class ProductionService:
                 """), {"wid": wid, "pid": pid, "qty": item.quantity})
 
                 total_received_now += item.quantity
+                inv_code = (getattr(item, "inventory_code", None) or "").strip()
+                if inv_code:
+                    qty_by_inventory_code[inv_code] = float(qty_by_inventory_code.get(inv_code, 0.0)) + float(item.quantity)
 
             self.db.execute(text("UPDATE production_orders SET quantity_finished = quantity_finished + :qty WHERE id = :id"), {"qty": total_received_now, "id": order_id})
             
@@ -299,6 +315,33 @@ class ProductionService:
                 INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
                 VALUES (:wid, :pid, 'production_in', :qty, :ref, :note)
             """), {"wid": wid, "pid": pid, "qty": total_received_now, "ref": order_id, "note": f"Trả hàng đợt: {total_received_now}"})
+
+            # --- NEW: Ghi tăng Kế toán theo mã kiểm tồn do người nhập điền (inventory_code) ---
+            # - Nếu để trống: không lỗi, chỉ không ghi movement.
+            # - Nếu có nhiều dòng size cùng 1 mã: sẽ cộng dồn theo mã.
+            if qty_by_inventory_code and total_received_now > 0:
+                # period_month theo kỳ kiểm tồn đang active (nếu chưa có table periods thì fallback current month)
+                try:
+                    period_row = self.db.execute(text("SELECT period_month FROM inventory_check_periods WHERE is_active=1 ORDER BY id DESC LIMIT 1")).fetchone()
+                    period_month = str(period_row[0]) if period_row and period_row[0] else datetime.now().strftime("%Y-%m")
+                except Exception:
+                    period_month = datetime.now().strftime("%Y-%m")
+                insert_move = text("""
+                    INSERT INTO accounting_stock_movements
+                        (period_month, product_code, movement_date, movement_type, direction, quantity, reason, document_ref, source_file)
+                    VALUES
+                        (:period, :code, CURDATE(), 'Nhập gia công', 'inc', :qty, :reason, :doc, 'production_receive')
+                """)
+                for inv_code, qty in qty_by_inventory_code.items():
+                    if qty <= 0:
+                        continue
+                    self.db.execute(insert_move, {
+                        "period": period_month,
+                        "code": str(inv_code).strip(),
+                        "qty": float(qty),
+                        "reason": f"Nhập kho thành phẩm từ lệnh {order_code}",
+                        "doc": f"PROD_RECEIVE:{order_id}",
+                    })
 
             self.db.commit()
             return {"status": "success", "message": f"Đã nhập {total_received_now} SP và lưu lịch sử."}
@@ -337,6 +380,33 @@ class ProductionService:
 
     # 6. HÀM CHỐT ĐƠN (Force Finish)
     def force_finish_order(self, order_id: int):
+        # Không cho hoàn thành nếu trùng cả (mã lệnh + tên sản phẩm) với đơn khác
+        row = self.db.execute(
+            text("""
+                SELECT po.code, pv.variant_name
+                FROM production_orders po
+                JOIN product_variants pv ON pv.id = po.product_variant_id
+                WHERE po.id = :id
+            """),
+            {"id": order_id},
+        ).fetchone()
+        if not row:
+            raise Exception("Không tìm thấy lệnh sản xuất")
+        code, product_name = row[0], row[1]
+        dup = self.db.execute(
+            text("""
+                SELECT COUNT(1)
+                FROM production_orders po
+                JOIN product_variants pv ON pv.id = po.product_variant_id
+                WHERE po.id <> :id
+                  AND po.code = :code
+                  AND pv.variant_name = :name
+            """),
+            {"id": order_id, "code": code, "name": product_name},
+        ).scalar() or 0
+        if int(dup) > 0:
+            raise Exception("Không thể hoàn thành: trùng cả mã lệnh và tên sản phẩm")
+
         self.db.execute(text("UPDATE production_orders SET status = 'completed' WHERE id = :id"), {"id": order_id})
         self.db.commit()
         return {"status": "success", "message": "Đã chốt hoàn thành đơn hàng."}
@@ -733,6 +803,319 @@ class ProductionService:
         wb.save(buf)
         return buf.getvalue()
     
+
+    def get_orders_management(
+        self,
+        page: int = 1,
+        limit: int = 50,
+        search: Optional[str] = None,
+        warehouse_id: Optional[int] = None,
+        start_date_from: Optional[date] = None,
+        start_date_to: Optional[date] = None,
+        due_date_from: Optional[date] = None,
+        due_date_to: Optional[date] = None,
+        include_completed: bool = False,
+        allowed_warehouse_ids: Optional[List[int]] = None,
+        allowed_central_ids: Optional[List[int]] = None,
+        allowed_material_cost_brand_ids: Optional[List[int]] = None,
+    ):
+        """
+        "Quản lý đơn": trả danh sách đơn sản xuất + size + nguyên phụ liệu + chi phí để render bảng ngang.
+        - Mặc định: ẩn completed/cancelled.
+        - Sort: theo xưởng (workshop) để kế toán/kiểm kê dễ quan sát.
+        """
+        offset = (page - 1) * limit
+
+        conditions = ["po.status != 'cancelled'"]
+        params: Dict[str, object] = {"limit": limit, "offset": offset}
+
+        if not include_completed:
+            conditions.append("po.status != 'completed'")
+
+        if allowed_warehouse_ids is not None:
+            if len(allowed_warehouse_ids) == 0:
+                conditions.append("1=0")
+            else:
+                ids_str = ",".join(map(str, allowed_warehouse_ids))
+                conditions.append(f"po.warehouse_id IN ({ids_str})")
+
+        if allowed_central_ids is not None:
+            if len(allowed_central_ids) == 0:
+                conditions.append("po.owner_central_id IS NULL")
+            else:
+                cids_str = ",".join(map(str, allowed_central_ids))
+                conditions.append(f"(po.owner_central_id IS NULL OR po.owner_central_id IN ({cids_str}))")
+
+        if warehouse_id is not None:
+            conditions.append("po.warehouse_id = :warehouse_id")
+            params["warehouse_id"] = warehouse_id
+
+        if search:
+            conditions.append("(po.code LIKE :search OR pv.sku LIKE :search OR pv.variant_name LIKE :search)")
+            params["search"] = f"%{search}%"
+
+        if start_date_from is not None:
+            conditions.append("po.start_date >= :start_date_from")
+            params["start_date_from"] = start_date_from
+        if start_date_to is not None:
+            conditions.append("po.start_date <= :start_date_to")
+            params["start_date_to"] = start_date_to
+        if due_date_from is not None:
+            conditions.append("po.due_date >= :due_date_from")
+            params["due_date_from"] = due_date_from
+        if due_date_to is not None:
+            conditions.append("po.due_date <= :due_date_to")
+            params["due_date_to"] = due_date_to
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        total_records = (
+            self.db.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM production_orders po
+                    JOIN warehouses w ON w.id = po.warehouse_id
+                    LEFT JOIN warehouses wc ON wc.id = po.owner_central_id
+                    LEFT JOIN brands b ON b.id = COALESCE(wc.brand_id, w.brand_id)
+                    JOIN product_variants pv ON pv.id = po.product_variant_id
+                    {where_clause}
+                    """
+                ),
+                params,
+            ).scalar()
+            or 0
+        )
+
+        orders = self.db.execute(
+            text(
+                f"""
+                SELECT
+                    po.id,
+                    po.code,
+                    po.status,
+                    po.progress_data,
+                    po.warehouse_id,
+                    w.name AS workshop_name,
+                    b.id AS brand_id,
+                    b.name AS brand_name,
+                    pv.id AS product_variant_id,
+                    pv.sku AS product_sku,
+                    pv.variant_name AS product_name,
+                    pv.cost_price AS product_cost_price,
+                    po.quantity_planned,
+                    po.quantity_finished,
+                    po.start_date,
+                    po.due_date,
+                    po.labor_fee,
+                    po.print_fee,
+                    po.shipping_fee,
+                    po.marketing_fee,
+                    po.packaging_fee,
+                    po.other_fee
+                FROM production_orders po
+                JOIN warehouses w ON w.id = po.warehouse_id
+                LEFT JOIN warehouses wc ON wc.id = po.owner_central_id
+                LEFT JOIN brands b ON b.id = COALESCE(wc.brand_id, w.brand_id)
+                JOIN product_variants pv ON pv.id = po.product_variant_id
+                {where_clause}
+                ORDER BY w.name ASC, po.id DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            params,
+        ).fetchall()
+
+        order_ids = [int(r[0]) for r in orders]
+
+        # Sizes (all orders in one query)
+        sizes_by_order: Dict[int, List[dict]] = {oid: [] for oid in order_ids}
+        if order_ids:
+            ids_str = ",".join(map(str, order_ids))
+            size_rows = self.db.execute(
+                text(
+                    f"""
+                    SELECT production_order_id, size_label, quantity_planned, quantity_finished
+                    FROM production_order_items
+                    WHERE production_order_id IN ({ids_str})
+                    ORDER BY production_order_id ASC, id ASC
+                    """
+                )
+            ).fetchall()
+            for oid, size_label, qty_planned, qty_finished in size_rows:
+                sizes_by_order[int(oid)].append(
+                    {
+                        "size": size_label,
+                        "quantity": float(qty_planned or 0),
+                        "finished": float(qty_finished or 0),
+                    }
+                )
+
+        # Materials:
+        mats_by_order: Dict[int, List[dict]] = {oid: [] for oid in order_ids}
+
+        in_progress_or_completed = set()
+        for r in orders:
+            oid, status = int(r[0]), r[2]
+            if status in ["in_progress", "completed"]:
+                in_progress_or_completed.add(oid)
+
+        if order_ids:
+            # Reservations path
+            if in_progress_or_completed:
+                ids_str = ",".join(map(str, sorted(in_progress_or_completed)))
+                res_rows = self.db.execute(
+                    text(
+                        f"""
+                        SELECT
+                            pmr.production_order_id,
+                            pv.sku,
+                            pv.variant_name,
+                            pmr.quantity_reserved,
+                            pv.cost_price,
+                            pmr.note
+                        FROM production_material_reservations pmr
+                        JOIN product_variants pv ON pv.id = pmr.material_variant_id
+                        WHERE pmr.production_order_id IN ({ids_str})
+                        ORDER BY pmr.production_order_id ASC, pmr.id ASC
+                        """
+                    )
+                ).fetchall()
+                for oid, sku, name, qty, unit_cost, note in res_rows:
+                    qty_f = float(Decimal(str(qty or 0)).quantize(Decimal("0.0001")))
+                    unit = float(unit_cost or 0)
+                    mats_by_order[int(oid)].append(
+                        {
+                            "sku": sku,
+                            "name": name,
+                            "quantity": qty_f,
+                            "unit_cost": unit,
+                            "total_cost": qty_f * unit,
+                            "note": note,
+                        }
+                    )
+
+            # BOM path for draft/waiting_material
+            draft_ids = [oid for oid in order_ids if oid not in in_progress_or_completed]
+            if draft_ids:
+                ids_str = ",".join(map(str, draft_ids))
+                bom_rows = self.db.execute(
+                    text(
+                        f"""
+                        SELECT
+                            po.id AS production_order_id,
+                            m.sku,
+                            m.variant_name,
+                            bm.quantity_needed,
+                            po.quantity_planned,
+                            m.cost_price,
+                            bm.note
+                        FROM production_orders po
+                        JOIN bom b ON b.product_variant_id = po.product_variant_id
+                        JOIN bom_materials bm ON bm.bom_id = b.id
+                        JOIN product_variants m ON m.id = bm.material_variant_id
+                        WHERE po.id IN ({ids_str})
+                        ORDER BY po.id ASC, bm.id ASC
+                        """
+                    )
+                ).fetchall()
+                for oid, sku, name, per_unit, qty_planned, unit_cost, note in bom_rows:
+                    total_needed = float(
+                        (Decimal(str(per_unit or 0)) * Decimal(str(qty_planned or 0))).quantize(Decimal("0.0001"))
+                    )
+                    unit = float(unit_cost or 0)
+                    mats_by_order[int(oid)].append(
+                        {
+                            "sku": sku,
+                            "name": name,
+                            "quantity": total_needed,
+                            "unit_cost": unit,
+                            "total_cost": total_needed * unit,
+                            "note": note,
+                        }
+                    )
+
+        # Apply cost visibility by brand
+        allowed_brand_set = None
+        if allowed_material_cost_brand_ids is not None:
+            allowed_brand_set = set(int(x) for x in allowed_material_cost_brand_ids)
+
+        data_out = []
+        for r in orders:
+            (
+                order_id,
+                code,
+                status,
+                progress_data,
+                wid,
+                workshop_name,
+                brand_id,
+                brand_name,
+                product_variant_id,
+                product_sku,
+                product_name,
+                product_cost_price,
+                qty_planned,
+                qty_finished,
+                start_date,
+                due_date,
+                labor_fee,
+                print_fee,
+                shipping_fee,
+                marketing_fee,
+                packaging_fee,
+                other_fee,
+            ) = r
+
+            owner_brand_id = int(brand_id) if brand_id is not None else None
+            progress_parsed = []
+            if progress_data:
+                try:
+                    progress_parsed = json.loads(progress_data) if isinstance(progress_data, str) else progress_data
+                except Exception:
+                    progress_parsed = []
+            can_view_cost = (
+                allowed_brand_set is None
+                or (owner_brand_id is not None and owner_brand_id in allowed_brand_set)
+            )
+
+            mats = mats_by_order.get(int(order_id), [])
+            if not can_view_cost:
+                mats = [{**m, "unit_cost": None, "total_cost": None} for m in mats]
+
+            data_out.append(
+                {
+                    "id": int(order_id),
+                    "code": code,
+                    "status": status,
+                    "progress": progress_parsed if isinstance(progress_parsed, list) else [],
+                    "warehouse_id": int(wid) if wid is not None else None,
+                    "workshop_name": workshop_name,
+                    "brand_id": owner_brand_id,
+                    "brand_name": brand_name,
+                    "product_variant_id": int(product_variant_id) if product_variant_id is not None else None,
+                    "product_sku": product_sku,
+                    "product_name": product_name,
+                    "product_cost_price": float(product_cost_price) if (product_cost_price is not None and can_view_cost) else None,
+                    "quantity_planned": float(qty_planned or 0),
+                    "quantity_finished": float(qty_finished or 0),
+                    "start_date": start_date,
+                    "due_date": due_date,
+                    "sizes": sizes_by_order.get(int(order_id), []),
+                    "materials": mats,
+                    "fees": {
+                        "labor_fee": float(labor_fee or 0) if can_view_cost else None,
+                        "print_fee": float(print_fee or 0) if can_view_cost else None,
+                        "shipping_fee": float(shipping_fee or 0) if can_view_cost else None,
+                        "marketing_fee": float(marketing_fee or 0) if can_view_cost else None,
+                        "packaging_fee": float(packaging_fee or 0) if can_view_cost else None,
+                        "other_fee": float(other_fee or 0) if can_view_cost else None,
+                    },
+                    "can_view_cost": can_view_cost,
+                }
+            )
+
+        return {"data": data_out, "total": int(total_records), "page": page, "limit": limit}
 
     def get_all_boms(self):
         query = text("""

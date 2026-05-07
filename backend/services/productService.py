@@ -1,3 +1,4 @@
+import json
 from sqlite3 import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -8,9 +9,28 @@ class ProductService:
     def __init__(self, db: Session):
         self.db = db
 
+    @staticmethod
+    def _normalize_material_scope(scope: str) -> str:
+        if scope is None or str(scope).strip() == "":
+            return "all"
+        return "accessory" if str(scope or "").strip().lower() == "accessory" else "retail"
+
+    @staticmethod
+    def _parse_attributes(attributes_raw):
+        if not attributes_raw:
+            return {}
+        try:
+            parsed = json.loads(attributes_raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
      # USE CASE 1: Tạo Vật tư với Nhiều Màu
     def create_material(self, data: MaterialCreateRequest):
         try:
+            material_scope = self._normalize_material_scope(getattr(data, "material_scope", "retail"))
+            if material_scope == "all":
+                material_scope = "retail"
             # 1. Tạo Product Cha (Nếu chưa có)
             # (Logic cũ: Tìm theo tên, nếu không có thì tạo)
             query_check_parent = text("SELECT id FROM products WHERE name = :name LIMIT 1")
@@ -32,8 +52,8 @@ class ProductService:
 
             # 2. Tạo từng Biến thể (Màu)
             query_variant = text("""
-                INSERT INTO product_variants (product_id, sku, variant_name, color, cost_price, note)
-                VALUES (:pid, :sku, :vname, :color, :cost, :note)
+                INSERT INTO product_variants (product_id, sku, variant_name, attributes, color, cost_price, note)
+                VALUES (:pid, :sku, :vname, :attributes, :color, :cost, :note)
             """)
 
             for variant in data.variants:
@@ -44,6 +64,7 @@ class ProductService:
                     "pid": parent_id,
                     "sku": variant.sku,
                     "vname": full_name, # Tên hiển thị đầy đủ
+                    "attributes": json.dumps({"material_scope": material_scope}, ensure_ascii=False),
                     "color": variant.color_name,
                     "cost": variant.cost_price,
                     "note": variant.note
@@ -112,27 +133,44 @@ class ProductService:
             raise Exception(f"Lỗi tạo nhóm: {str(e)}")
 
     # USE CASE 3: Lấy danh sách NVL (để hiển thị lên bảng)
-    def get_all_materials(self):
+    def get_all_materials(self, scope: str = None):
+        material_scope = self._normalize_material_scope(scope)
         query = text("""
-            SELECT v.id, v.sku, v.variant_name, p.name as category_name, 
+            SELECT v.id, v.sku, v.variant_name, p.name as category_name, p.base_unit,
                    IFNULL(SUM(s.quantity_on_hand), 0) as quantity_on_hand,
                    v.cost_price, v.note, v.color,
-                   GROUP_CONCAT(DISTINCT w.brand_id ORDER BY w.brand_id SEPARATOR ',') as brand_ids_csv
+                   GROUP_CONCAT(DISTINCT w.brand_id ORDER BY w.brand_id SEPARATOR ',') as brand_ids_csv,
+                   CASE
+                       WHEN JSON_VALID(v.attributes)
+                            AND JSON_UNQUOTE(JSON_EXTRACT(v.attributes, '$.material_scope')) = 'accessory'
+                       THEN 'accessory'
+                       ELSE 'retail'
+                   END AS material_scope
             FROM product_variants v
             JOIN products p ON v.product_id = p.id
             LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
             LEFT JOIN warehouses w ON w.id = s.warehouse_id
             WHERE p.type = 'material'
-            GROUP BY v.id, v.sku, v.variant_name, p.name, v.cost_price, v.note, v.color
+              AND (
+                    :material_scope = 'all'
+                    OR CASE
+                           WHEN JSON_VALID(v.attributes)
+                                AND JSON_UNQUOTE(JSON_EXTRACT(v.attributes, '$.material_scope')) = 'accessory'
+                           THEN 'accessory'
+                           ELSE 'retail'
+                       END = :material_scope
+                  )
+            GROUP BY v.id, v.sku, v.variant_name, p.name, p.base_unit, v.cost_price, v.note, v.color
             ORDER BY v.id DESC
         """)
-        results = self.db.execute(query).fetchall()
+        results = self.db.execute(query, {"material_scope": material_scope}).fetchall()
         return [
             {
                 "id": row[0], "sku": row[1], "variant_name": row[2], 
-                "category_name": row[3], "quantity_on_hand": row[4], 
-                "cost_price": row[5], "note": row[6], "color": row[7],
-                "brand_ids": [int(x) for x in str(row[8]).split(",") if str(x).strip()] if row[8] else [],
+                "category_name": row[3], "base_unit": row[4] or "Cái", "quantity_on_hand": row[5], 
+                "cost_price": row[6], "note": row[7], "color": row[8],
+                "brand_ids": [int(x) for x in str(row[9]).split(",") if str(x).strip()] if row[9] else [],
+                "material_scope": row[10] or "retail",
             } for row in results
         ]
     
@@ -194,9 +232,15 @@ class ProductService:
     def update_material(self, material_id: int, data: MaterialUpdateRequest):
         try:
             # A. Lấy thông tin cũ để biết product_id (Cha)
-            current = self.db.execute(text("SELECT product_id FROM product_variants WHERE id = :id"), {"id": material_id}).fetchone()
+            current = self.db.execute(
+                text("SELECT product_id, attributes FROM product_variants WHERE id = :id"),
+                {"id": material_id},
+            ).fetchone()
             if not current: raise Exception("Vật tư không tồn tại")
             parent_id = current[0]
+            current_attributes = self._parse_attributes(current[1] if len(current) > 1 else None)
+            if "material_scope" not in current_attributes:
+                current_attributes["material_scope"] = "retail"
 
             # B. Cập nhật bảng Variants (Con)
             query_var = text("""
@@ -206,7 +250,8 @@ class ProductService:
             """)
             self.db.execute(query_var, {
                 "sku": data.sku, "name": data.name, 
-                "attrs": data.attributes, "note": data.note, 
+                "attrs": json.dumps(current_attributes, ensure_ascii=False),
+                "note": data.note, 
                 "id": material_id
             })
 

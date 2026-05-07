@@ -46,6 +46,13 @@ class SizeQuantityRequest(BaseModel):
 
 
 
+class ReceiveGoodsItemRequest(BaseModel):
+    id: int
+    size: str
+    quantity: int
+    inventory_code: Optional[str] = None  # Mã liên kết sang kiểm tồn (người nhập điền)
+
+
 # --- 4. YÊU CẦU TẠO SẢN PHẨM NHANH (TẠO MỚI SẢN PHẨM + TẠO BOM + TẠO LỆNH SX) ---
 class QuickProductionRequest(BaseModel):
     new_product_name: str
@@ -73,7 +80,7 @@ class QuickProductionRequest(BaseModel):
 
 
 class ReceiveGoodsRequest(BaseModel):
-    items: List[SizeQuantityRequest]
+    items: List[ReceiveGoodsItemRequest]
 
 class ProgressItem(BaseModel):
     name: str

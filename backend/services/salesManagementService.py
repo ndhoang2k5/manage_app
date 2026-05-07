@@ -153,6 +153,22 @@ class SalesManagementService:
         ).fetchone()
         return row[0] if row else None
 
+    def _get_covering_run_id(self, time_start: int, time_end: int) -> Optional[int]:
+        row = self.db.execute(
+            text(
+                """
+                SELECT id
+                FROM sales_report_runs
+                WHERE time_start <= :time_start
+                  AND time_end >= :time_end
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ),
+            {"time_start": time_start, "time_end": time_end},
+        ).fetchone()
+        return row[0] if row else None
+
     def _get_latest_synced_end(self) -> Optional[int]:
         row = self.db.execute(text("SELECT MAX(time_end) FROM sales_report_runs")).fetchone()
         if not row or row[0] is None:
@@ -173,6 +189,9 @@ class SalesManagementService:
         existing_run_id = self._get_run_id_for_period(time_start, time_end)
         if existing_run_id and not force_refresh:
             return {"run_id": existing_run_id, "reused": True}
+        covering_run_id = self._get_covering_run_id(time_start, time_end)
+        if covering_run_id and not force_refresh:
+            return {"run_id": covering_run_id, "reused": True, "covered": True}
 
         raw_data = self._post_salework_report(time_start, time_end)
         product_report = raw_data.get("data", {}).get("product_report", {})
@@ -181,6 +200,19 @@ class SalesManagementService:
         try:
             if existing_run_id:
                 self.db.execute(text("DELETE FROM sales_report_runs WHERE id = :run_id"), {"run_id": existing_run_id})
+            # Drop older runs that are fully covered by this incoming window
+            # to avoid double counting when a later backfill chunk supersedes
+            # previously synced smaller windows.
+            self.db.execute(
+                text(
+                    """
+                    DELETE FROM sales_report_runs
+                    WHERE time_start >= :time_start
+                      AND time_end <= :time_end
+                    """
+                ),
+                {"time_start": time_start, "time_end": time_end},
+            )
 
             self.db.execute(
                 text(
@@ -465,9 +497,10 @@ class SalesManagementService:
             where_clauses.append("i.run_id = :run_id")
             params["run_id"] = run_id
         else:
-            # Use half-open overlap filter [time_start, time_end) to avoid missing edge windows.
-            where_clauses.append("r.time_end > :time_start")
-            where_clauses.append("r.time_start < :time_end")
+            # Use contained windows only to avoid inflating totals from partially
+            # overlapping runs whose aggregates cannot be safely prorated.
+            where_clauses.append("r.time_start >= :time_start")
+            where_clauses.append("r.time_end <= :time_end")
             params["time_start"] = int(time_start)
             params["time_end"] = int(time_end)
 
