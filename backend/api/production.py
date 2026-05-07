@@ -20,6 +20,7 @@ from drivers.dependencies import (
     get_allowed_material_cost_brand_ids,
 )
 router = APIRouter()
+PRODUCTION_PROGRESS_MIN_START_DATE = date(2026, 5, 1)
 
 @router.get("/production/orders")
 def list_orders(
@@ -75,6 +76,76 @@ def export_orders_excel(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/production/orders/management")
+def list_orders_management(
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    warehouse_id: Optional[int] = None,
+    start_date_from: Optional[date] = None,
+    start_date_to: Optional[date] = None,
+    due_date_from: Optional[date] = None,
+    due_date_to: Optional[date] = None,
+    include_completed: bool = False,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("order-management")),
+):
+    """
+    "Quản lý đơn": danh sách đơn sản xuất để quan sát chi tiết ngay trên bảng.
+    Mặc định ẩn đơn completed/cancelled (include_completed=false).
+    """
+    allowed_ids = get_allowed_warehouse_ids(user, db)
+    allowed_central_ids = get_allowed_central_ids(user, db)
+    allowed_brand_ids = get_allowed_material_cost_brand_ids(user, db)
+
+    service = ProductionService(db)
+    return service.get_orders_management(
+        page=page,
+        limit=limit,
+        search=search,
+        warehouse_id=warehouse_id,
+        start_date_from=start_date_from,
+        start_date_to=start_date_to,
+        due_date_from=due_date_from,
+        due_date_to=due_date_to,
+        include_completed=include_completed,
+        allowed_warehouse_ids=allowed_ids,
+        allowed_central_ids=allowed_central_ids,
+        allowed_material_cost_brand_ids=allowed_brand_ids,
+    )
+
+
+@router.get("/production/orders/progress")
+def list_orders_progress(
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    warehouse_id: Optional[int] = None,
+    include_completed: bool = False,
+    start_date_from: Optional[date] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("production")),
+):
+    """
+    Tiến trình sản xuất: danh sách gọn để theo dõi tiến độ deadline và trả hàng.
+    """
+    allowed_ids = get_allowed_warehouse_ids(user, db)
+    allowed_central_ids = get_allowed_central_ids(user, db)
+    allowed_brand_ids = get_allowed_material_cost_brand_ids(user, db)
+    service = ProductionService(db)
+    effective_start_date = start_date_from or PRODUCTION_PROGRESS_MIN_START_DATE
+    return service.get_orders_management(
+        page=page,
+        limit=limit,
+        search=search,
+        warehouse_id=warehouse_id,
+        start_date_from=effective_start_date,
+        include_completed=include_completed,
+        allowed_warehouse_ids=allowed_ids,
+        allowed_central_ids=allowed_central_ids,
+        allowed_material_cost_brand_ids=allowed_brand_ids,
+    )
 
 @router.get("/production/boms")
 def list_boms(

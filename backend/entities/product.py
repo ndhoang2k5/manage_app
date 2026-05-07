@@ -8,11 +8,13 @@ class ProductVariantResponse(BaseModel):
     sku: str
     variant_name: str
     category_name: str
+    base_unit: Optional[str] = "Cái"
     quantity_on_hand: float
     cost_price: float = 0 
     note: Optional[str] = ""
     color: Optional[str] = "" # Thêm trường màu để hiển thị nếu cần
     brand_ids: List[int] = []
+    material_scope: str = "retail"
     
     class Config:
         from_attributes = True
@@ -51,3 +53,4 @@ class MaterialCreateRequest(BaseModel):
     name: str        # Tên chung: Vải Linen
     unit: str = "Cái"
     variants: List[ColorVariantRequest] # Danh sách các màu
+    material_scope: str = "retail"

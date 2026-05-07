@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope
 from drivers.db_client import get_db
@@ -27,9 +29,13 @@ def create_group(request: MaterialGroupCreateRequest, db: Session = Depends(get_
 
 # 3. API Lấy danh sách NVL
 @router.get("/materials", response_model=list[ProductVariantResponse])
-def get_materials(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+def get_materials(
+    scope: Optional[str] = Query(None, description="retail | accessory"),
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
     service = ProductService(db)
-    return service.get_all_materials()
+    return service.get_all_materials(scope=scope)
 
 # 4. API Lấy danh sách Nhóm NVL
 @router.get("/materials/groups")
