@@ -19,3 +19,14 @@ class SalesBackfillRequest(BaseModel):
     time_end: Optional[int] = None
     chunk_hours: int = 24
     max_chunks: int = 400
+
+
+class ProductPlanning4WRequest(BaseModel):
+    codes: List[str] = Field(default_factory=list)
+    anchor_time_ms: Optional[int] = None
+    weeks: int = 4
+
+
+class ProductCodeSearchRequest(BaseModel):
+    keyword: Optional[str] = ""
+    limit: int = 30

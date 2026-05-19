@@ -8,7 +8,12 @@ from openpyxl import Workbook
 
 from drivers.db_client import get_db
 from drivers.dependencies import require_module_access
-from entities.sales_management import SalesFetchRequest, PriorityCodesUpsertRequest, SalesBackfillRequest
+from entities.sales_management import (
+    SalesFetchRequest,
+    PriorityCodesUpsertRequest,
+    SalesBackfillRequest,
+    ProductPlanning4WRequest,
+)
 from services.salesManagementService import SalesManagementService
 
 router = APIRouter()
@@ -136,6 +141,39 @@ def get_priority_codes(
     try:
         service = SalesManagementService(db)
         data = service.get_priority_codes()
+        return {"status": "success", "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/sales-management/product-codes/search")
+def search_product_codes(
+    keyword: Optional[str] = Query(None),
+    limit: int = Query(30),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    try:
+        service = SalesManagementService(db)
+        data = service.search_product_codes(keyword=keyword, limit=limit)
+        return {"status": "success", "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/sales-management/product-planning/4w")
+def get_product_planning_4w(
+    req: ProductPlanning4WRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    try:
+        service = SalesManagementService(db)
+        data = service.get_product_planning_4w(
+            codes=req.codes,
+            anchor_time_ms=req.anchor_time_ms,
+            weeks=req.weeks,
+        )
         return {"status": "success", "data": data}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
