@@ -9,6 +9,8 @@ from sqlalchemy import text, bindparam
 from entities.warehouse import WarehouseCreateRequest, BrandCreateRequest
 from entities.warehouse import TransferCreateRequest, WarehouseUpdateRequest
 from typing import List, Optional
+import time
+import re
 
 
 class WarehouseService:
@@ -130,6 +132,7 @@ class WarehouseService:
         try:
             if data.from_warehouse_id == data.to_warehouse_id:
                 raise Exception("Kho đi và Kho đến không được trùng nhau")
+            transfer_tag = f"[TRF:MANUAL:{data.from_warehouse_id}:{data.to_warehouse_id}:{int(time.time())}]"
 
             for item in data.items:
                 vid = item.product_variant_id
@@ -159,16 +162,36 @@ class WarehouseService:
                 # ... (Phần Ghi log và Cộng kho đến bên dưới giữ nguyên, nhớ dùng req_qty) ...
                 
                 # Ghi log Trừ
-                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity) VALUES (:wid, :vid, 'transfer_out', :qty)"), 
-                                {"wid": data.from_warehouse_id, "vid": vid, "qty": -req_qty})
+                self.db.execute(
+                    text("""
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note)
+                        VALUES (:wid, :vid, 'transfer_out', :qty, :note)
+                    """),
+                    {
+                        "wid": data.from_warehouse_id,
+                        "vid": vid,
+                        "qty": -req_qty,
+                        "note": f"{transfer_tag} Điều chuyển thủ công",
+                    },
+                )
 
                 # C. Cộng Kho Đến
                 self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:wid, :vid, :qty) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty"), 
                                 {"wid": data.to_warehouse_id, "vid": vid, "qty": req_qty})
 
                 # Ghi log Cộng
-                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity) VALUES (:wid, :vid, 'transfer_in', :qty)"), 
-                                {"wid": data.to_warehouse_id, "vid": vid, "qty": req_qty})
+                self.db.execute(
+                    text("""
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note)
+                        VALUES (:wid, :vid, 'transfer_in', :qty, :note)
+                    """),
+                    {
+                        "wid": data.to_warehouse_id,
+                        "vid": vid,
+                        "qty": req_qty,
+                        "note": f"{transfer_tag} Điều chuyển thủ công",
+                    },
+                )
 
             self.db.commit()
             return {"status": "success", "message": "Điều chuyển kho thành công!"}
@@ -176,6 +199,102 @@ class WarehouseService:
         except Exception as e:
             self.db.rollback()
             raise e
+
+    def get_transfer_history(self, limit: int = 300):
+        rows = self.db.execute(text("""
+            SELECT
+                t.id,
+                t.reference_id,
+                t.warehouse_id,
+                w.name,
+                t.product_variant_id,
+                pv.sku,
+                pv.variant_name,
+                p.base_unit,
+                t.transaction_type,
+                t.quantity,
+                t.note,
+                t.created_at
+            FROM inventory_transactions t
+            JOIN warehouses w ON w.id = t.warehouse_id
+            JOIN product_variants pv ON pv.id = t.product_variant_id
+            JOIN products p ON p.id = pv.product_id
+            WHERE t.transaction_type IN ('transfer_out', 'transfer_in')
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT :limit
+        """), {"limit": int(limit)}).fetchall()
+
+        grouped = {}
+
+        for r in rows:
+            note = r[10] or ""
+            match = re.search(r"\[TRF:([^\]]+)\]", note)
+            if match:
+                transfer_key = match.group(1)
+            else:
+                created = r[11].strftime("%Y%m%d%H%M") if r[11] else "unknown"
+                transfer_key = f"LEGACY:{r[1] or 0}:{created}"
+
+            rec = grouped.get(transfer_key)
+            if not rec:
+                rec = {
+                    "transfer_key": transfer_key,
+                    "transfer_type": "Tự động SX" if transfer_key.startswith("AUTO") else ("Thủ công" if transfer_key.startswith("MANUAL") else "Khác"),
+                    "trigger_ref": int(r[1]) if r[1] is not None else None,
+                    "created_at": r[11],
+                    "from_warehouse_id": None,
+                    "from_warehouse_name": None,
+                    "to_warehouse_id": None,
+                    "to_warehouse_name": None,
+                    "items_map": {},
+                }
+                grouped[transfer_key] = rec
+            else:
+                if r[11] and (rec["created_at"] is None or r[11] < rec["created_at"]):
+                    rec["created_at"] = r[11]
+
+            qty = float(abs(r[9] or 0))
+            if r[8] == "transfer_out":
+                rec["from_warehouse_id"] = int(r[2])
+                rec["from_warehouse_name"] = r[3]
+            elif r[8] == "transfer_in":
+                rec["to_warehouse_id"] = int(r[2])
+                rec["to_warehouse_name"] = r[3]
+
+            item_key = int(r[4])
+            item = rec["items_map"].get(item_key)
+            if not item:
+                item = {
+                    "product_variant_id": int(r[4]),
+                    "sku": r[5],
+                    "variant_name": r[6],
+                    "unit": r[7] or "",
+                    "quantity": 0.0,
+                }
+                rec["items_map"][item_key] = item
+            if qty > item["quantity"]:
+                item["quantity"] = qty
+
+        result = []
+        for key, rec in grouped.items():
+            items = list(rec["items_map"].values())
+            total_qty = sum(float(i["quantity"]) for i in items)
+            result.append({
+                "transfer_key": key,
+                "transfer_type": rec["transfer_type"],
+                "trigger_ref": rec["trigger_ref"],
+                "created_at": rec["created_at"].strftime("%Y-%m-%d %H:%M:%S") if rec["created_at"] else None,
+                "from_warehouse_id": rec["from_warehouse_id"],
+                "from_warehouse_name": rec["from_warehouse_name"],
+                "to_warehouse_id": rec["to_warehouse_id"],
+                "to_warehouse_name": rec["to_warehouse_name"],
+                "items": items,
+                "item_count": len(items),
+                "total_qty": total_qty,
+            })
+
+        result.sort(key=lambda x: x["created_at"] or "", reverse=True)
+        return result
     # 6. Cập nhật thông tin kho (Chỉ cho sửa Tên và Địa chỉ)
     def update_warehouse(self, warehouse_id: int, data: WarehouseUpdateRequest):
         try:

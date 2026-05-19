@@ -119,7 +119,11 @@ const PurchasePage = () => {
             
             setIsEditModalOpen(true);
         } catch (error) {
-            message.error("Lỗi tải chi tiết đơn hàng");
+            if (error.response?.status === 403) {
+                message.error("Bạn không có quyền xem/sửa giá nhập của nhãn hàng này.");
+            } else {
+                message.error("Lỗi tải chi tiết đơn hàng");
+            }
         }
     };
 
@@ -205,7 +209,7 @@ const PurchasePage = () => {
             title: 'Tổng Tiền',
             dataIndex: 'total_amount',
             align: 'right',
-            render: (v, row) => (canViewMaterialCostForBrand(user, row.brand_id)
+            render: (v, row) => ((row?.can_view_cost ?? canViewMaterialCostForBrand(user, row.brand_id))
                 ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v)
                 : '***'),
         },
@@ -217,7 +221,15 @@ const PurchasePage = () => {
                 <Space>
                     {canManagePurchases && (
                         <>
-                            <Button icon={<EditOutlined />} onClick={() => handleOpenEdit(record.id)} size="small">Chi tiết/Sửa</Button>
+                            <Button
+                                icon={<EditOutlined />}
+                                onClick={() => handleOpenEdit(record.id)}
+                                size="small"
+                                disabled={record?.can_view_cost === false}
+                                title={record?.can_view_cost === false ? 'Không có quyền xem/sửa giá nhập của nhãn này' : undefined}
+                            >
+                                Chi tiết/Sửa
+                            </Button>
                             <Button icon={<DeleteOutlined />} onClick={() => handleDeletePO(record.id)} size="small" danger type="primary" ghost />
                         </>
                     )}

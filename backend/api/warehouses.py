@@ -48,6 +48,14 @@ def transfer_stock(request: TransferCreateRequest, db: Session = Depends(get_db)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/warehouses/transfers/history")
+def transfer_history(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = WarehouseService(db)
+    try:
+        return service.get_transfer_history()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.put("/warehouses/{id}")
 def update_warehouse(id: int, request: WarehouseUpdateRequest, db: Session = Depends(get_db), admin: dict = Depends(get_current_user)):
     service = WarehouseService(db)

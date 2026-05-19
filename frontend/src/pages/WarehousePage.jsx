@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Button, Modal, Form, Select, Input, Tabs, Tag, message, Divider, Space, InputNumber } from 'antd';
+import { Table, Card, Button, Modal, Form, Select, Input, Tabs, Tag, message, Divider, Space, InputNumber, DatePicker } from 'antd';
 import { SwapOutlined, PlusOutlined, DeleteOutlined, CrownOutlined, EditOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import warehouseApi from '../api/warehouseApi';
 import productApi from '../api/productApi';
@@ -15,6 +15,11 @@ const WarehousePage = () => {
     const [warehouses, setWarehouses] = useState([]);
     const [brands, setBrands] = useState([]);
     const [products, setProducts] = useState([]);
+    const [transferHistory, setTransferHistory] = useState([]);
+    const [transferDateRange, setTransferDateRange] = useState(null);
+    const [transferFromWarehouse, setTransferFromWarehouse] = useState(null);
+    const [transferToWarehouse, setTransferToWarehouse] = useState(null);
+    const [transferTypeFilter, setTransferTypeFilter] = useState(null);
     
     // Modal States
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false); // Tạo kho
@@ -34,14 +39,16 @@ const WarehousePage = () => {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [wareRes, brandRes, prodRes] = await Promise.all([
+            const [wareRes, brandRes, prodRes, transferRes] = await Promise.all([
                 warehouseApi.getAllWarehouses(),
                 warehouseApi.getAllBrands(),
-                productApi.getAll()
+                productApi.getAll(),
+                warehouseApi.getTransferHistory(),
             ]);
             setWarehouses(wareRes.data);
             setBrands(brandRes.data);
             setProducts(prodRes.data);
+            setTransferHistory(Array.isArray(transferRes?.data) ? transferRes.data : []);
         } catch (error) {
             message.error("Lỗi tải dữ liệu!");
         }
@@ -189,6 +196,51 @@ const WarehousePage = () => {
         }
     ];
 
+    const transferColumns = [
+        {
+            title: 'Thời gian',
+            dataIndex: 'created_at',
+            key: 'created_at',
+            width: 180,
+            render: (v) => v ? dayjs(v).format('DD/MM/YYYY HH:mm:ss') : '-',
+        },
+        {
+            title: 'Mã điều chuyển',
+            dataIndex: 'transfer_key',
+            key: 'transfer_key',
+            render: (v) => <Tag color="blue">{v}</Tag>,
+        },
+        {
+            title: 'Loại',
+            dataIndex: 'transfer_type',
+            key: 'transfer_type',
+            width: 130,
+            render: (v) => <Tag color={v === 'Tự động SX' ? 'gold' : 'green'}>{v}</Tag>,
+        },
+        { title: 'Từ kho', dataIndex: 'from_warehouse_name', key: 'from_warehouse_name', render: (v) => v || '-' },
+        { title: 'Đến kho', dataIndex: 'to_warehouse_name', key: 'to_warehouse_name', render: (v) => v || '-' },
+        { title: 'Số dòng vải', dataIndex: 'item_count', key: 'item_count', width: 110, align: 'center' },
+        { title: 'Tổng SL', dataIndex: 'total_qty', key: 'total_qty', width: 120, align: 'right', render: (v) => formatQuantity(v) },
+    ];
+
+    const formatQuantity = (value) => {
+        const n = Number(value || 0);
+        return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 4 }).format(n);
+    };
+
+    const filteredTransferHistory = (transferHistory || []).filter((item) => {
+        if (transferFromWarehouse && Number(item.from_warehouse_id) !== Number(transferFromWarehouse)) return false;
+        if (transferToWarehouse && Number(item.to_warehouse_id) !== Number(transferToWarehouse)) return false;
+        if (transferTypeFilter && item.transfer_type !== transferTypeFilter) return false;
+        if (transferDateRange && transferDateRange.length === 2) {
+            const [start, end] = transferDateRange;
+            const current = dayjs(item.created_at);
+            if (!current.isValid()) return false;
+            if (current.isBefore(start.startOf('day')) || current.isAfter(end.endOf('day'))) return false;
+        }
+        return true;
+    });
+
     return (
         <div>
             <Card title="Quản Lý Kho Vận & Điều Chuyển" bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}>
@@ -210,6 +262,71 @@ const WarehousePage = () => {
                             </Button>
                         </Space>
                         <Table dataSource={warehouses} columns={columns} rowKey="id" loading={loading} pagination={{pageSize: 10}} />
+                    </Tabs.TabPane>
+
+                    <Tabs.TabPane tab="Điều chuyển vải" key="2">
+                        <Space wrap style={{ marginBottom: 12 }}>
+                            <DatePicker.RangePicker
+                                value={transferDateRange}
+                                onChange={(vals) => setTransferDateRange(vals)}
+                                format="DD/MM/YYYY"
+                                placeholder={['Từ ngày', 'Đến ngày']}
+                            />
+                            <Select
+                                allowClear
+                                placeholder="Từ kho/xưởng"
+                                style={{ width: 220 }}
+                                value={transferFromWarehouse}
+                                onChange={setTransferFromWarehouse}
+                                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+                            />
+                            <Select
+                                allowClear
+                                placeholder="Đến kho/xưởng"
+                                style={{ width: 220 }}
+                                value={transferToWarehouse}
+                                onChange={setTransferToWarehouse}
+                                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+                            />
+                            <Select
+                                allowClear
+                                placeholder="Loại điều chuyển"
+                                style={{ width: 160 }}
+                                value={transferTypeFilter}
+                                onChange={setTransferTypeFilter}
+                                options={[
+                                    { value: 'Thủ công', label: 'Thủ công' },
+                                    { value: 'Tự động SX', label: 'Tự động SX' },
+                                    { value: 'Khác', label: 'Khác' },
+                                ]}
+                            />
+                            <Button onClick={() => { setTransferDateRange(null); setTransferFromWarehouse(null); setTransferToWarehouse(null); setTransferTypeFilter(null); }}>
+                                Xóa lọc
+                            </Button>
+                        </Space>
+                        <Table
+                            dataSource={filteredTransferHistory}
+                            columns={transferColumns}
+                            rowKey="transfer_key"
+                            loading={loading}
+                            pagination={{ pageSize: 10 }}
+                            expandable={{
+                                expandedRowRender: (record) => (
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        rowKey={(item) => `${record.transfer_key}-${item.product_variant_id}`}
+                                        dataSource={record.items || []}
+                                        columns={[
+                                            { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 180 },
+                                            { title: 'Tên vải/NVL', dataIndex: 'variant_name', key: 'variant_name' },
+                                            { title: 'ĐVT', dataIndex: 'unit', key: 'unit', width: 90, align: 'center' },
+                                            { title: 'Số lượng', dataIndex: 'quantity', key: 'quantity', width: 140, align: 'right', render: (v) => formatQuantity(v) },
+                                        ]}
+                                    />
+                                ),
+                            }}
+                        />
                     </Tabs.TabPane>
 
                 </Tabs>
