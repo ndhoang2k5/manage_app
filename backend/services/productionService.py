@@ -8,7 +8,7 @@ from typing import List, Optional, Dict
 from decimal import Decimal
 import time
 from io import BytesIO
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from openpyxl import Workbook
 from copy import copy
@@ -176,10 +176,23 @@ class ProductionService:
 
         except IntegrityError as e:
             self.db.rollback()
-            if "Duplicate entry" in str(e):
-                # Sau migration 20260427_drop_unique_product_variants_sku.sql, SKU có thể trùng.
-                # Duplicate còn lại chủ yếu là mã lệnh (production_orders.code).
-                raise Exception("Lỗi: Mã lệnh đã tồn tại!")
+            err = str(e)
+            err_lower = err.lower()
+            if "duplicate entry" in err_lower:
+                # Trả thông báo đúng trường đang bị trùng, tránh hiểu nhầm "trùng mã lệnh"
+                if (
+                    "production_orders.code" in err_lower
+                    or "for key 'code'" in err_lower
+                    or 'for key "code"' in err_lower
+                ):
+                    raise Exception("Lỗi: Mã lệnh đã tồn tại!")
+                if (
+                    "product_variants.sku" in err_lower
+                    or "for key 'sku'" in err_lower
+                    or 'for key "sku"' in err_lower
+                ):
+                    raise Exception("Lỗi: Mã SKU sản phẩm đã tồn tại!")
+                raise Exception("Lỗi trùng dữ liệu (duplicate key). Vui lòng kiểm tra lại mã lệnh/SKU.")
             raise Exception(str(e))
         except Exception as e:
             self.db.rollback()
@@ -199,12 +212,14 @@ class ProductionService:
         try:
             # Lấy thông tin lệnh
             order = self.db.execute(text("""
-                SELECT warehouse_id, product_variant_id, quantity_planned
+                SELECT warehouse_id, owner_central_id, product_variant_id, quantity_planned
                 FROM production_orders
                 WHERE id = :id
             """), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy lệnh SX")
-            wid, product_variant_id, quantity_planned = order
+            workshop_wid, owner_central_id, product_variant_id, quantity_planned = order
+            source_central_wid = owner_central_id if owner_central_id and owner_central_id != workshop_wid else None
+            auto_transfer_tag = f"[TRF:AUTO:{order_id}:{int(time.time())}]"
             bom_items = self.db.execute(text("""
                 SELECT bm.material_variant_id, bm.quantity_needed 
                 FROM bom_materials bm
@@ -223,29 +238,55 @@ class ProductionService:
                
                 total_qty_needed = round(raw_total, 4) 
 
-                stock = self.db.execute(text("""
+                # Nếu có kho tổng: tự động điều chuyển kho tổng -> xưởng rồi mới xuất cho sản xuất.
+                if source_central_wid:
+                    central_stock_row = self.db.execute(text("""
+                        SELECT quantity_on_hand
+                        FROM inventory_stocks
+                        WHERE warehouse_id = :wid AND product_variant_id = :mid
+                    """), {"wid": source_central_wid, "mid": mat_id}).fetchone()
+                    central_stock = float(central_stock_row[0]) if central_stock_row else 0.0
+                    if central_stock < total_qty_needed:
+                        raise Exception(f"Kho tổng thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {central_stock}")
+
+                    self.db.execute(text("""
+                        UPDATE inventory_stocks
+                        SET quantity_on_hand = quantity_on_hand - :qty
+                        WHERE warehouse_id = :wid AND product_variant_id = :mid
+                    """), {"qty": total_qty_needed, "wid": source_central_wid, "mid": mat_id})
+                    self.db.execute(text("""
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
+                        VALUES (:wid, :mid, 'transfer_out', :qty, :ref, :note)
+                    """), {"wid": source_central_wid, "mid": mat_id, "qty": -total_qty_needed, "ref": order_id, "note": f"{auto_transfer_tag} Tự động điều chuyển sang xưởng để chạy lệnh"})
+
+                    self.db.execute(text("""
+                        INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
+                        VALUES (:wid, :mid, :qty)
+                        ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty
+                    """), {"wid": workshop_wid, "mid": mat_id, "qty": total_qty_needed})
+                    self.db.execute(text("""
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
+                        VALUES (:wid, :mid, 'transfer_in', :qty, :ref, :note)
+                    """), {"wid": workshop_wid, "mid": mat_id, "qty": total_qty_needed, "ref": order_id, "note": f"{auto_transfer_tag} Tự động nhận từ kho tổng để chạy lệnh"})
+
+                workshop_stock_row = self.db.execute(text("""
                     SELECT quantity_on_hand
-                    FROM inventory_stocks 
+                    FROM inventory_stocks
                     WHERE warehouse_id = :wid AND product_variant_id = :mid
-                """), {"wid": wid, "mid": mat_id}).fetchone()
+                """), {"wid": workshop_wid, "mid": mat_id}).fetchone()
+                workshop_stock = float(workshop_stock_row[0]) if workshop_stock_row else 0.0
+                if workshop_stock < total_qty_needed:
+                    raise Exception(f"Xưởng thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {workshop_stock}")
 
-                current_stock = float(stock[0]) if stock else 0.0
-
-                if current_stock < total_qty_needed:
-                    raise Exception(f"Kho thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {current_stock}")
-
-                # --- TRỪ TRỰC TIẾP ---
                 self.db.execute(text("""
-                    UPDATE inventory_stocks 
+                    UPDATE inventory_stocks
                     SET quantity_on_hand = quantity_on_hand - :qty
                     WHERE warehouse_id = :wid AND product_variant_id = :mid
-                """), {"qty": total_qty_needed, "wid": wid, "mid": mat_id})
-
-                # Ghi log xuất kho
+                """), {"qty": total_qty_needed, "wid": workshop_wid, "mid": mat_id})
                 self.db.execute(text("""
                     INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id)
                     VALUES (:wid, :mid, 'production_out', :qty, :ref)
-                """), {"wid": wid, "mid": mat_id, "qty": -total_qty_needed, "ref": order_id})
+                """), {"wid": workshop_wid, "mid": mat_id, "qty": -total_qty_needed, "ref": order_id})
 
                 # Lưu reservation
                 self.db.execute(text("""
@@ -418,7 +459,12 @@ class ProductionService:
             FROM production_order_items 
             WHERE production_order_id = :oid
         """), {"oid": order_id}).fetchall()
-        return [{"id": r[0], "size": r[1], "planned": r[2], "finished": r[3]} for r in results]
+        out = []
+        for r in results:
+            raw_label = str(r[1] or "")
+            display_label = raw_label[4:] if raw_label.upper().startswith("SKU:") else raw_label
+            out.append({"id": r[0], "size": display_label, "planned": r[2], "finished": r[3]})
+        return out
 
 # 6. Lấy danh sách Lệnh SX (CHUẨN PHÂN TRANG)
     def get_all_orders(
@@ -1154,10 +1200,23 @@ class ProductionService:
         status = header[15]
         total_qty = header[5]
 
-        # B. Size (Giữ nguyên)
+        # B. Size (Giữ tương thích đơn cũ + đơn mới SKU SP)
         query_sizes = text("SELECT size_label, quantity_planned, note FROM production_order_items WHERE production_order_id = :oid ORDER BY id ASC")
         sizes = self.db.execute(query_sizes, {"oid": order_id}).fetchall()
-        list_sizes = [{"size": s[0], "qty": s[1], "note": s[2]} for s in sizes]
+        list_sizes = []
+        is_new_sku_order = False
+        for s in sizes:
+            raw_label = str(s[0] or "")
+            display_label = raw_label
+            if raw_label.upper().startswith("SKU:"):
+                is_new_sku_order = True
+                display_label = raw_label[4:]
+            list_sizes.append({"size": display_label, "qty": s[1], "note": s[2]})
+        normalized_sizes = [str((s[0] or "")).strip().upper() for s in sizes]
+        is_compact_order = len(normalized_sizes) == 1 and normalized_sizes[0] in {"TONG", "TỔNG", "TOTAL"}
+        start_date_obj = header[6] if isinstance(header[6], date) else None
+        sku_mode_cutoff = datetime.now().date() - timedelta(days=1)
+        use_sku_sp_mode = bool(is_new_sku_order and start_date_obj and start_date_obj >= sku_mode_cutoff)
 
         # C. Materials (LOGIC MỚI: Ưu tiên lấy từ Reservation nếu có)
         list_materials = []
@@ -1239,6 +1298,9 @@ class ProductionService:
             "owner_brand_id": int(header[17]) if header[17] is not None else None,
             "total_material_cost": total_material_cost,
             "sizes": list_sizes,
+            "is_compact_order": is_compact_order,
+            "is_new_sku_order": is_new_sku_order,
+            "use_sku_sp_mode": use_sku_sp_mode,
             "materials": list_materials,
             "images": list_imgs
         }
@@ -1246,12 +1308,16 @@ class ProductionService:
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
         try:
             print(f"--- DEBUG UPDATE ORDER {order_id} ---")
-            order = self.db.execute(text("SELECT warehouse_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+            order = self.db.execute(text("SELECT warehouse_id, owner_central_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy đơn hàng")
-            wid = order[0]
-            status = order[1]
-            pid = order[2]
-            old_qty_planned = Decimal(str(order[3])) # Chuyển sang Decimal ngay
+            workshop_wid = order[0]
+            owner_central_id = order[1]
+            status = order[2]
+            pid = order[3]
+            old_qty_planned = Decimal(str(order[4])) # Chuyển sang Decimal ngay
+            source_central_wid = owner_central_id if owner_central_id and owner_central_id != workshop_wid else None
+            consume_wid = workshop_wid
+            auto_transfer_tag = f"[TRF:AUTO:{order_id}:{int(time.time())}]"
 
             # 2. Cập nhật Header
             query_header = text("""
@@ -1316,19 +1382,30 @@ class ProductionService:
                                 diff = req_qty - old_qty
 
                                 if diff > 0:
-                                    stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
+                                    if source_central_wid:
+                                        central_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": source_central_wid, "m": mat_id}).scalar() or 0
+                                        central_stock_dec = Decimal(str(central_stock))
+                                        if central_stock_dec < diff:
+                                            raise Exception(f"Kho tổng không đủ hàng! Cần thêm {diff}, còn {central_stock_dec}")
+
+                                        self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": diff, "w": source_central_wid, "m": mat_id})
+                                        self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'transfer_out', :q, :ref, :note)"), {"w": source_central_wid, "m": mat_id, "q": -diff, "ref": order_id, "note": f"{auto_transfer_tag} Tự động điều chuyển sang xưởng (Sửa lệnh)"})
+                                        self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:w, :m, :q) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :q"), {"w": consume_wid, "m": mat_id, "q": diff})
+                                        self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'transfer_in', :q, :ref, :note)"), {"w": consume_wid, "m": mat_id, "q": diff, "ref": order_id, "note": f"{auto_transfer_tag} Tự động nhận từ kho tổng (Sửa lệnh)"})
+
+                                    stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": consume_wid, "m": mat_id}).scalar() or 0
                                     stock_dec = Decimal(str(stock))
                                     
                                     if stock_dec < diff: 
                                         raise Exception(f"Kho không đủ hàng! Cần thêm {diff}, còn {stock_dec}")
                                     
-                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": diff, "w": wid, "m": mat_id})
-                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Sửa lệnh: Cấp thêm')"), {"w": wid, "m": mat_id, "q": -diff, "ref": order_id})
+                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": diff, "w": consume_wid, "m": mat_id})
+                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Sửa lệnh: Cấp thêm')"), {"w": consume_wid, "m": mat_id, "q": -diff, "ref": order_id})
                                 
                                 elif diff < 0:
                                     return_qty = abs(diff)
-                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": return_qty, "w": wid, "m": mat_id})
-                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Sửa lệnh: Hoàn trả')"), {"w": wid, "m": mat_id, "q": return_qty, "ref": order_id})
+                                    self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand + :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": return_qty, "w": consume_wid, "m": mat_id})
+                                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_in', :q, :ref, 'Sửa lệnh: Hoàn trả')"), {"w": consume_wid, "m": mat_id, "q": return_qty, "ref": order_id})
 
                                 # Nếu người dùng xóa NVL (set về 0) thì xóa luôn reservation để sạch kế hoạch
                                 if req_qty <= 0:
@@ -1345,15 +1422,25 @@ class ProductionService:
                             # Thêm mới
                             if not item.material_variant_id: continue
                             mat_id = item.material_variant_id
+                            if source_central_wid:
+                                central_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": source_central_wid, "m": mat_id}).scalar() or 0
+                                central_stock_dec = Decimal(str(central_stock))
+                                if central_stock_dec < req_qty:
+                                    raise Exception(f"Kho tổng không đủ hàng mới! Cần {req_qty}, còn {central_stock_dec}")
+
+                                self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": source_central_wid, "m": mat_id})
+                                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'transfer_out', :q, :ref, :note)"), {"w": source_central_wid, "m": mat_id, "q": -req_qty, "ref": order_id, "note": f"{auto_transfer_tag} Tự động điều chuyển sang xưởng (Thêm NVL)"})
+                                self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:w, :m, :q) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :q"), {"w": consume_wid, "m": mat_id, "q": req_qty})
+                                self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'transfer_in', :q, :ref, :note)"), {"w": consume_wid, "m": mat_id, "q": req_qty, "ref": order_id, "note": f"{auto_transfer_tag} Tự động nhận từ kho tổng (Thêm NVL)"})
                             
-                            stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": wid, "m": mat_id}).scalar() or 0
+                            stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:m"), {"w": consume_wid, "m": mat_id}).scalar() or 0
                             stock_dec = Decimal(str(stock))
 
                             if stock_dec < req_qty: 
                                 raise Exception(f"Kho không đủ hàng mới! Cần {req_qty}, còn {stock_dec}")
                             
-                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": wid, "m": mat_id})
-                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": wid, "m": mat_id, "q": -req_qty, "ref": order_id})
+                            self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": consume_wid, "m": mat_id})
+                            self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": consume_wid, "m": mat_id, "q": -req_qty, "ref": order_id})
                             
                             self.db.execute(text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"), 
                                             {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note})
@@ -1425,14 +1512,14 @@ class ProductionService:
     def delete_production_order(self, order_id: int):
         try:
             # A. Lấy thông tin lệnh
-            order = self.db.execute(text("SELECT status, warehouse_id, product_variant_id, quantity_finished, code FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+            order = self.db.execute(text("SELECT status, warehouse_id, owner_central_id, product_variant_id, quantity_finished, code FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Đơn hàng không tồn tại")
 
             status = order[0] 
             warehouse_id = order[1]
-            product_variant_id = order[2] 
-            qty_finished = float(order[3]) if order[3] else 0.0
-            order_code = order[4]
+            product_variant_id = order[3] 
+            qty_finished = float(order[4]) if order[4] else 0.0
+            order_code = order[5]
 
             if status == 'cancelled':
                 raise Exception("Đơn hàng này đã bị hủy từ trước.")

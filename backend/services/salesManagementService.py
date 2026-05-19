@@ -648,3 +648,144 @@ class SalesManagementService:
         if top_n and top_n > 0:
             return rows[:top_n]
         return rows
+
+    @staticmethod
+    def _normalize_codes(codes: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen = set()
+        for code in codes or []:
+            cleaned = str(code or "").strip().upper()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+        return normalized
+
+    def search_product_codes(self, keyword: Optional[str] = "", limit: int = 30) -> List[Dict]:
+        safe_limit = max(1, min(int(limit or 30), 100))
+        kw = str(keyword or "").strip()
+        params = {"limit": safe_limit}
+
+        where_sql = ""
+        if kw:
+            params["kw"] = f"%{kw}%"
+            where_sql = "WHERE code LIKE :kw OR name LIKE :kw"
+
+        rows = self.db.execute(
+            text(
+                f"""
+                SELECT code, name, total_stock
+                FROM sales_product_stock_current
+                {where_sql}
+                ORDER BY total_stock DESC, code ASC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).fetchall()
+
+        return [
+            {
+                "code": row[0],
+                "name": row[1] or "",
+                "current_stock": float(row[2] or 0),
+            }
+            for row in rows
+        ]
+
+    def get_product_planning_4w(
+        self,
+        codes: List[str],
+        anchor_time_ms: Optional[int] = None,
+        weeks: int = 4,
+    ) -> Dict:
+        selected_codes = self._normalize_codes(codes)
+        if not selected_codes:
+            raise ValueError("Vui lòng chọn ít nhất 1 mã sản phẩm")
+
+        safe_weeks = max(1, min(int(weeks or 4), 8))
+        anchor_ms = int(anchor_time_ms or int(time.time() * 1000))
+        week_ms = 7 * 24 * 60 * 60 * 1000
+
+        windows: List[Dict] = []
+        code_weekly_qty: Dict[str, List[float]] = {code: [0.0] * safe_weeks for code in selected_codes}
+        code_name_map: Dict[str, str] = {}
+
+        for i in range(safe_weeks):
+            # oldest -> newest
+            start_ms = anchor_ms - ((safe_weeks - i) * week_ms)
+            end_ms = anchor_ms - ((safe_weeks - i - 1) * week_ms)
+            windows.append(
+                {
+                    "index": i + 1,
+                    "time_start": int(start_ms),
+                    "time_end": int(end_ms),
+                }
+            )
+
+            raw_data = self._post_salework_report(int(start_ms), int(end_ms))
+            product_report = raw_data.get("data", {}).get("product_report", {})
+            rows = aggregate_sales_report(product_report)
+            qty_map: Dict[str, float] = {}
+            for row in rows:
+                code = str(row.get("code") or "").strip().upper()
+                if not code:
+                    continue
+                if row.get("name"):
+                    code_name_map[code] = str(row.get("name"))
+                qty_map[code] = float(qty_map.get(code, 0.0)) + float(row.get("sold_qty") or 0)
+
+            for code in selected_codes:
+                code_weekly_qty[code][i] = float(qty_map.get(code, 0.0))
+
+        placeholders = ", ".join([f":c{i}" for i in range(len(selected_codes))])
+        params = {f"c{i}": code for i, code in enumerate(selected_codes)}
+        stock_rows = self.db.execute(
+            text(
+                f"""
+                SELECT code, name, total_stock
+                FROM sales_product_stock_current
+                WHERE code IN ({placeholders})
+                """
+            ),
+            params,
+        ).fetchall()
+        stock_map = {str(r[0]).strip().upper(): float(r[2] or 0) for r in stock_rows}
+        stock_name_map = {str(r[0]).strip().upper(): str(r[1] or "") for r in stock_rows}
+
+        items: List[Dict] = []
+        for code in selected_codes:
+            weekly_sales = [float(x or 0) for x in code_weekly_qty.get(code, [0.0] * safe_weeks)]
+            total_4w = float(sum(weekly_sales))
+            avg_weekly_sales = float(total_4w / safe_weeks) if safe_weeks > 0 else 0.0
+            current_stock = float(stock_map.get(code, 0.0))
+            weeks_to_stockout = (
+                float(current_stock / avg_weekly_sales) if avg_weekly_sales > 0 else None
+            )
+            projected_stockout_at_ms = (
+                int(anchor_ms + (weeks_to_stockout * week_ms)) if weeks_to_stockout is not None else None
+            )
+
+            items.append(
+                {
+                    "code": code,
+                    "name": stock_name_map.get(code) or code_name_map.get(code) or "",
+                    "weekly_sales": weekly_sales,
+                    "total_4w_sales": total_4w,
+                    "avg_weekly_sales": avg_weekly_sales,
+                    "current_stock": current_stock,
+                    "weeks_to_stockout": weeks_to_stockout,
+                    "projected_stockout_at_ms": projected_stockout_at_ms,
+                }
+            )
+
+        return {
+            "weeks": windows,
+            "anchor_time_ms": anchor_ms,
+            "items": items,
+            "summary": {
+                "selected_codes": len(selected_codes),
+                "total_stock": float(sum(item["current_stock"] for item in items)),
+                "total_4w_sales": float(sum(item["total_4w_sales"] for item in items)),
+            },
+        }

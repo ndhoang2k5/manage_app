@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from entities.purchase import SupplierCreateRequest, PurchaseOrderCreateRequest, PurchaseUpdateRequest
 
 class PurchaseService:
@@ -299,11 +300,18 @@ class PurchaseService:
             
             for item in items:
                 vid = item[0]
-                qty = float(item[1])
+                qty = Decimal(str(item[1] or 0)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
                 
                 # Trừ tồn kho (Revert Stock)
                 # Kiểm tra xem có đủ hàng để trừ không (đề phòng đã xuất bán mất rồi)
-                current_stock = self.db.execute(text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:v"), {"w": wid, "v": vid}).scalar() or 0
+                current_stock_raw = self.db.execute(
+                    text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id=:w AND product_variant_id=:v"),
+                    {"w": wid, "v": vid},
+                ).scalar()
+                current_stock = Decimal(str(current_stock_raw or 0)).quantize(
+                    Decimal("0.0001"),
+                    rounding=ROUND_HALF_UP,
+                )
                 
                 if current_stock < qty:
                     raise Exception(f"Không thể xóa phiếu! Sản phẩm ID {vid} trong kho chỉ còn {current_stock}, nhưng phiếu này đã nhập {qty}. (Hàng đã bị xuất đi).")

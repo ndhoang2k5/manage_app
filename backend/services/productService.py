@@ -270,24 +270,52 @@ class ProductService:
 
     # 7. Lấy danh sách vật tư theo kho (MỚI)
     def get_materials_by_warehouse(self, warehouse_id: int):
-        query = text("""
-            SELECT v.id, v.sku, v.variant_name, v.cost_price, 
+        scope_ids = [int(warehouse_id)]
+        wh = self.db.execute(
+            text("SELECT id, is_central FROM warehouses WHERE id = :id"),
+            {"id": warehouse_id},
+        ).fetchone()
+        if not wh:
+            raise Exception("Kho không tồn tại")
+
+        # Nếu là kho tổng thì gộp cả các xưởng liên kết để hiển thị tổng tồn theo cụm.
+        if int(wh[1] or 0) == 1:
+            try:
+                linked_rows = self.db.execute(
+                    text("""
+                        SELECT workshop_warehouse_id
+                        FROM central_workshop_links
+                        WHERE central_warehouse_id = :cid
+                    """),
+                    {"cid": warehouse_id},
+                ).fetchall()
+                scope_ids.extend(int(r[0]) for r in linked_rows if r and r[0] is not None)
+            except Exception:
+                # Fallback an toàn nếu bảng liên kết chưa có.
+                pass
+
+        scope_ids = sorted(set(scope_ids))
+        ids_str = ",".join(str(i) for i in scope_ids)
+        query = text(f"""
+            SELECT v.id, v.sku, v.variant_name, p.base_unit, v.cost_price, 
                    v.color, v.note,
-                   IFNULL(s.quantity_on_hand, 0) as quantity_on_hand
+                   IFNULL(SUM(CASE WHEN s.warehouse_id IN ({ids_str}) THEN s.quantity_on_hand ELSE 0 END), 0) as quantity_on_hand
             FROM product_variants v
-            LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id AND s.warehouse_id = :wid
+            LEFT JOIN inventory_stocks s ON v.id = s.product_variant_id
             JOIN products p ON v.product_id = p.id
             WHERE p.type = 'material' 
             -- AND IFNULL(s.quantity_on_hand, 0) > 0  <-- (Bỏ comment dòng này nếu chỉ muốn hiện cái có tồn kho)
+            GROUP BY v.id, v.sku, v.variant_name, p.base_unit, v.cost_price, v.color, v.note
             ORDER BY v.id DESC
         """)
-        results = self.db.execute(query, {"wid": warehouse_id}).fetchall()
+        results = self.db.execute(query).fetchall()
         
         return [
             {
                 "id": r[0], "sku": r[1], "variant_name": r[2], 
-                "cost_price": float(r[3]) if r[3] else 0, 
-                "color": r[4], "note": r[5],
-                "quantity_on_hand": float(r[6])
+                "unit": r[3] or "",
+                "cost_price": float(r[4]) if r[4] else 0, 
+                "color": r[5], "note": r[6],
+                "quantity_on_hand": float(r[7])
             } for r in results
         ]
