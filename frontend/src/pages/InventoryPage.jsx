@@ -18,6 +18,7 @@ const InventoryPage = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
     const [searchText, setSearchText] = useState('');
+    const [activeTabKey, setActiveTabKey] = useState('retail');
     
     // Edit State
     const [editingItem, setEditingItem] = useState(null); 
@@ -28,11 +29,13 @@ const InventoryPage = () => {
         ? (canViewCost && canViewMaterialCostForAnyBrand(user, editingItem.brand_ids || []))
         : false;
 
-    const fetchData = async () => {
+    const getMaterialScopeFromTab = (tabKey) => (tabKey === 'accessory' ? 'accessory' : 'retail');
+
+    const fetchData = async (scope = 'retail') => {
         setLoading(true);
         try {
             const [matRes, groupRes] = await Promise.all([
-                productApi.getAll(),
+                productApi.getAll(scope),
                 productApi.getAllGroups()
             ]);
             setMaterials(matRes.data);
@@ -44,7 +47,7 @@ const InventoryPage = () => {
     };
 
     useEffect(() => {
-        fetchData();
+        fetchData('retail');
     }, []);
 
     const filteredMaterials = materials.filter(item => {
@@ -62,6 +65,7 @@ const InventoryPage = () => {
         form.resetFields();
         // Set giá trị mặc định cho form list (ít nhất 1 dòng màu)
         form.setFieldsValue({
+            material_scope: getMaterialScopeFromTab(activeTabKey),
             variants: [{ color_name: '', sku: '', cost_price: 0 }]
         });
         setIsModalOpen(true);
@@ -75,7 +79,7 @@ const InventoryPage = () => {
             // Nếu tên có định dạng "Tên Chung - Màu", ta tách ra để hiển thị cho đẹp (nếu muốn)
             // Nhưng đơn giản nhất là cứ hiển thị full name để sửa
             name: record.variant_name, 
-            unit: record.category_name, 
+            unit: record.base_unit || record.category_name || 'Cái',
             cost_price: record.cost_price,
             note: record.note
         });
@@ -91,12 +95,16 @@ const InventoryPage = () => {
                 message.success("Cập nhật thành công!");
             } else {
                 // LOGIC TẠO MỚI (Gửi danh sách màu)
-                await productApi.create(values);
+                const payload = {
+                    ...values,
+                    material_scope: getMaterialScopeFromTab(activeTabKey),
+                };
+                await productApi.create(payload);
                 message.success("Tạo vật tư thành công!");
             }
             setIsModalOpen(false);
             form.resetFields();
-            fetchData();
+            fetchData(activeTabKey === 'groups' ? 'all' : getMaterialScopeFromTab(activeTabKey));
         } catch (error) {
             message.error("Lỗi: " + (error.response?.data?.detail || "Thất bại"));
         }
@@ -113,8 +121,18 @@ const InventoryPage = () => {
             message.success("Tạo nhóm thành công!");
             setIsGroupModalOpen(false);
             groupForm.resetFields();
-            fetchData();
+            fetchData(activeTabKey === 'groups' ? 'all' : getMaterialScopeFromTab(activeTabKey));
         } catch (error) { message.error("Lỗi tạo nhóm"); }
+    };
+
+    const handleTabChange = (nextKey) => {
+        setActiveTabKey(nextKey);
+        setSearchText('');
+        if (nextKey === 'groups') {
+            fetchData('all');
+        } else {
+            fetchData(getMaterialScopeFromTab(nextKey));
+        }
     };
 
     // --- CẤU HÌNH CỘT BẢNG VẬT TƯ ---
@@ -131,6 +149,7 @@ const InventoryPage = () => {
         },
         
         { title: 'Ghi chú', dataIndex: 'note', render: (t) => t ? <span style={{color: '#666', fontStyle: 'italic'}}>{t}</span> : '-' },
+        { title: 'Đơn vị tính', dataIndex: 'base_unit', width: 100, align: 'center', render: (v) => v || 'Cái' },
         {
             title: 'Giá Vốn',
             dataIndex: 'cost_price',
@@ -153,9 +172,9 @@ const InventoryPage = () => {
     return (
         <div>
             <Card bordered={false} style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
-                <Tabs defaultActiveKey="1" items={[
+                <Tabs activeKey={activeTabKey} onChange={handleTabChange} items={[
                     {
-                        key: '1', label: <span><AppstoreOutlined /> Kho Vật Tư Lẻ</span>,
+                        key: 'retail', label: <span><AppstoreOutlined />Nguyên vật liệu chính</span>,
                         children: (
                             <>
                                 <div style={{marginBottom: 16, display: 'flex', justifyContent: 'space-between'}}>
@@ -167,7 +186,19 @@ const InventoryPage = () => {
                         )
                     },
                     {
-                        key: '2', label: <span><GroupOutlined /> Danh sách Bộ/Nhóm</span>,
+                        key: 'accessory', label: <span><BgColorsOutlined /> Kho Phụ Liệu</span>,
+                        children: (
+                            <>
+                                <div style={{marginBottom: 16, display: 'flex', justifyContent: 'space-between'}}>
+                                    <Input placeholder="Tìm theo Tên, SKU hoặc Ghi chú..." prefix={<SearchOutlined />} style={{ width: 400 }} value={searchText} onChange={e => setSearchText(e.target.value)} allowClear />
+                                    <Button type="primary" onClick={openCreateModal} icon={<PlusOutlined />}>Nhập Phụ Liệu Mới</Button>
+                                </div>
+                                <Table dataSource={filteredMaterials} columns={materialColumns} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
+                            </>
+                        )
+                    },
+                    {
+                        key: 'groups', label: <span><GroupOutlined /> Danh sách Bộ/Nhóm</span>,
                         children: (
                             <>
                                 <div style={{marginBottom: 16, textAlign: 'right'}}><Button type="dashed" onClick={() => setIsGroupModalOpen(true)} icon={<PlusOutlined />}>Tạo Nhóm Mới</Button></div>
@@ -181,6 +212,9 @@ const InventoryPage = () => {
             {/* --- MODAL TẠO VẬT TƯ (NÂNG CẤP DYNAMIC FORM) --- */}
             <Modal title={editingItem ? "Sửa Vật Tư" : "Thêm Vật Tư Mới (Đa màu sắc)"} open={isModalOpen} onCancel={() => setIsModalOpen(false)} footer={null} width={900}>
                 <Form layout="vertical" onFinish={handleSaveMaterial} form={form}>
+                    <Form.Item name="material_scope" hidden>
+                        <Input />
+                    </Form.Item>
                     
                     {/* Phần thông tin chung */}
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>

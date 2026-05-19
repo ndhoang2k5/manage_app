@@ -33,6 +33,10 @@ const productionApi = {
 
     exportOrdersExcel: (params) =>
         axiosClient.get('/production/orders/export', { params, responseType: 'blob' }),
+
+    // "Quản lý đơn" (bảng ngang)
+    getOrdersManagement: (params) => axiosClient.get('/production/orders/management', { params }),
+    getOrdersProgress: (params) => axiosClient.get('/production/orders/progress', { params }),
 };
 
 export default productionApi;

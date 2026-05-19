@@ -1,8 +1,10 @@
 import axiosClient from './axiosClient';
 
 const productApi = {
-    getAll: () => {
-        return axiosClient.get('/materials');
+    getAll: (scope) => {
+        return axiosClient.get('/materials', {
+            params: scope ? { scope } : undefined,
+        });
     },
     create: (data) => {
         return axiosClient.post('/materials/create', data);

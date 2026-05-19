@@ -20,9 +20,11 @@ import warehouseApi from '../api/warehouseApi';
 
 const MODULE_OPTIONS = [
   { key: 'inventory', label: 'Kho vật tư' },
+  { key: 'inventory-check', label: 'Kiểm tồn (Salework)' },
   { key: 'warehouses', label: 'Kho & xưởng' },
   { key: 'purchases', label: 'Nhập hàng' },
   { key: 'production', label: 'Sản xuất' },
+  { key: 'order-management', label: 'Quản lý đơn' },
   { key: 'reports', label: 'Báo cáo' },
   { key: 'drafts', label: 'Đơn hàng dự kiến' },
   { key: 'sales-management', label: 'Quản lý số bán' },

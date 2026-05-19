@@ -11,8 +11,10 @@ import {
 
 // Import Pages
 import InventoryPage from './pages/InventoryPage';
+import InventoryCheckPage from './pages/InventoryCheckPage';
 import PurchasePage from './pages/PurchasePage';
 import ProductionPage from './pages/ProductionPage';
+import ProductionProgressPage from './pages/ProductionProgressPage';
 import WarehousePage from './pages/WarehousePage';
 import CentralDashboard from './pages/CentralDashboard';
 import WorkshopDetail from './pages/WorkshopDetail';
@@ -21,6 +23,8 @@ import warehouseApi from './api/warehouseApi';
 import DraftPage from './pages/DraftPage';
 import SalesManagementPage from './pages/SalesManagementPage';
 import AccountManagementPage from './pages/AccountManagementPage';
+import OrderManagementPage from './pages/OrderManagementPage';
+import ProductPlanningPage from './pages/ProductPlanningPage';
 import { canViewModule } from './utils/permissions';
 
 const { Header, Content, Sider } = Layout;
@@ -106,6 +110,9 @@ const App = () => {
         }]
       : []),
     { key: '/', icon: <DatabaseOutlined />, label: <Link to="/">Kho Vật Tư</Link> },
+    ...(canViewModule(user, 'inventory-check')
+      ? [{ key: '/inventory-check', icon: <DatabaseOutlined />, label: <Link to="/inventory-check">Kiểm tồn (Salework)</Link> }]
+      : []),
     { key: '/warehouses', icon: <ShopOutlined />, label: <Link to="/warehouses">Kho & Xưởng</Link> },
     ...(canViewModule(user, 'purchases')
       ? [{ key: '/purchases', icon: <ShoppingCartOutlined />, label: <Link to="/purchases">Nhập Hàng</Link> }]
@@ -113,11 +120,20 @@ const App = () => {
     ...(canViewModule(user, 'production')
       ? [{ key: '/production', icon: <SkinOutlined />, label: <Link to="/production">Sản Xuất</Link> }]
       : []),
+    ...(canViewModule(user, 'production')
+      ? [{ key: '/production-progress', icon: <BarChartOutlined />, label: <Link to="/production-progress">Tiến trình sản xuất</Link> }]
+      : []),
+    ...(canViewModule(user, 'order-management')
+      ? [{ key: '/order-management', icon: <SkinOutlined />, label: <Link to="/order-management">Quản lý đơn</Link> }]
+      : []),
     ...(canViewModule(user, 'drafts')
       ? [{ key: '/drafts', icon: <BulbOutlined />, label: <Link to="/drafts">Đơn Hàng Dự Kiến</Link> }]
       : []),
     ...(canViewModule(user, 'sales-management')
       ? [{ key: '/sales-management', icon: <LineChartOutlined />, label: <Link to="/sales-management">Quản Lý Số Bán</Link> }]
+      : []),
+    ...(canViewModule(user, 'sales-management')
+      ? [{ key: '/product-planning', icon: <LineChartOutlined />, label: <Link to="/product-planning">Quản lý tạo SP</Link> }]
       : []),
     ...(user.role === 'admin'
       ? [{ key: '/accounts', icon: <UserOutlined />, label: <Link to="/accounts">Quản Lý Tài Khoản</Link> }]
@@ -165,11 +181,15 @@ const App = () => {
                 <Route path="/dashboard/:id" element={canViewReports ? <CentralDashboard /> : <Navigate to="/" replace />} />
                 <Route path="/workshop/:id" element={canViewReports ? <WorkshopDetail /> : <Navigate to="/" replace />} />
                 <Route path="/" element={<InventoryPage />} />
+                <Route path="/inventory-check" element={canViewModule(user, 'inventory-check') ? <InventoryCheckPage /> : <Navigate to="/" replace />} />
                 <Route path="/warehouses" element={<WarehousePage />} />
                 <Route path="/purchases" element={canViewModule(user, 'purchases') ? <PurchasePage /> : <Navigate to="/" replace />} />
                 <Route path="/production" element={canViewModule(user, 'production') ? <ProductionPage /> : <Navigate to="/" replace />} />
+                <Route path="/production-progress" element={canViewModule(user, 'production') ? <ProductionProgressPage /> : <Navigate to="/" replace />} />
+                <Route path="/order-management" element={canViewModule(user, 'order-management') ? <OrderManagementPage /> : <Navigate to="/" replace />} />
                 <Route path="/drafts" element={canViewModule(user, 'drafts') ? <DraftPage /> : <Navigate to="/" replace />} />
                 <Route path="/sales-management" element={canViewModule(user, 'sales-management') ? <SalesManagementPage /> : <Navigate to="/" replace />} />
+                <Route path="/product-planning" element={canViewModule(user, 'sales-management') ? <ProductPlanningPage /> : <Navigate to="/" replace />} />
                 <Route path="/accounts" element={user.role === 'admin' ? <AccountManagementPage /> : <Navigate to="/" replace />} />
               </Routes>
             </div>

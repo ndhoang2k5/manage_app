@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import dayjs from 'dayjs'; 
@@ -18,6 +18,7 @@ import {
 import productionApi from '../api/productionApi';
 import productApi from '../api/productApi';
 import warehouseApi from '../api/warehouseApi';
+import inventoryCheckApi from '../api/inventoryCheckApi';
 import { getStoredUser, canManageModule, canViewMaterialCost, canViewMaterialCostForBrand } from '../utils/permissions';
 import AccessModeBadge from '../components/AccessModeBadge';
 
@@ -45,18 +46,23 @@ const ProductionPage = () => {
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
+    const [receiveSku, setReceiveSku] = useState('');
+    const [receiveLineLabel, setReceiveLineLabel] = useState('Size');
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false); 
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
     // todolist model
     const [isTodoModalOpen, setIsTodoModalOpen] = useState(false);
     const [currentTodos, setCurrentTodos] = useState([]); // List các bước của đơn đang chọn
+    const [isExportingPdf, setIsExportingPdf] = useState(false);
     
     const [loading, setLoading] = useState(false);
     const [estimatedCost, setEstimatedCost] = useState(0); 
     
     // 4. Detail States
     const [currentOrder, setCurrentOrder] = useState(null);
+    const [isEditNewOrder, setIsEditNewOrder] = useState(false);
+    const [editExistingMaterials, setEditExistingMaterials] = useState([]);
     const [orderSizes, setOrderSizes] = useState([]); 
     const [printData, setPrintData] = useState(null);
     const [historyData, setHistoryData] = useState([]);
@@ -148,57 +154,84 @@ const ProductionPage = () => {
         fetchData(1, 10);
     }, []);
 
+    const normalizeSkuSp = (value) => String(value || '').trim();
+
+    const buildSkuSpPlan = (materials = []) => {
+        if (!Array.isArray(materials)) return { lines: [], totalQty: 0, inconsistentSkus: [] };
+        const lines = materials
+            .map((item, idx) => ({
+                line_no: idx,
+                sku_sp: normalizeSkuSp(item?.sku_sp),
+                quantity: Number(item?.product_quantity || 0),
+            }))
+            .filter((line) => line.sku_sp && line.quantity > 0);
+        const totalQty = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+        return { lines, totalQty, inconsistentSkus: [] };
+    };
+
+    const getOrderQuantityFromMaterials = (materials = []) => {
+        const plan = buildSkuSpPlan(materials);
+        return Number(plan.totalQty || 0);
+    };
+
+    const calculateRequiredQuantity = (consumptionRate, productQuantity) => {
+        const rate = Number(consumptionRate || 0);
+        const qty = Number(productQuantity || 0);
+        return Number((rate * qty).toFixed(4));
+    };
+
+    const getMaterialById = (materialId) => {
+        const id = Number(materialId);
+        if (!id) return null;
+        return warehouseMaterials.find((p) => Number(p.id) === id) || products.find((p) => Number(p.id) === id) || null;
+    };
+
     // --- LOGIC KHO & NVL ---
-    const handleWarehouseChange = async (warehouseId) => {
-        if (!warehouseId) {
+    const loadMaterialsByCentral = useCallback(async (centralId) => {
+        if (!centralId) {
             setWarehouseMaterials([]);
             return;
         }
         orderForm.setFieldsValue({ materials: [] });
         setEstimatedCost(0);
         try {
-            const res = await productApi.getByWarehouse(warehouseId);
+            const res = await productApi.getByWarehouse(centralId);
             setWarehouseMaterials(res.data || []);
-            message.success(`Đã cập nhật danh sách NVL tại kho!`);
+            message.success(`Đã cập nhật danh sách NVL theo kho tổng!`);
         } catch (error) {
-            message.error("Lỗi tải NVL của kho này");
+            message.error("Lỗi tải NVL theo kho tổng");
         }
-    };
+    }, [orderForm]);
 
-    const handleMaterialSelect = (value, fieldName) => {
-        // Tìm trong danh sách NVL của Xưởng (warehouseMaterials)
-        const selectedMaterial = warehouseMaterials.find(p => p.id === value);
-        
-        if (selectedMaterial) {
-            const stock = selectedMaterial.quantity_on_hand || 0;
-            
-            const currentMaterials = orderForm.getFieldValue('materials');
-            currentMaterials[fieldName].quantity_needed = stock; 
-            orderForm.setFieldsValue({ materials: currentMaterials });
-            message.info(`Đã tự điền tồn kho: ${stock} ${selectedMaterial.unit || ''}`);
-            calculateCost();
-        }
-    };
+    useEffect(() => {
+        if (!isOrderModalOpen) return;
+        loadMaterialsByCentral(selectedOwnerCentralId);
+    }, [selectedOwnerCentralId, isOrderModalOpen, loadMaterialsByCentral]);
 
     // --- TÍNH GIÁ VỐN ---
     const calculateCost = () => {
         const values = orderForm.getFieldsValue();
         const materials = values.materials || [];
-        const sizeBreakdown = values.size_breakdown || [];
+        const totalQty = getOrderQuantityFromMaterials(materials);
 
         let totalMatCost = 0;
         if (Array.isArray(materials)) {
             materials.forEach(item => {
-                if(item && item.quantity_needed && item.material_variant_id) {
-                    const mat = warehouseMaterials.find(p => p.id === item.material_variant_id) || products.find(p => p.id === item.material_variant_id);
+                if (item && item.material_variant_id) {
+                    const requiredQty = calculateRequiredQuantity(item.consumption_rate, item.product_quantity);
+                    if (!requiredQty) return;
+                    const mat = getMaterialById(item.material_variant_id);
                     const price = mat ? (mat.cost_price || 0) : 0;
-                    totalMatCost += Number(item.quantity_needed) * price; 
+                    totalMatCost += requiredQty * Number(price || 0);
                 }
             });
         }
 
-        const totalFees = Number(values.shipping_fee || 0) + Number(values.labor_fee || 0) + Number(values.marketing_fee || 0) + Number(values.packaging_fee || 0) + Number(values.print_fee || 0) + Number(values.other_fee || 0);
-        const totalQty = Array.isArray(sizeBreakdown) ? sizeBreakdown.reduce((sum, i) => sum + Number(i.quantity || 0), 0) : 0;
+        const totalFees =
+            Number(values.shipping_fee || 0) +
+            Number(values.labor_fee || 0) +
+            Number(values.packaging_fee || 0) +
+            Number(values.print_fee || 0);
 
         if (totalQty > 0) {
             setEstimatedCost((totalMatCost + totalFees) / totalQty);
@@ -232,8 +265,39 @@ const ProductionPage = () => {
     const handleCreateQuickOrder = async (values) => {
         setLoading(true);
         try {
-            const sizeBreakdown = values.size_breakdown || [];
-            if (sizeBreakdown.length === 0) { message.warning("Nhập ít nhất 1 size!"); setLoading(false); return; }
+            const materialRows = values.materials || [];
+            const skuPlan = buildSkuSpPlan(materialRows);
+            if (!skuPlan.lines.length) {
+                message.warning("Nhập SKU SP và số lượng sản phẩm > 0 trong bảng định mức.");
+                setLoading(false);
+                return;
+            }
+            const totalPlannedQty = Number(skuPlan.totalQty || 0);
+
+            const materialAggMap = new Map();
+            (values.materials || []).forEach((m) => {
+                const materialId = Number(m.material_variant_id);
+                const lineQty = Number(m?.product_quantity || 0);
+                const requiredQty = calculateRequiredQuantity(m.consumption_rate, lineQty);
+                if (!materialId || requiredQty <= 0) return;
+
+                const existing = materialAggMap.get(materialId) || {
+                    material_variant_id: materialId,
+                    quantity_needed: 0,
+                    note: "",
+                };
+                existing.quantity_needed = Number((existing.quantity_needed + requiredQty).toFixed(4));
+                if (!existing.note && m.note) existing.note = m.note;
+                materialAggMap.set(materialId, existing);
+            });
+            const normalizedMaterials = Array.from(materialAggMap.values());
+
+            if (normalizedMaterials.some((m) => !m.material_variant_id || m.quantity_needed <= 0)) {
+                message.warning("Kiểm tra lại bảng định mức: cần chọn NVL và định mức tiêu hao > 0.");
+                setLoading(false);
+                return;
+            }
+
             const imageUrls = fileList.filter(f => f.status === 'done' && f.originFileObj.url).map(f => f.originFileObj.url);
 
             const payload = {
@@ -244,16 +308,20 @@ const ProductionPage = () => {
                 owner_central_id: values.owner_central_id || null,
                 start_date: values.start_date.format('YYYY-MM-DD'),
                 due_date: values.due_date.format('YYYY-MM-DD'),
-                materials: (values.materials || []).map(m => ({...m, quantity_needed: Number(m.quantity_needed)})),
-                size_breakdown: sizeBreakdown.map(s => ({...s, quantity: Number(s.quantity)})),
+                materials: normalizedMaterials,
+                size_breakdown: skuPlan.lines.map((line) => ({
+                    size: `SKU:${line.sku_sp}`,
+                    quantity: Number(line.quantity || 0),
+                    note: '',
+                })),
                 image_urls: imageUrls, 
                 auto_start: values.auto_start,
                 shipping_fee: Number(values.shipping_fee || 0),
-                other_fee: Number(values.other_fee || 0),
                 labor_fee: Number(values.labor_fee || 0),
-                marketing_fee: Number(values.marketing_fee || 0),
                 packaging_fee: Number(values.packaging_fee || 0),
-                print_fee: Number(values.print_fee || 0), 
+                print_fee: Number(values.print_fee || 0),
+                other_fee: 0,
+                marketing_fee: 0,
                 note: values.note || ""
             };
 
@@ -294,7 +362,19 @@ const ProductionPage = () => {
             const data = printRes.data;
             const materials = matRes.data || [];
             const sizes = sizeRes.data || []; // Dữ liệu size trả về từ API
+            const isNewOrderMode = !!data?.use_sku_sp_mode;
+            setIsEditNewOrder(isNewOrderMode);
+            setEditExistingMaterials((materials || []).map((m) => ({
+                id: m.id,
+                material_variant_id: m.material_variant_id,
+            })));
 
+            const normalizedSizes = (sizes || []).map(s => ({
+                id: s.id,
+                sku_sp: String(s.size || '').replace(/^SKU:/i, ''),
+                quantity: Number(s.planned || 0),
+                note: s.note || "",
+            }));
             // 3. Xử lý ảnh cũ
             const existingImages = (data.images || []).map((url, index) => ({
                 uid: index,
@@ -313,7 +393,7 @@ const ProductionPage = () => {
                 start_date: dayjs(data.start_date),
                 due_date: dayjs(data.due_date),
                 shipping_fee: data.shipping_fee,
-                other_fee: data.other_fee,
+                other_fee: data.other_fee || 0,
                 labor_fee: data.labor_fee || 0,
                 marketing_fee: data.marketing_fee || 0,
                 packaging_fee: data.packaging_fee || 0,
@@ -326,6 +406,21 @@ const ProductionPage = () => {
                     quantity: s.planned, // <--- LƯU Ý: API trả về 'planned', Form dùng 'quantity'
                     note: s.note
                 })),
+                edit_material_rows: isNewOrderMode
+                    ? (materials || []).map((m, idx) => {
+                        const sizeByIndex = normalizedSizes[idx] || normalizedSizes[0] || { sku_sp: '', quantity: 0 };
+                        const totalNeeded = Number(m.quantity || 0);
+                        const baseQty = Number(sizeByIndex.quantity || 0);
+                        const consumption = baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0;
+                        return {
+                            material_variant_id: m.material_variant_id,
+                            sku_sp: sizeByIndex.sku_sp || '',
+                            consumption_rate: consumption,
+                            product_quantity: baseQty,
+                            note: m.note || "",
+                        };
+                    })
+                    : [],
                 
                 // Đổ dữ liệu NVL
                 materials: (materials || []).map(m => {
@@ -364,28 +459,73 @@ const ProductionPage = () => {
                 return parseFloat(val) || 0;
             };
 
-            // 1. Chuẩn bị dữ liệu NVL
-            const cleanMaterials = (values.materials || []).map(m => ({
-                id: m.id ? parseInt(m.id) : null,
-                material_variant_id: m.material_variant_id,
-                quantity: parseNum(m.quantity), // Ép kiểu an toàn
-                note: m.note || ""
-            }));
+            let cleanMaterials = [];
+            let cleanSizes = [];
 
-            // 2. Chuẩn bị dữ liệu Size
-            const cleanSizes = (values.sizes || []).map(s => {
-                // Xử lý trường size: Nếu là mảng -> Lấy phần tử đầu tiên
-                let sizeVal = s.size;
-                if (Array.isArray(sizeVal)) {
-                    sizeVal = sizeVal[0] || ""; // Lấy cái đầu tiên
+            if (isEditNewOrder) {
+                const planRows = values.edit_material_rows || [];
+                const skuPlan = buildSkuSpPlan(planRows);
+                if (!skuPlan.lines.length) {
+                    message.warning("Cần nhập SKU SP và số lượng sản phẩm > 0.");
+                    return;
                 }
-                return {
-                    id: s.id ? parseInt(s.id) : null,
-                    size: String(sizeVal), // Đảm bảo là chuỗi
-                    quantity: parseInt(Number(s.quantity || 0)), 
-                    note: s.note || ""
-                };
-            });
+                cleanSizes = skuPlan.lines.map((line, idx) => ({
+                    id: values?.sizes?.[idx]?.id ? parseInt(values.sizes[idx].id) : null,
+                    size: `SKU:${line.sku_sp}`,
+                    quantity: parseInt(Number(line.quantity || 0)),
+                    note: "",
+                }));
+
+                const materialAggMap = new Map();
+                planRows.forEach((row) => {
+                    const materialId = Number(row?.material_variant_id || 0);
+                    const lineQty = Number(row?.product_quantity || 0);
+                    const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
+                    if (!materialId || requiredQty <= 0) return;
+
+                    const existing = materialAggMap.get(materialId) || {
+                        material_variant_id: materialId,
+                        quantity: 0,
+                        note: row?.note || "",
+                    };
+                    existing.quantity = Number((existing.quantity + requiredQty).toFixed(4));
+                    if (!existing.note && row?.note) existing.note = row.note;
+                    materialAggMap.set(materialId, existing);
+                });
+
+                cleanMaterials = Array.from(materialAggMap.values()).map((m) => {
+                    const existing = (editExistingMaterials || []).find((x) => Number(x.material_variant_id) === Number(m.material_variant_id));
+                    return {
+                        id: existing?.id ? parseInt(existing.id) : null,
+                        material_variant_id: m.material_variant_id,
+                        quantity: parseNum(m.quantity),
+                        note: m.note || "",
+                    };
+                });
+            } else {
+                // 1. Chuẩn bị dữ liệu NVL (đơn cũ)
+                cleanMaterials = (values.materials || []).map(m => ({
+                    id: m.id ? parseInt(m.id) : null,
+                    material_variant_id: m.material_variant_id,
+                    quantity: parseNum(m.quantity), // Ép kiểu an toàn
+                    note: m.note || ""
+                }));
+
+                // 2. Chuẩn bị dữ liệu Size (đơn cũ)
+                cleanSizes = (values.sizes || []).map(s => {
+                    // Xử lý trường size: Nếu là mảng -> Lấy phần tử đầu tiên
+                    let sizeVal = s.size;
+                    if (Array.isArray(sizeVal)) {
+                        sizeVal = sizeVal[0] || ""; // Lấy cái đầu tiên
+                    }
+                    return {
+                        id: s.id ? parseInt(s.id) : null,
+                        size: String(sizeVal), // Đảm bảo là chuỗi
+                        quantity: parseInt(Number(s.quantity || 0)), 
+                        note: s.note || ""
+                    };
+                });
+            }
             // 3. Chuẩn bị Ảnh
             const imageUrls = fileList.map(f => {
                 if (f.response && f.response.url) return f.response.url;
@@ -400,9 +540,9 @@ const ProductionPage = () => {
                 new_sku: values.new_sku,
                 new_product_name: values.new_product_name,
                 shipping_fee: parseNum(values.shipping_fee),
-                other_fee: parseNum(values.other_fee),
+                other_fee: isEditNewOrder ? 0 : parseNum(values.other_fee),
                 labor_fee: parseNum(values.labor_fee),
-                marketing_fee: parseNum(values.marketing_fee),
+                marketing_fee: isEditNewOrder ? 0 : parseNum(values.marketing_fee),
                 packaging_fee: parseNum(values.packaging_fee),
                 print_fee: parseNum(values.print_fee),
                 note: values.note || "",
@@ -426,14 +566,61 @@ const ProductionPage = () => {
     const handleDeleteOrder = async (id) => { if(window.confirm("CẢNH BÁO: Xóa đơn hàng sẽ HOÀN TRẢ nguyên liệu!")) { try { if (productionApi.deleteOrder) { await productionApi.deleteOrder(id); message.success("Đã xóa!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } else { message.error("Chưa cấu hình API xóa!"); } } catch (error) { message.error("Lỗi xóa: " + error.response?.data?.detail); } } }
     const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Bắt đầu SX!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
     const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
-    const openReceiveModal = async (order) => { setCurrentOrder(order); try { const res = await productionApi.getOrderDetails(order.id); const data = res.data.map(item => ({...item, receiving: 0})); setOrderSizes(data); setIsReceiveModalOpen(true); } catch (error) { message.error("Lỗi tải chi tiết"); } };
-    const handleReceiveGoods = async () => { try { const itemsToReceive = orderSizes.filter(s => s.receiving > 0).map(s => ({ id: s.id, size: s.size, quantity: Number(s.receiving) })); if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!"); await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive }); message.success("Đã nhập kho!"); setIsReceiveModalOpen(false); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
+    const openReceiveModal = async (order) => {
+        setCurrentOrder(order);
+        try {
+            const [res, printRes] = await Promise.all([
+                productionApi.getOrderDetails(order.id),
+                productionApi.getPrintData(order.id),
+            ]);
+            const data = res.data.map(item => ({...item, receiving: 0, inventory_code: ''}));
+            setOrderSizes(data);
+            setReceiveSku(printRes?.data?.sku || '');
+            setReceiveLineLabel(printRes?.data?.use_sku_sp_mode ? 'SKU SP' : 'Size');
+            setIsReceiveModalOpen(true);
+        } catch (error) {
+            message.error("Lỗi tải chi tiết");
+        }
+    };
+    const handleReceiveGoods = async () => {
+        try {
+            const itemsToReceive = orderSizes
+                .filter(s => Number(s.receiving || 0) > 0)
+                .map(s => ({
+                    id: s.id,
+                    size: s.size,
+                    quantity: Number(s.receiving),
+                    inventory_code: (s.inventory_code || '').trim() || null,
+                }));
+            if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!");
+
+            const filledCodes = [...new Set(itemsToReceive.map(x => (x.inventory_code || '').trim()).filter(Boolean))];
+            const hasBlank = itemsToReceive.some(x => !x.inventory_code);
+            if (hasBlank) {
+                message.warning("Có dòng đang để trống mã (vẫn cho nhập, nhưng sẽ không cộng tăng kiểm tồn cho dòng đó).");
+            }
+
+            // Nếu có nhập mã, bắt buộc mã đó phải tồn tại bên kiểm tồn (Salework product list)
+            for (const code of filledCodes) {
+                const res = await inventoryCheckApi.getSaleworkProducts({ page: 1, limit: 5, include_zero: true, search: code });
+                const list = res.data?.items || [];
+                const ok = list.some((p) => String(p.code || '').trim() === String(code).trim());
+                if (!ok) {
+                    message.warning(`Mã "${code}" không tồn tại bên kiểm tồn. Không thể hoàn tất nhập.`);
+                    return;
+                }
+            }
+
+            await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive });
+            message.success("Đã nhập kho!");
+            setIsReceiveModalOpen(false);
+            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter);
+        } catch (error) {
+            message.error("Lỗi: " + (error.response?.data?.detail || error.message || 'unknown'));
+        }
+    };
     const handleViewHistory = async (id) => { try { const res = await productionApi.getReceiveHistory(id); setHistoryData(res.data); setIsHistoryModalOpen(true); } catch (error) { message.error("Lỗi tải lịch sử"); } };
     const handlePrintOrder = async (record) => {
-        if (!canViewMaterialCostForBrand(user, record?.owner_brand_id)) {
-            message.warning('Bạn không có quyền xem bảng chi phí/giá vốn của nhãn hàng này');
-            return;
-        }
         try {
             const res = await productionApi.getPrintData(record.id);
             setPrintData(res.data);
@@ -443,17 +630,47 @@ const ProductionPage = () => {
         }
     };
 
+    const buildDefaultProgressSteps = (record = {}) => {
+        const start = record?.start_date || dayjs().format('YYYY-MM-DD');
+        const due = record?.due_date || dayjs().format('YYYY-MM-DD');
+        return [
+            { name: "Bước 1: Chuẩn bị NVL & Rập", done: false, deadline: start },
+            { name: "Bước 2: Cắt bán thành phẩm", done: false, deadline: start },
+            { name: "Bước 3: May gia công", done: false, deadline: due },
+            { name: "Bước 4: KCS & Đóng gói", done: false, deadline: due },
+        ];
+    };
+
+    const normalizeProgressSteps = (record = {}) => {
+        const defaults = buildDefaultProgressSteps(record);
+        const incoming = Array.isArray(record?.progress) ? record.progress : [];
+        if (!incoming.length) return defaults;
+        return defaults.map((d, idx) => {
+            const row = incoming[idx] || {};
+            return {
+                name: row.name || d.name,
+                done: Boolean(row.done),
+                deadline: row.deadline || d.deadline,
+            };
+        });
+    };
+
+    const isStepOverdue = (step) => {
+        if (!step || step.done || !step.deadline) return false;
+        const deadline = dayjs(step.deadline);
+        if (!deadline.isValid()) return false;
+        return deadline.endOf('day').isBefore(dayjs());
+    };
+
+    const isOrderProgressOverdue = (order) => {
+        const steps = normalizeProgressSteps(order);
+        return steps.some((s) => isStepOverdue(s));
+    };
+
 
     const openTodoModal = (record) => {
         setCurrentOrder(record);
-        // Lấy progress từ record (Backend trả về)
-        // Nếu chưa có (đơn cũ), tạo mặc định
-        const steps = record.progress || [
-            { name: "Bước 1: Chuẩn bị NVL", done: false },
-            { name: "Bước 2: Cắt bán thành phẩm", done: false },
-            { name: "Bước 3: May gia công", done: false },
-            { name: "Bước 4: KCS & Đóng gói", done: false }
-        ];
+        const steps = normalizeProgressSteps(record);
         setCurrentTodos(steps);
         setIsTodoModalOpen(true);
     };
@@ -461,6 +678,12 @@ const ProductionPage = () => {
     const handleToggleStep = (index) => {
         const newTodos = [...currentTodos];
         newTodos[index].done = !newTodos[index].done;
+        setCurrentTodos(newTodos);
+    };
+
+    const handleDeadlineChange = (index, value) => {
+        const newTodos = [...currentTodos];
+        newTodos[index].deadline = value ? dayjs(value).format('YYYY-MM-DD') : null;
         setCurrentTodos(newTodos);
     };
 
@@ -489,195 +712,95 @@ const ProductionPage = () => {
 
 
 
-// --- HÀM IN (CẬP NHẬT: THÊM BẢNG ĐỊNH MỨC RIÊNG) ---
-    const printContent = () => {
+    // --- HÀM IN: in trực tiếp từ trình duyệt ---
+    const printContent = async () => {
         if (!printData) return;
-        const canViewPrintCost = canViewMaterialCostForBrand(user, printData?.owner_brand_id);
-        const printWindow = window.open('', '', 'width=950,height=800');
-        printWindow.document.write('<html><head><title>PO - ' + (printData.code || '') + '</title>');
-        printWindow.document.write(`
-            <style>
-                body { font-family: 'Times New Roman', sans-serif; padding: 20px; font-size: 14px; color: #000; }
-                .container { max-width: 900px; margin: 0 auto; }
-                .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }
-                h2 { margin: 0; text-transform: uppercase; font-size: 24px; }
-                .info-grid { display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 15px; }
-                .info-col { width: 48%; }
-                p { margin: 5px 0; }
-                
-                /* Table Styles */
-                table { width: 100%; border-collapse: collapse; margin-bottom: 25px; border: 1px solid #000; font-size: 14px; }
-                th, td { border: 1px solid #000; padding: 6px 8px; text-align: left; vertical-align: middle; }
-                th { background-color: #f0f0f0; text-align: center; font-weight: bold; }
-                .text-center { text-align: center; }
-                .text-right { text-align: right; }
-                
-                /* Images */
-                .images-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
-                .product-img { max-height: 200px; border: 1px solid #ccc; padding: 4px; object-fit: contain; }
-                
-                /* Footer */
-                .footer { margin-top: 50px; display: flex; justify-content: space-between; }
-                .signature { text-align: center; width: 40%; }
-                
-                /* Section Title */
-                h3 { border-bottom: 1px solid #000; padding-bottom: 5px; margin-top: 0; margin-bottom: 10px; font-size: 16px; text-transform: uppercase; }
-            </style>
-        `);
-        printWindow.document.write('</head><body><div class="container">');
 
-        // --- HEADER ---
-        printWindow.document.write(`
-            <div class="header">
-                <h2>LỆNH SẢN XUẤT & TÍNH GIÁ THÀNH</h2>
-                <i>Mã lệnh: <b>${printData.code}</b></i>
-            </div>
-            
-            <div class="info-grid">
-                <div class="info-col">
-                    <p><b>Xưởng thực hiện:</b> ${printData.warehouse}</p>
-                    <p><b>Ngày bắt đầu:</b> ${printData.start_date}</p>
-                </div>
-                <div class="info-col">
-                    <p><b>Sản phẩm:</b> ${printData.product}</p>
-                    <p><b>Hạn hoàn thành:</b> ${printData.due_date}</p>
-                </div>
-            </div>
-
-            ${printData.images && printData.images.length > 0 ? `
-                <div class="images-container">
-                    ${printData.images.map(url => `
-                        <img src="${BASE_URL}${url}" class="product-img" />
-                    `).join('')}
-                </div>
-            ` : ''}
-        `);
-
-        // --- BẢNG 1: SIZE & SỐ LƯỢNG ---
-        printWindow.document.write(`
-            <h3>1. CHI TIẾT SIZE & SỐ LƯỢNG</h3>
-            <table>
-                <thead><tr><th width="40%">Size</th><th>Số lượng đặt</th></tr></thead>
-                <tbody>
-                    ${(printData.sizes || []).map(s => `
-                        <tr>
-                            <td class="text-center"><b>${s.size}</b></td>
-                            <td class="text-center"><b>${s.qty}</b></td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `);
-
-        // --- BẢNG 2: ĐỊNH MỨC NGUYÊN VẬT LIỆU (MỚI THÊM - CHỈ CÓ SỐ LƯỢNG) ---
-        printWindow.document.write(`
-            <h3>2. BẢNG CẤP NGUYÊN VẬT LIỆU (SẢN XUẤT)</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tên Vật Tư</th>
-                        <th width="25%">Tổng cấp</th>
-                        <th width="30%">Ghi chú</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${(printData.materials || []).map(m => `
-                        <tr>
-                            <td>
-                                ${m.name} <br/>
-                                <small><i>(${m.sku})</i></small>
-                            </td>
-                            <td class="text-center" style="font-size: 15px;">
-                                <b>${new Intl.NumberFormat('vi-VN').format(m.total_needed)}</b>
-                            </td>
-                            <td>${m.note || ''}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `);
-
-        // --- BẢNG 3: CHI PHÍ & GIÁ THÀNH ---
-        if (canViewPrintCost) {
-            printWindow.document.write(`
-                <br/>
-                <h3>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Khoản mục chi phí</th>
-                            <th width="20%">Đơn giá vốn</th>
-                            <th width="20%">Thành tiền</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Phần Nguyên vật liệu -->
-                        ${(printData.materials || []).map(m => `
-                            <tr>
-                                <td>${m.name}</td>
-                                <td class="text-right">${safeMoney(m.unit_cost)}</td>
-                                <td class="text-right">${safeMoney(m.total_cost)}</td>
-                            </tr>
-                        `).join('')}
-                        
-                        <tr style="background-color: #f9f9f9; font-weight: bold;">
-                            <td class="text-right">Tổng tiền NVL:</td>
-                            <td></td>
-                            <td class="text-right">${safeMoney(printData.total_material_cost)}</td>
-                        </tr>
-
-                        <!-- Phần Chi phí khác -->
-                        <tr><td>Phí Gia Công</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.labor_fee)}</td></tr>
-                        <tr><td>Phí In/Thêu</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.print_fee)}</td></tr>
-                        <tr><td>Phí Vận Chuyển</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.shipping_fee)}</td></tr>
-                        <tr><td>Phí Marketing</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.marketing_fee)}</td></tr>
-                        <tr><td>Phí Đóng Gói</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.packaging_fee)}</td></tr>
-                        <tr><td>Phụ phí khác</td><td class="text-right">-</td><td class="text-right">${safeMoney(printData.other_fee)}</td></tr>
-
-                        <!-- TỔNG CỘNG -->
-                        <tr style="background-color: #e6f7ff; font-size: 16px;">
-                            <td><b>TỔNG CHI PHÍ TOÀN BỘ:</b></td>
-                            <td></td>
-                            <td class="text-right"><b style="color: #d4380d;">${safeMoney(
-                                printData.total_material_cost + 
-                                (printData.labor_fee||0) + (printData.print_fee||0) + 
-                                (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
-                                (printData.packaging_fee||0) + (printData.other_fee||0)
-                            )}</b></td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <div style="text-align: right; margin-top: 10px; font-size: 16px; border: 2px solid #000; display: inline-block; padding: 10px 20px; float: right;">
-                    GIÁ VỐN / 1 SẢN PHẨM: <b>${safeMoney(
-                        printData.total_qty > 0 
-                        ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
-                        : 0
-                    )}</b>
-                </div>
-
-                <div style="clear: both;"></div>
-            `);
-        } else {
-            printWindow.document.write(`
-                <br/>
-                <h3>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h3>
-                <div style="border: 1px dashed #999; padding: 12px; text-align: center; color: #666; margin-bottom: 20px;">
-                    Bạn không có quyền xem giá vốn nguyên phụ liệu.
-                </div>
-            `);
+        const printableArea = document.getElementById('printable-area');
+        if (!printableArea) {
+            message.error('Không tìm thấy nội dung để in');
+            return;
         }
 
-        printWindow.document.write(`
-            <div class="footer">
-                <div class="signature"><p><b>Người Lập Lệnh</b></p><br/><br/><br/></div>
-                <div class="signature"><p><b>Xưởng Xác Nhận</b></p><br/><br/><br/></div>
-            </div>
-        `);
+        setIsExportingPdf(true);
+        try {
+            const printWindow = window.open('', '_blank', 'width=1200,height=900');
+            if (!printWindow) {
+                throw new Error('Trình duyệt đang chặn cửa sổ in');
+            }
 
-        printWindow.document.write('</div></body></html>');
-        printWindow.document.close();
-        // setTimeout(() => { printWindow.print(); }, 500); // Tự động in nếu muốn
+            const html = `
+                <html>
+                <head>
+                    <title>In lệnh sản xuất - ${printData.code || ''}</title>
+                    <style>
+                        @page { size: A4; margin: 10mm; }
+                        html, body { margin: 0; padding: 0; background: #fff; }
+                        body { font-family: "Times New Roman", serif; color: #000; }
+                        .print-root { width: 100%; box-sizing: border-box; }
+                        .print-root * { box-sizing: border-box; }
+                        .print-root img { max-width: 100%; height: auto; }
+                        .print-root table { width: 100% !important; border-collapse: collapse; table-layout: fixed; }
+                        .print-root th, .print-root td { word-break: break-word; }
+                        .print-root .ant-tag {
+                            display: inline-block !important;
+                            white-space: normal !important;
+                            max-width: 100% !important;
+                        }
+                        @media print {
+                            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="print-root">${printableArea.innerHTML}</div>
+                </body>
+                </html>
+            `;
+
+            printWindow.document.open();
+            printWindow.document.write(html);
+            printWindow.document.close();
+
+            await new Promise((resolve) => {
+                const tryPrint = () => {
+                    const imgs = Array.from(printWindow.document.images || []);
+                    if (!imgs.length) {
+                        setTimeout(resolve, 200);
+                        return;
+                    }
+                    let done = 0;
+                    const finish = () => {
+                        done += 1;
+                        if (done >= imgs.length) {
+                            setTimeout(resolve, 200);
+                        }
+                    };
+                    imgs.forEach((img) => {
+                        if (img.complete) finish();
+                        else {
+                            img.onload = finish;
+                            img.onerror = finish;
+                        }
+                    });
+                };
+                if (printWindow.document.readyState === 'complete') tryPrint();
+                else printWindow.onload = tryPrint;
+            });
+
+            printWindow.focus();
+            printWindow.print();
+            setTimeout(() => {
+                if (!printWindow.closed) {
+                    printWindow.close();
+                }
+            }, 1000);
+        } catch (error) {
+            console.error(error);
+            message.error('In thất bại: ' + (error.message || 'Lỗi không xác định'));
+        } finally {
+            setIsExportingPdf(false);
+        }
     };
 
     const orderColumns = [
@@ -707,15 +830,20 @@ const ProductionPage = () => {
             align: 'center',
             width: 250,
             render: (_, r) => {
-                const steps = r.progress || [];
+                const steps = normalizeProgressSteps(r);
                 const doneCount = steps.filter(s => s.done).length;
                 const totalCount = steps.length || 4; // Mặc định 4 bước
+                const isOverdue = isOrderProgressOverdue(r);
                 
                 // Màu sắc dựa trên tiến độ
                 let color = 'default';
-                if (doneCount > 0) color = 'processing';
+                if (isOverdue && r.status !== 'completed') color = 'error';
+                else if (doneCount > 0) color = 'processing';
                 if (doneCount === totalCount) color = 'success';
                 if (r.status === 'completed') color = 'green';
+                const strokeColor = color === 'error'
+                    ? '#ff4d4f'
+                    : (color === 'success' ? '#52c41a' : '#1890ff');
 
                 return (
                     <div
@@ -723,9 +851,11 @@ const ProductionPage = () => {
                         onClick={() => openTodoModal(r)}
                     >
                         <Tag color={color} style={{fontSize: 13, padding: '4px 10px'}}>
-                            {r.status === 'completed' ? 'HOÀN THÀNH' : `Bước ${doneCount}/${totalCount}`}
+                            {r.status === 'completed'
+                                ? 'HOÀN THÀNH'
+                                : (isOverdue ? `Trễ hạn ${doneCount}/${totalCount}` : `Bước ${doneCount}/${totalCount}`)}
                         </Tag>
-                        <Progress percent={Math.round((doneCount/totalCount)*100)} size="small" showInfo={false} strokeColor={color === 'success' ? '#52c41a' : '#1890ff'} />
+                        <Progress percent={Math.round((doneCount/totalCount)*100)} size="small" showInfo={false} strokeColor={strokeColor} />
                     </div>
                 );
             }
@@ -740,8 +870,7 @@ const ProductionPage = () => {
                         icon={<PrinterOutlined />}
                         size="small"
                         onClick={() => handlePrintOrder(record)}
-                        disabled={!canViewMaterialCostForBrand(user, record?.owner_brand_id)}
-                        title={!canViewMaterialCostForBrand(user, record?.owner_brand_id) ? 'Không có quyền xem giá vốn nhãn hàng này' : 'In'}
+                        title="In"
                     />
                     <Button icon={<HistoryOutlined />} size="small" onClick={() => handleViewHistory(record.id)} />
                     {canManageProduction && (
@@ -827,14 +956,26 @@ const ProductionPage = () => {
                             >
                                 <span style={{
                                     textDecoration: item.done ? 'line-through' : 'none', 
-                                    color: item.done ? '#999' : '#000',
+                                    color: item.done ? '#999' : (isStepOverdue(item) ? '#cf1322' : '#000'),
                                     fontWeight: 500
                                 }}>
                                     {item.name}
                                 </span>
                             </Checkbox>
                             {/* Hiển thị Deadline */}
-                            <Tag color="orange" icon={<CalendarOutlined />}>{item.deadline || "N/A"}</Tag>
+                            <DatePicker
+                                value={item.deadline ? dayjs(item.deadline) : null}
+                                onChange={(value) => handleDeadlineChange(index, value)}
+                                disabled={currentOrder?.status === 'completed'}
+                                format="YYYY-MM-DD"
+                                allowClear={false}
+                                style={{
+                                    width: 140,
+                                    borderColor: isStepOverdue(item) ? '#ff4d4f' : undefined,
+                                    background: isStepOverdue(item) ? '#fff1f0' : undefined,
+                                }}
+                                suffixIcon={<CalendarOutlined />}
+                            />
                         </List.Item>
                     )}
                 />
@@ -844,7 +985,7 @@ const ProductionPage = () => {
 
             {/* MODAL 1: TẠO LỆNH (CẬP NHẬT: GHI CHÚ NVL) */}
             <Modal title="Lên Mẫu Mới & Sản Xuất" open={isOrderModalOpen} onCancel={() => setIsOrderModalOpen(false)} footer={null} width={1680} style={{ top: 16 }}>
-                <Form layout="vertical" form={orderForm} onFinish={handleCreateQuickOrder}>
+                <Form layout="vertical" form={orderForm} onFinish={handleCreateQuickOrder} onValuesChange={onFormValuesChange}>
                     <Row gutter={[24, 16]}>
                         <Col xs={24} lg={5}>
                             <Card size="small" title="1. Thông tin Chung" bordered={false} style={{background: '#f9f9f9', marginBottom: 16}}>
@@ -855,7 +996,7 @@ const ProductionPage = () => {
                                     </Select>
                                 </Form.Item>
                                 <Form.Item label="Xưởng May" name="warehouse_id" rules={[{ required: true }]}>
-                                    <Select placeholder="Chọn xưởng" onChange={handleWarehouseChange}>
+                                    <Select placeholder="Chọn xưởng">
                                         {warehouses
                                             .filter(w => w.type_name !== 'Kho Tổng')
                                             .map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
@@ -867,90 +1008,133 @@ const ProductionPage = () => {
                             </Card>
                             <Card size="small" title="Hình ảnh Mẫu" bordered={false} style={{background: '#fff7e6', border: '1px solid #ffd591'}}><Upload customRequest={handleUpload} listType="picture-card" fileList={fileList} onChange={handleFileChange}>{fileList.length >= 5 ? null : <div><PlusOutlined /><div style={{ marginTop: 8 }}>Upload</div></div>}</Upload></Card>
                         </Col>
-                        <Col xs={24} lg={8}>
-                            <Card size="small" title="2. Size & Ghi chú" bordered={false} style={{background: '#e6f7ff', border: '1px solid #91d5ff', height: '100%', minHeight: 420 }}>
-                                <Form.List name="size_breakdown" initialValue={[{ size: '0-3m', quantity: 0 }]}>{(fields, { add, remove }) => (<div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto' }}>{fields.map(({ key, name, ...restField }) => (<Space key={key} style={{ display: 'flex', marginBottom: 10, flexWrap: 'nowrap', alignItems: 'center', width: '100%' }} align="baseline"><Form.Item {...restField} name={[name, 'size']} rules={[{ required: true, message: 'Nhập size' }]} style={{ flex: '1 1 160px', minWidth: 160, maxWidth: 220, marginBottom: 0 }}>
-                                                                <AutoComplete
-                                                                    options={sizeStandardOptions}
-                                                                    placeholder="Chọn hoặc nhập"
-                                                                    style={{ width: '100%', minWidth: 160 }}
-                                                                    filterOption={(inputValue, option) =>
-                                                                        (option?.value ?? '').toLowerCase().includes(String(inputValue).toLowerCase())
-                                                                    }
-                                                                    allowClear
-                                                                />
-                                                            </Form.Item>
-                                <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true }]} style={{ flex: '0 0 76px', marginBottom: 0 }}><Input type="number" placeholder="SL" min={1} style={{ width: 76 }} /></Form.Item>
-                                <Form.Item {...restField} name={[name, 'note']} style={{ flex: '0 0 96px', marginBottom: 0 }}><Input placeholder="Ghi chú" style={{ width: 120 }} /></Form.Item><DeleteOutlined onClick={() => remove(name)} style={{color:'red'}}/></Space>))}<Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm Size</Button></div>)}</Form.List>
-                            </Card>
-                        </Col>
-                        <Col xs={24} lg={11}>
-                            <Card size="small" title="3. Tổng lượng NVL (Cả lô)" bordered={false} style={{background: '#f9f9f9', height: '100%'}}>
+                        <Col xs={24} lg={19}>
+                            <Card size="small" title="2. Bảng định mức NVL" bordered={false} style={{background: '#f9f9f9', height: '100%'}}>
                                 <Form.List name="materials">
                                     {(fields, { add, remove }) => (
                                         <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-                                            {fields.map(({ key, name, ...restField }) => (
-                                                <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-                                                    <Form.Item 
-                                                        {...restField} 
-                                                        name={[name, 'material_variant_id']} 
-                                                        rules={[{ required: true }]} 
-                                                        style={{ width: 450 }} 
-                                                    >
-                                                        <Select 
-                                                            placeholder="Chọn NVL..." 
-                                                            showSearch 
-                                                            // --- SỬA ĐOẠN NÀY ---
-                                                            // 1. Định nghĩa logic lọc: So sánh từ khóa nhập vào với prop 'label'
-                                                            filterOption={(input, option) =>
-                                                                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                                                            }
-                                                            dropdownMatchSelectWidth={false}
-                                                            size="large"
-                                                            onChange={(val) => handleMaterialSelect(val, name)}
-                                                        >
-                                                            {warehouseMaterials.map(p => (
-                                                                <Select.Option 
-                                                                    key={p.id} 
-                                                                    value={p.id}
-                                                                    // 2. Thêm prop 'label' chứa text thuần túy (SKU + Tên) để tìm kiếm
-                                                                    label={`${p.sku} ${p.variant_name}`} 
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                                                <thead>
+                                                    <tr>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>SKU nguyên vật liệu</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>SKU SP</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 120 }}>Đơn vị tính</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Định mức tiêu hao</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Số lượng SP</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 180 }}>Tổng NPL cần dùng</th>
+                                                        <th style={{ width: 40, borderBottom: '1px solid #f0f0f0' }}></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {fields.map(({ key, name, ...restField }) => (
+                                                        <tr key={key}>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'material_variant_id']}
+                                                                    rules={[{ required: true, message: 'Chọn NVL' }]}
+                                                                    style={{ marginBottom: 0 }}
                                                                 >
-                                                                    {/* Phần hiển thị giao diện đẹp giữ nguyên */}
-                                                                    <div style={{display: 'flex', justifyContent: 'space-between', width: '500px'}}>
-                                                                        <span>
-                                                                            <b style={{color:'#1677ff'}}>[{p.sku}]</b> {p.variant_name} 
-                                                                            {p.color && <Tag color="magenta" style={{marginLeft: 5}}>{p.color}</Tag>}
-                                                                            {p.note && <span style={{color: '#888', fontSize: 12}}> ({p.note})</span>}
-                                                                        </span>
-                                                                        <span style={{color: p.quantity_on_hand > 0 ? 'green' : 'red', fontWeight: 'bold'}}>
-                                                                            Tồn: {p.quantity_on_hand}
-                                                                        </span>
-                                                                    </div>
-                                                                </Select.Option>
-                                                            ))}
-                                                        </Select>
-                                                    </Form.Item>
-
-                                                    <Form.Item {...restField} name={[name, 'quantity_needed']} rules={[{ required: true }]}>
-                                                        <Input type="number" placeholder="Tổng" step={0.1} style={{width: 80}} />
-                                                    </Form.Item>
-                                                    
-                                                    {/* Ô GHI CHÚ NVL (MỚI) */}
-                                                    <Form.Item {...restField} name={[name, 'note']}>
-                                                        <Input placeholder="Ghi chú NVL" style={{width: 120}} />
-                                                    </Form.Item>
-
-                                                    <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red' }} />
-                                                </Space>
-                                            ))}
-                                            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>Thêm NVL</Button>
+                                                                    <Select
+                                                                        placeholder="Chọn NVL..."
+                                                                        showSearch
+                                                                        filterOption={(input, option) =>
+                                                                            (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                                                                        }
+                                                                        dropdownMatchSelectWidth={false}
+                                                                        size="middle"
+                                                                    >
+                                                                        {warehouseMaterials.map(p => (
+                                                                            <Select.Option
+                                                                                key={p.id}
+                                                                                value={p.id}
+                                                                                label={`${p.sku} ${p.variant_name}`}
+                                                                            >
+                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', width: '500px' }}>
+                                                                                    <span>
+                                                                                        <b style={{ color: '#1677ff' }}>[{p.sku}]</b> {p.variant_name}
+                                                                                        {p.color && <Tag color="magenta" style={{ marginLeft: 5 }}>{p.color}</Tag>}
+                                                                                        {p.note && <span style={{ color: '#888', fontSize: 12 }}> ({p.note})</span>}
+                                                                                    </span>
+                                                                                    <span style={{ color: p.quantity_on_hand > 0 ? 'green' : 'red', fontWeight: 'bold' }}>
+                                                                                        Tồn: {p.quantity_on_hand}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </Select.Option>
+                                                                        ))}
+                                                                    </Select>
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'sku_sp']}
+                                                                    rules={[{ required: true, message: 'Nhập SKU SP' }]}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <Input placeholder="VD: HD26ub27-9-12m" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item shouldUpdate noStyle>
+                                                                    {({ getFieldValue }) => {
+                                                                        const materialId = getFieldValue(['materials', name, 'material_variant_id']);
+                                                                        const mat = getMaterialById(materialId);
+                                                                        return <Input value={mat?.unit || '-'} disabled />;
+                                                                    }}
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'consumption_rate']}
+                                                                    rules={[{ required: true, message: 'Nhập định mức' }]}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'product_quantity']}
+                                                                    rules={[{ required: true, message: 'Nhập SL SP' }]}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <InputNumber min={0} step={1} style={{ width: '100%' }} placeholder="VD: 500" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item shouldUpdate noStyle>
+                                                                    {({ getFieldValue }) => {
+                                                                        const consumptionRate = getFieldValue(['materials', name, 'consumption_rate']);
+                                                                        const productQuantity = getFieldValue(['materials', name, 'product_quantity']);
+                                                                        const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
+                                                                        return <InputNumber value={requiredQty} disabled style={{ width: '100%' }} />;
+                                                                    }}
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ textAlign: 'center', padding: '8px 4px' }}>
+                                                                <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red', cursor: 'pointer' }} />
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />} style={{ marginTop: 8 }}>
+                                                Thêm dòng định mức
+                                            </Button>
                                         </div>
                                     )}
                                 </Form.List>
                                 <Divider style={{margin: '12px 0'}} />
                                 
-                                <Row gutter={8}><Col span={8}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col></Row>
+                                <Row gutter={8}>
+                                    <Col span={6}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={6}><Form.Item label="In ấn" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={6}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={6}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                </Row>
                                 
                                 <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}>
                                     {canViewCreateCost ? (
@@ -968,7 +1152,7 @@ const ProductionPage = () => {
             </Modal>
 
             {/* Modal Sửa (Edit) */}
-            <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={1000} footer={null} style={{top: 20}}>
+            <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={isEditNewOrder ? 1500 : 1000} footer={null} style={{top: 20}}>
                 <Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}>
                     
                     {/* --- 1. THÔNG TIN CHUNG --- */}
@@ -1004,111 +1188,130 @@ const ProductionPage = () => {
                         )}
                     </Upload>
 
-                    {/* --- 3. BẢNG SỬA SIZE & SỐ LƯỢNG (MỚI) --- */}
-                    <Divider orientation="left">Chi tiết Size & Số lượng</Divider>
-                    <Form.List name="sizes">
-                        {(fields, { add, remove }) => (
-                            <div style={{marginBottom: 20}}>
-                                <Row gutter={[12, 12]}>
-                                    {fields.map(({ key, name, ...restField }) => (
-                                        <Col span={12} key={key}>
-                                            <Card 
-                                                size="small" 
-                                                style={{background: '#f9f9f9', border: '1px solid #d9d9d9'}}
-                                                // Nút xóa nằm ở góc trên bên phải của Card
-                                                extra={
-                                                    <DeleteOutlined 
-                                                        onClick={() => remove(name)} 
-                                                        style={{color: 'red', cursor: 'pointer'}} 
-                                                        title="Xóa size này"
-                                                    />
-                                                }
-                                            >
-                                                <Space direction="vertical" style={{width: '100%'}} size="small">
-                                                    {/* Hidden ID */}
-                                                    <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
-                                                    
-                                                    <div style={{display: 'flex', gap: 10}}>
-                                                        {/* Ô Chọn Size */}
-                                                        <Form.Item 
-                                                            {...restField} 
-                                                            name={[name, 'size']} 
-                                                            label="Size" 
-                                                            style={{marginBottom: 0, flex: 1}} 
-                                                            rules={[{required: true, message: 'Thiếu size'}]}
-                                                        >
-                                                            <AutoComplete
-                                                                options={sizeStandardOptions}
-                                                                placeholder="Chọn size có sẵn hoặc gõ tay (hoạ tiết, mã riêng...)"
-                                                                style={{ width: '100%' }}
-                                                                filterOption={(inputValue, option) =>
-                                                                    (option?.value ?? '').toLowerCase().includes(String(inputValue).toLowerCase())
-                                                                }
-                                                                allowClear
-                                                            />
-                                                        </Form.Item>
-                                                        
-                                                        {/* Ô Số lượng (Hiển thị số đẹp) */}
-                                                        <Form.Item {...restField} name={[name, 'quantity']} label="SL" style={{marginBottom: 0, width: 100}} rules={[{required: true}]}>
-                                                            <InputNumber 
-                                                                style={{width: '100%'}} 
-                                                                min="0"
-                                                                step="0.0001" 
-                                                                stringMode 
-                                                                
-                                                                // --- SỬA ĐOẠN FORMATTER NÀY ---
-                                                                formatter={value => {
-                                                                    if (!value) return '';
-                                                                    const strValue = `${value}`;
-                                                                    const parts = strValue.split('.'); // Tách phần nguyên và phần thập phân
-                                                                    
-                                                                    // Chỉ thêm dấu phẩy hàng nghìn cho phần nguyên (parts[0])
-                                                                    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                                                                    
-                                                                    // Gộp lại (Nếu có phần thập phân thì nối vào)
-                                                                    return parts.join('.');
+                    {isEditNewOrder ? (
+                        <>
+                            <Divider orientation="left">Bảng định mức NVL (Sửa nhanh theo SKU SP)</Divider>
+                            <Form.List name="edit_material_rows">
+                                {(fields, { add, remove }) => (
+                                    <div style={{ maxHeight: 380, overflowY: 'auto', overflowX: 'auto', marginBottom: 20 }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                                            <thead>
+                                                <tr>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>SKU nguyên vật liệu</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>SKU SP</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 120 }}>Đơn vị tính</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Định mức tiêu hao</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Số lượng SP</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 180 }}>Tổng NVL cần</th>
+                                                    <th style={{ width: 40, borderBottom: '1px solid #f0f0f0' }}></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {fields.map(({ key, name, ...restField }) => (
+                                                    <tr key={key}>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true, message: 'Chọn NVL' }]} style={{ marginBottom: 0 }}>
+                                                                <Select placeholder="Chọn NVL..." showSearch filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}>
+                                                                    {warehouseMaterials.map(p => (
+                                                                        <Select.Option key={p.id} value={p.id} label={`${p.sku} ${p.variant_name}`}>
+                                                                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '500px' }}>
+                                                                                <span><b style={{ color: '#1677ff' }}>[{p.sku}]</b> {p.variant_name}</span>
+                                                                                <span style={{ color: p.quantity_on_hand > 0 ? 'green' : 'red', fontWeight: 'bold' }}>Tồn: {p.quantity_on_hand}</span>
+                                                                            </div>
+                                                                        </Select.Option>
+                                                                    ))}
+                                                                </Select>
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'sku_sp']} rules={[{ required: true, message: 'Nhập SKU SP' }]} style={{ marginBottom: 0 }}>
+                                                                <Input placeholder="VD: HD26ub27-9-12m" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item shouldUpdate noStyle>
+                                                                {({ getFieldValue }) => {
+                                                                    const materialId = getFieldValue(['edit_material_rows', name, 'material_variant_id']);
+                                                                    const mat = getMaterialById(materialId);
+                                                                    return <Input value={mat?.unit || '-'} disabled />;
                                                                 }}
-                                                                // -----------------------------
-
-                                                                parser={value => value.replace(/\$\s?|(,*)/g, '')} // Xóa dấu phẩy khi lưu giá trị
-                                                            />
-                                                        </Form.Item>
-                                                    </div>
-
-                                                    {/* Ô Ghi chú */}
-                                                    <Form.Item 
-                                                        {...restField} 
-                                                        name={[name, 'note']} 
-                                                        label="Ghi chú" 
-                                                        style={{marginBottom: 0}}
-                                                    >
-                                                        <Input placeholder="Note cho size này" />
-                                                    </Form.Item>
-                                                </Space>
-                                            </Card>
-                                        </Col>
-                                    ))}
-                                    
-                                    {/* Nút Thêm Size Mới - Dạng Card đứt nét */}
-                                    <Col span={12}>
-                                        <Button 
-                                            type="dashed" 
-                                            onClick={() => add()} 
-                                            style={{width: '100%', height: '100%', minHeight: 130, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}}
-                                            icon={<PlusOutlined style={{fontSize: 24}} />}
-                                        >
-                                            Thêm Size Mới
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'consumption_rate']} rules={[{ required: true, message: 'Nhập định mức' }]} style={{ marginBottom: 0 }}>
+                                                                <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'product_quantity']} rules={[{ required: true, message: 'Nhập SL SP' }]} style={{ marginBottom: 0 }}>
+                                                                <InputNumber min={0} step={1} style={{ width: '100%' }} placeholder="VD: 500" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item shouldUpdate noStyle>
+                                                                {({ getFieldValue }) => {
+                                                                    const consumptionRate = getFieldValue(['edit_material_rows', name, 'consumption_rate']);
+                                                                    const productQuantity = getFieldValue(['edit_material_rows', name, 'product_quantity']);
+                                                                    const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
+                                                                    return <InputNumber value={requiredQty} disabled style={{ width: '100%' }} />;
+                                                                }}
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ textAlign: 'center', padding: '8px 4px' }}>
+                                                            <DeleteOutlined onClick={() => remove(name)} style={{ color: 'red', cursor: 'pointer' }} />
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                        <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />} style={{ marginTop: 8 }}>
+                                            Thêm dòng định mức
                                         </Button>
-                                    </Col>
-                                </Row>
-                            </div>
-                        )}
-                    </Form.List>
+                                    </div>
+                                )}
+                            </Form.List>
+                        </>
+                    ) : (
+                        <>
+                            {/* --- 3. BẢNG SỬA SIZE & SỐ LƯỢNG (ĐƠN CŨ) --- */}
+                            <Divider orientation="left">Chi tiết Size & Số lượng</Divider>
+                            <Form.List name="sizes">
+                                {(fields, { add, remove }) => (
+                                    <div style={{marginBottom: 20}}>
+                                        <Row gutter={[12, 12]}>
+                                            {fields.map(({ key, name, ...restField }) => (
+                                                <Col span={12} key={key}>
+                                                    <Card size="small" style={{background: '#f9f9f9', border: '1px solid #d9d9d9'}} extra={<DeleteOutlined onClick={() => remove(name)} style={{color: 'red', cursor: 'pointer'}} title="Xóa size này" />}>
+                                                        <Space direction="vertical" style={{width: '100%'}} size="small">
+                                                            <Form.Item name={[name, 'id']} hidden><Input /></Form.Item>
+                                                            <div style={{display: 'flex', gap: 10}}>
+                                                                <Form.Item {...restField} name={[name, 'size']} label="Size" style={{marginBottom: 0, flex: 1}} rules={[{required: true, message: 'Thiếu size'}]}>
+                                                                    <AutoComplete options={sizeStandardOptions} placeholder="Chọn size có sẵn hoặc gõ tay (hoạ tiết, mã riêng...)" style={{ width: '100%' }} filterOption={(inputValue, option) => (option?.value ?? '').toLowerCase().includes(String(inputValue).toLowerCase())} allowClear />
+                                                                </Form.Item>
+                                                                <Form.Item {...restField} name={[name, 'quantity']} label="SL" style={{marginBottom: 0, width: 100}} rules={[{required: true}]}>
+                                                                    <InputNumber style={{width: '100%'}} min="0" step="0.0001" stringMode formatter={value => { if (!value) return ''; const strValue = `${value}`; const parts = strValue.split('.'); parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return parts.join('.'); }} parser={value => value.replace(/\$\s?|(,*)/g, '')} />
+                                                                </Form.Item>
+                                                            </div>
+                                                            <Form.Item {...restField} name={[name, 'note']} label="Ghi chú" style={{marginBottom: 0}}>
+                                                                <Input placeholder="Note cho size này" />
+                                                            </Form.Item>
+                                                        </Space>
+                                                    </Card>
+                                                </Col>
+                                            ))}
+                                            <Col span={12}>
+                                                <Button type="dashed" onClick={() => add()} style={{width: '100%', height: '100%', minHeight: 130, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}} icon={<PlusOutlined style={{fontSize: 24}} />}>
+                                                    Thêm Size Mới
+                                                </Button>
+                                            </Col>
+                                        </Row>
+                                    </div>
+                                )}
+                            </Form.List>
 
-                    {/* --- 4. BẢNG SỬA NVL (ĐÃ TỐI ƯU SHOULD UPDATE) --- */}
-                    <Divider orientation="left">Điều chỉnh Nguyên Phụ Liệu (Tự động trừ/cộng kho)</Divider>
-                    
-                    <Form.List name="materials">
+                            {/* --- 4. BẢNG SỬA NVL (ĐƠN CŨ) --- */}
+                            <Divider orientation="left">Điều chỉnh Nguyên Phụ Liệu (Tự động trừ/cộng kho)</Divider>
+                            <Form.List name="materials">
                         {(fields, { add, remove }) => (
                             <div style={{background: '#fafafa', padding: 10, borderRadius: 8, marginBottom: 20, border: '1px solid #f0f0f0', maxHeight: 300, overflowY: 'auto'}}>
                                 <table style={{width: '100%'}}>
@@ -1254,11 +1457,20 @@ const ProductionPage = () => {
                                 </table>
                             </div>
                         )}
-                    </Form.List>
+                            </Form.List>
+                        </>
+                    )}
 
                     {/* --- 5. CHI PHÍ --- */}
                     <Divider orientation="left">Cập nhật Chi phí</Divider>
-                    <Row gutter={16}><Col span={8}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col><Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col></Row>
+                    <Row gutter={16}>
+                        <Col span={8}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
+                        <Col span={8}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
+                        <Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
+                        {!isEditNewOrder && <Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col>}
+                        <Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
+                        {!isEditNewOrder && <Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col>}
+                    </Row>
                     <Row>
                         <Col span={24}>
                             <Form.Item label="Ghi chú chung (Phụ phí/Đơn hàng)" name="note">
@@ -1270,7 +1482,70 @@ const ProductionPage = () => {
                 </Form>
             </Modal>
 
-            <Modal title={`📦 Nhập Kho Thành Phẩm (Trả hàng) - ${currentOrder?.code}`} open={isReceiveModalOpen} onCancel={() => setIsReceiveModalOpen(false)} onOk={handleReceiveGoods}><Table dataSource={orderSizes} pagination={false} rowKey="id" size="small" bordered columns={[{ title: 'Size', dataIndex: 'size', align: 'center', width: 80 }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{color:'#888', fontSize: 12}}>{t}</span> }, { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 }, { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> }, { title: 'Nhập Đợt Này', render: (_, r, idx) => <Input type="number" min={0} value={r.receiving} onChange={(val) => { const n = [...orderSizes]; n[idx].receiving = Number(val.target.value); setOrderSizes(n); }} /> }]} /></Modal>
+            <Modal
+                title={`📦 Nhập Kho Thành Phẩm (Trả hàng) - ${currentOrder?.code}`}
+                open={isReceiveModalOpen}
+                onCancel={() => setIsReceiveModalOpen(false)}
+                onOk={handleReceiveGoods}
+                width={920}
+            >
+                <Table
+                    dataSource={orderSizes}
+                    pagination={false}
+                    rowKey="id"
+                    size="small"
+                    bordered
+                    scroll={{ x: 860 }}
+                    columns={[
+                        { title: receiveLineLabel, dataIndex: 'size', align: 'center', width: 120 },
+                        {
+                            title: 'Ghi chú',
+                            dataIndex: 'note',
+                            width: 200,
+                            ellipsis: true,
+                            render: (t) => <span style={{ color: '#888', fontSize: 12 }}>{t}</span>,
+                        },
+                        { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 },
+                        { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> },
+                        {
+                            title: 'Nhập Đợt Này',
+                            width: 180,
+                            render: (_, r, idx) => (
+                                <Input
+                                    type="number"
+                                    min={0}
+                                    size="large"
+                                    style={{ width: 140 }}
+                                    value={r.receiving}
+                                    onChange={(val) => {
+                                        const n = [...orderSizes];
+                                        n[idx].receiving = Number(val.target.value);
+                                        setOrderSizes(n);
+                                    }}
+                                />
+                            )
+                        },
+                        {
+                            title: 'Mã',
+                            dataIndex: 'inventory_code',
+                            width: 220,
+                            align: 'center',
+                            render: (_, r, idx) => (
+                                <Input
+                                    placeholder="Nhập mã kiểm tồn"
+                                    size="large"
+                                    value={r.inventory_code}
+                                    onChange={(e) => {
+                                        const n = [...orderSizes];
+                                        n[idx].inventory_code = e.target.value;
+                                        setOrderSizes(n);
+                                    }}
+                                />
+                            )
+                        },
+                    ]}
+                />
+            </Modal>
             <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} /></Modal>
 {/* --- MODAL XEM TRƯỚC IN ẤN (3 BẢNG RIÊNG BIỆT) --- */}
             <Modal
@@ -1278,7 +1553,9 @@ const ProductionPage = () => {
                 onCancel={() => setIsPrintModalOpen(false)}
                 footer={[
                     <Button key="close" onClick={() => setIsPrintModalOpen(false)}>Đóng</Button>,
-                    <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printContent}>In Ngay</Button>
+                    <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printContent} loading={isExportingPdf}>
+                        In Ngay
+                    </Button>
                 ]}
                 width={950}
                 style={{ top: 20 }}
@@ -1315,24 +1592,48 @@ const ProductionPage = () => {
                             </div>
                         )}
 
-                        {/* BẢNG 1: SIZE & SỐ LƯỢNG */}
-                        <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5, marginTop: 0 }}>1. CHI TIẾT SIZE & SỐ LƯỢNG</h4>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
-                            <thead style={{ background: '#f5f5f5' }}>
-                                <tr>
-                                    <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Size</th>
-                                    <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Số lượng đặt</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {printData.sizes.map((s, idx) => (
-                                    <tr key={idx}>
-                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%' }}><b>{s.size}</b></td>
-                                        <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%', fontWeight: 'bold' }}>{s.qty}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                        {/* BẢNG 1: SIZE & SỐ LƯỢNG (GIỮ CŨ) / TỔNG SẢN LƯỢNG (ĐƠN MỚI) */}
+                        {(printData.is_compact_order && !printData.use_sku_sp_mode) ? (
+                            <>
+                                <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5, marginTop: 0 }}>1. TỔNG SỐ LƯỢNG SẢN XUẤT</h4>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
+                                    <thead style={{ background: '#f5f5f5' }}>
+                                        <tr>
+                                            <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Chỉ tiêu</th>
+                                            <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Số lượng</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}><b>Tổng sản lượng</b></td>
+                                            <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>{printData.total_qty}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </>
+                        ) : (
+                            <>
+                                <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5, marginTop: 0 }}>
+                                    1. CHI TIẾT {printData.use_sku_sp_mode ? 'SKU SP' : 'SIZE'} & SỐ LƯỢNG
+                                </h4>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
+                                    <thead style={{ background: '#f5f5f5' }}>
+                                        <tr>
+                                            <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>{printData.use_sku_sp_mode ? 'SKU SP' : 'Size'}</th>
+                                            <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Số lượng đặt</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {printData.sizes.map((s, idx) => (
+                                            <tr key={idx}>
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%' }}><b>{s.size}</b></td>
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%', fontWeight: 'bold' }}>{s.qty}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
 
                         {/* BẢNG 2: ĐỊNH MỨC NVL (SẢN XUẤT - CHỈ HIỆN SỐ LƯỢNG) */}
                         <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5 }}>2. BẢNG CẤP NGUYÊN VẬT LIỆU (SẢN XUẤT)</h4>
@@ -1358,9 +1659,9 @@ const ProductionPage = () => {
                         </table>
 
                         {/* BẢNG 3: TÀI CHÍNH (KẾ TOÁN - PHỤ THUỘC QUYỀN XEM GIÁ) */}
-                        <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5 }}>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h4>
-                        {canViewMaterialCostForBrand(user, printData?.owner_brand_id) ? (
+                        {(printData?.can_view_cost ?? canViewMaterialCostForBrand(user, printData?.owner_brand_id)) ? (
                             <>
+                                <h4 style={{ borderBottom: '1px solid #ccc', paddingBottom: 5 }}>3. BẢNG TÍNH CHI PHÍ & GIÁ VỐN (KẾ TOÁN)</h4>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, border: '1px solid #333' }}>
                                     <thead style={{ background: '#f5f5f5' }}>
                                         <tr>
@@ -1395,9 +1696,13 @@ const ProductionPage = () => {
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Gia Công</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.labor_fee)}</td></tr>
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí In/Thêu</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.print_fee)}</td></tr>
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Vận Chuyển</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.shipping_fee)}</td></tr>
-                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
+                                        {!(printData.is_compact_order || printData.is_new_sku_order) && (
+                                            <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
+                                        )}
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Đóng Gói</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.packaging_fee)}</td></tr>
-                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
+                                        {!(printData.is_compact_order || printData.is_new_sku_order) && (
+                                            <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
+                                        )}
 
                                         {/* TỔNG KẾT */}
                                         <tr style={{ background: '#e6f7ff', fontSize: 16 }}>
@@ -1407,9 +1712,11 @@ const ProductionPage = () => {
                                                 <b>
                                                     {new Intl.NumberFormat('vi-VN').format(
                                                         printData.total_material_cost + 
-                                                        (printData.labor_fee||0) + (printData.print_fee||0) + 
-                                                        (printData.shipping_fee||0) + (printData.marketing_fee||0) + 
-                                                        (printData.packaging_fee||0) + (printData.other_fee||0)
+                                                        (printData.labor_fee||0) +
+                                                        (printData.print_fee||0) +
+                                                        (printData.shipping_fee||0) +
+                                                        (printData.packaging_fee||0) +
+                                                        ((printData.is_compact_order || printData.is_new_sku_order) ? 0 : ((printData.marketing_fee||0) + (printData.other_fee||0)))
                                                     )}
                                                 </b>
                                             </td>
@@ -1418,21 +1725,36 @@ const ProductionPage = () => {
                                 </table>
                                 
                                 {/* GIÁ VỐN ĐƠN VỊ */}
-                                <div style={{marginTop: 15, textAlign: 'right'}}>
-                                    <Tag color="blue" style={{fontSize: 16, padding: '8px 15px'}}>
+                                <div style={{ marginTop: 15, textAlign: 'right' }}>
+                                    <div
+                                        style={{
+                                            display: 'inline-block',
+                                            border: '1px solid #91caff',
+                                            background: '#e6f4ff',
+                                            color: '#0958d9',
+                                            borderRadius: 6,
+                                            fontSize: 16,
+                                            padding: '8px 15px',
+                                            maxWidth: '100%',
+                                            whiteSpace: 'normal',
+                                        }}
+                                    >
                                         GIÁ VỐN / 1 SP: <b>{new Intl.NumberFormat('vi-VN').format(
-                                            printData.total_qty > 0 
-                                            ? (printData.total_material_cost + (printData.labor_fee||0) + (printData.print_fee||0) + (printData.shipping_fee||0) + (printData.other_fee||0) + (printData.marketing_fee||0) + (printData.packaging_fee||0)) / printData.total_qty 
-                                            : 0
+                                            printData.total_qty > 0
+                                                ? (
+                                                    printData.total_material_cost +
+                                                    (printData.labor_fee || 0) +
+                                                    (printData.print_fee || 0) +
+                                                    (printData.shipping_fee || 0) +
+                                                    (printData.packaging_fee || 0) +
+                                                    ((printData.is_compact_order || printData.is_new_sku_order) ? 0 : ((printData.marketing_fee || 0) + (printData.other_fee || 0)))
+                                                ) / printData.total_qty
+                                                : 0
                                         )} ₫</b>
-                                    </Tag>
+                                    </div>
                                 </div>
                             </>
-                        ) : (
-                            <div style={{ border: '1px dashed #999', padding: 12, textAlign: 'center', color: '#666', marginBottom: 20 }}>
-                                Bạn không có quyền xem bảng chi phí và giá vốn.
-                            </div>
-                        )}
+                        ) : null}
 
                         {/* SIGNATURE */}
                         <div style={{ marginTop: 50, display: 'flex', justifyContent: 'space-between' }}>

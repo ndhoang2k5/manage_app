@@ -13,6 +13,7 @@ const warehouseApi = {
     deleteWarehouse: (id) => axiosClient.delete(`/warehouses/${id}`),
 
     transferStock: (data) => axiosClient.post('/warehouses/transfer', data),
+    getTransferHistory: () => axiosClient.get('/warehouses/transfers/history'),
 };
 
 export default warehouseApi;
