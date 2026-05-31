@@ -132,8 +132,8 @@ const App = () => {
     ...(canViewModule(user, 'sales-management')
       ? [{ key: '/sales-management', icon: <LineChartOutlined />, label: <Link to="/sales-management">Quản Lý Số Bán</Link> }]
       : []),
-    ...(canViewModule(user, 'sales-management')
-      ? [{ key: '/product-planning', icon: <LineChartOutlined />, label: <Link to="/product-planning">Quản lý tạo SP</Link> }]
+    ...(canViewModule(user, 'fabric-planning')
+      ? [{ key: '/product-planning', icon: <LineChartOutlined />, label: <Link to="/product-planning">Kế hoạch đặt vải</Link> }]
       : []),
     ...(user.role === 'admin'
       ? [{ key: '/accounts', icon: <UserOutlined />, label: <Link to="/accounts">Quản Lý Tài Khoản</Link> }]
@@ -189,7 +189,7 @@ const App = () => {
                 <Route path="/order-management" element={canViewModule(user, 'order-management') ? <OrderManagementPage /> : <Navigate to="/" replace />} />
                 <Route path="/drafts" element={canViewModule(user, 'drafts') ? <DraftPage /> : <Navigate to="/" replace />} />
                 <Route path="/sales-management" element={canViewModule(user, 'sales-management') ? <SalesManagementPage /> : <Navigate to="/" replace />} />
-                <Route path="/product-planning" element={canViewModule(user, 'sales-management') ? <ProductPlanningPage /> : <Navigate to="/" replace />} />
+                <Route path="/product-planning" element={canViewModule(user, 'fabric-planning') ? <ProductPlanningPage /> : <Navigate to="/" replace />} />
                 <Route path="/accounts" element={user.role === 'admin' ? <AccountManagementPage /> : <Navigate to="/" replace />} />
               </Routes>
             </div>

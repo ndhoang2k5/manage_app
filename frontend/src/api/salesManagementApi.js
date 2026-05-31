@@ -4,6 +4,7 @@ const salesManagementApi = {
     fetchSales: (data) => axiosClient.post('/sales-management/fetch', data),
     getReport: (params) => axiosClient.get('/sales-management/report', { params }),
     searchProductCodes: (params) => axiosClient.get('/sales-management/product-codes/search', { params }),
+    searchProductCodesForPlanning: (params) => axiosClient.get('/sales-management/product-planning/product-codes/search', { params }),
     getProductPlanning4w: (data) => axiosClient.post('/sales-management/product-planning/4w', data),
     getSyncStatus: () => axiosClient.get('/sales-management/sync-status'),
     syncNow: () => axiosClient.post('/sales-management/sync-now'),

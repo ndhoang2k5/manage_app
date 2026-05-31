@@ -63,6 +63,7 @@ const ProductionPage = () => {
     const [currentOrder, setCurrentOrder] = useState(null);
     const [isEditNewOrder, setIsEditNewOrder] = useState(false);
     const [editExistingMaterials, setEditExistingMaterials] = useState([]);
+    const [editSizeRows, setEditSizeRows] = useState([]);
     const [orderSizes, setOrderSizes] = useState([]); 
     const [printData, setPrintData] = useState(null);
     const [historyData, setHistoryData] = useState([]);
@@ -155,23 +156,87 @@ const ProductionPage = () => {
     }, []);
 
     const normalizeSkuSp = (value) => String(value || '').trim();
+    const SKU_SP_NAME_SEPARATOR = '||TEN:';
+    const NPL_META_PREFIX = '__NPLMETA__:';
+
+    const buildSkuSizeLabel = (sku, name) => {
+        const normalizedSku = normalizeSkuSp(sku);
+        const normalizedName = String(name || '').trim();
+        if (!normalizedSku) return '';
+        return normalizedName
+            ? `SKU:${normalizedSku}${SKU_SP_NAME_SEPARATOR}${normalizedName}`
+            : `SKU:${normalizedSku}`;
+    };
+
+    const parseSkuSizeLabel = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return { sku_sp: '', sku_sp_name: '' };
+        const withoutPrefix = raw.replace(/^SKU:/i, '');
+        const sepIdx = withoutPrefix.indexOf(SKU_SP_NAME_SEPARATOR);
+        if (sepIdx >= 0) {
+            return {
+                sku_sp: withoutPrefix.slice(0, sepIdx).trim(),
+                sku_sp_name: withoutPrefix.slice(sepIdx + SKU_SP_NAME_SEPARATOR.length).trim(),
+            };
+        }
+        return { sku_sp: withoutPrefix.trim(), sku_sp_name: '' };
+    };
+
+    const parseNplNoteMeta = (rawNote) => {
+        const raw = String(rawNote || '');
+        const markerIdx = raw.indexOf(NPL_META_PREFIX);
+        if (markerIdx < 0) {
+            return { note: raw.trim(), consumptionRate: null, productQuantity: null, rowIndex: null };
+        }
+        const cleanNote = raw.slice(0, markerIdx).trim();
+        const encoded = raw.slice(markerIdx + NPL_META_PREFIX.length).trim();
+        try {
+            const parsed = JSON.parse(encoded || '{}');
+            return {
+                note: cleanNote,
+                consumptionRate: Number.isFinite(Number(parsed?.consumptionRate)) ? Number(parsed.consumptionRate) : null,
+                productQuantity: Number.isFinite(Number(parsed?.productQuantity)) ? Number(parsed.productQuantity) : null,
+                rowIndex: Number.isInteger(Number(parsed?.rowIndex)) ? Number(parsed.rowIndex) : null,
+            };
+        } catch (e) {
+            return { note: cleanNote, consumptionRate: null, productQuantity: null, rowIndex: null };
+        }
+    };
+
+    const buildNplNoteWithMeta = ({ note, consumptionRate, productQuantity, includeMeta, rowIndex }) => {
+        const cleanNote = String(note || '').trim();
+        const metaObj = { rowIndex: Number(rowIndex ?? -1) };
+        if (includeMeta) {
+            metaObj.consumptionRate = Number(consumptionRate || 0);
+            metaObj.productQuantity = Number(productQuantity || 0);
+        }
+        const meta = JSON.stringify(metaObj);
+        return `${cleanNote}${cleanNote ? ' ' : ''}${NPL_META_PREFIX}${meta}`;
+    };
 
     const buildSkuSpPlan = (materials = []) => {
-        if (!Array.isArray(materials)) return { lines: [], totalQty: 0, inconsistentSkus: [] };
+        if (!Array.isArray(materials)) {
+            return { lines: [], totalQty: 0, hasSkuRows: false, fallbackQty: 0, finalQty: 0, inconsistentSkus: [] };
+        }
         const lines = materials
             .map((item, idx) => ({
                 line_no: idx,
                 sku_sp: normalizeSkuSp(item?.sku_sp),
+                sku_sp_name: String(item?.sku_sp_name || '').trim(),
+                sku_sp_note: String(item?.sku_sp_note || '').trim(),
                 quantity: Number(item?.product_quantity || 0),
             }))
-            .filter((line) => line.sku_sp && line.quantity > 0);
-        const totalQty = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-        return { lines, totalQty, inconsistentSkus: [] };
+            .filter((line) => line.sku_sp);
+        const totalQty = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) > 0 ? Number(line.quantity || 0) : 0), 0);
+        const fallbackQty = (materials || []).reduce((sum, row) => sum + Number(row?.product_quantity || 0), 0);
+        const hasSkuRows = lines.length > 0;
+        const finalQty = hasSkuRows ? totalQty : fallbackQty;
+        return { lines, totalQty, hasSkuRows, fallbackQty, finalQty, inconsistentSkus: [] };
     };
 
     const getOrderQuantityFromMaterials = (materials = []) => {
         const plan = buildSkuSpPlan(materials);
-        return Number(plan.totalQty || 0);
+        return Number(plan.finalQty || 0);
     };
 
     const calculateRequiredQuantity = (consumptionRate, productQuantity) => {
@@ -231,7 +296,9 @@ const ProductionPage = () => {
             Number(values.shipping_fee || 0) +
             Number(values.labor_fee || 0) +
             Number(values.packaging_fee || 0) +
-            Number(values.print_fee || 0);
+            Number(values.print_fee || 0) +
+            Number(values.marketing_fee || 0) +
+            Number(values.other_fee || 0);
 
         if (totalQty > 0) {
             setEstimatedCost((totalMatCost + totalFees) / totalQty);
@@ -267,39 +334,40 @@ const ProductionPage = () => {
         try {
             const materialRows = values.materials || [];
             const skuPlan = buildSkuSpPlan(materialRows);
-            if (!skuPlan.lines.length) {
+            if (!skuPlan.hasSkuRows) {
                 message.warning("Nhập SKU SP và số lượng sản phẩm > 0 trong bảng định mức.");
                 setLoading(false);
                 return;
             }
-            const totalPlannedQty = Number(skuPlan.totalQty || 0);
+            const totalPlannedQty = Number(skuPlan.finalQty || 0);
 
-            const materialAggMap = new Map();
-            (values.materials || []).forEach((m) => {
-                const materialId = Number(m.material_variant_id);
-                const lineQty = Number(m?.product_quantity || 0);
-                const requiredQty = calculateRequiredQuantity(m.consumption_rate, lineQty);
-                if (!materialId || requiredQty <= 0) return;
+            const normalizedMaterials = (values.materials || [])
+                .map((row, idx) => {
+                    const materialId = Number(row?.material_variant_id || 0);
+                    const lineQty = Number(row?.product_quantity || 0);
+                    const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
+                    const hasSku = normalizeSkuSp(row?.sku_sp).length > 0;
+                    return {
+                        material_variant_id: materialId,
+                        quantity_needed: Number(requiredQty || 0),
+                        note: buildNplNoteWithMeta({
+                            note: row?.npl_note || '',
+                            consumptionRate: row?.consumption_rate,
+                            productQuantity: row?.product_quantity,
+                            includeMeta: !hasSku,
+                            rowIndex: idx,
+                        }),
+                    };
+                })
+                .filter((m) => m.material_variant_id);
 
-                const existing = materialAggMap.get(materialId) || {
-                    material_variant_id: materialId,
-                    quantity_needed: 0,
-                    note: "",
-                };
-                existing.quantity_needed = Number((existing.quantity_needed + requiredQty).toFixed(4));
-                if (!existing.note && m.note) existing.note = m.note;
-                materialAggMap.set(materialId, existing);
-            });
-            const normalizedMaterials = Array.from(materialAggMap.values());
-
-            if (normalizedMaterials.some((m) => !m.material_variant_id || m.quantity_needed <= 0)) {
-                message.warning("Kiểm tra lại bảng định mức: cần chọn NVL và định mức tiêu hao > 0.");
+            if (!normalizedMaterials.length) {
+                message.warning("Cần có ít nhất 1 dòng nguyên phụ liệu hợp lệ.");
                 setLoading(false);
                 return;
             }
 
             const imageUrls = fileList.filter(f => f.status === 'done' && f.originFileObj.url).map(f => f.originFileObj.url);
-
             const payload = {
                 new_product_name: values.new_product_name,
                 new_product_sku: values.new_product_sku,
@@ -310,9 +378,9 @@ const ProductionPage = () => {
                 due_date: values.due_date.format('YYYY-MM-DD'),
                 materials: normalizedMaterials,
                 size_breakdown: skuPlan.lines.map((line) => ({
-                    size: `SKU:${line.sku_sp}`,
+                    size: buildSkuSizeLabel(line.sku_sp, line.sku_sp_name),
                     quantity: Number(line.quantity || 0),
-                    note: '',
+                    note: line.sku_sp_note || '',
                 })),
                 image_urls: imageUrls, 
                 auto_start: values.auto_start,
@@ -320,8 +388,8 @@ const ProductionPage = () => {
                 labor_fee: Number(values.labor_fee || 0),
                 packaging_fee: Number(values.packaging_fee || 0),
                 print_fee: Number(values.print_fee || 0),
-                other_fee: 0,
-                marketing_fee: 0,
+                other_fee: Number(values.other_fee || 0),
+                marketing_fee: Number(values.marketing_fee || 0),
                 note: values.note || ""
             };
 
@@ -362,19 +430,25 @@ const ProductionPage = () => {
             const data = printRes.data;
             const materials = matRes.data || [];
             const sizes = sizeRes.data || []; // Dữ liệu size trả về từ API
-            const isNewOrderMode = !!data?.use_sku_sp_mode;
+            const isNewOrderMode = !!(data?.use_sku_sp_mode || data?.is_new_sku_order);
             setIsEditNewOrder(isNewOrderMode);
             setEditExistingMaterials((materials || []).map((m) => ({
                 id: m.id,
                 material_variant_id: m.material_variant_id,
+                rowIndex: parseNplNoteMeta(m.note || '').rowIndex,
             })));
 
-            const normalizedSizes = (sizes || []).map(s => ({
-                id: s.id,
-                sku_sp: String(s.size || '').replace(/^SKU:/i, ''),
-                quantity: Number(s.planned || 0),
-                note: s.note || "",
-            }));
+            const normalizedSizes = (sizes || []).map(s => {
+                const parsed = parseSkuSizeLabel(s.size);
+                return {
+                    id: s.id,
+                    sku_sp: parsed.sku_sp,
+                    sku_sp_name: String(s.sku_sp_name || parsed.sku_sp_name || '').trim(),
+                    quantity: Number(s.planned || 0),
+                    note: s.note || "",
+                };
+            });
+            setEditSizeRows(normalizedSizes);
             // 3. Xử lý ảnh cũ
             const existingImages = (data.images || []).map((url, index) => ({
                 uid: index,
@@ -407,19 +481,66 @@ const ProductionPage = () => {
                     note: s.note
                 })),
                 edit_material_rows: isNewOrderMode
-                    ? (materials || []).map((m, idx) => {
-                        const sizeByIndex = normalizedSizes[idx] || normalizedSizes[0] || { sku_sp: '', quantity: 0 };
-                        const totalNeeded = Number(m.quantity || 0);
-                        const baseQty = Number(sizeByIndex.quantity || 0);
-                        const consumption = baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0;
-                        return {
-                            material_variant_id: m.material_variant_id,
-                            sku_sp: sizeByIndex.sku_sp || '',
-                            consumption_rate: consumption,
-                            product_quantity: baseQty,
-                            note: m.note || "",
-                        };
-                    })
+                    ? (() => {
+                        const rowCount = Math.max(normalizedSizes.length, 1);
+                        const alignedMaterials = Array.from({ length: rowCount }, () => null);
+                        const fallbackMaterials = [];
+                        (materials || []).forEach((m) => {
+                            const parsed = parseNplNoteMeta(m.note || '');
+                            const idx = Number(parsed.rowIndex);
+                            const currentPacked = { row: m, parsed };
+                            const qty = Number(m?.quantity || 0);
+                            const cleanNote = String(parsed?.note || '').trim();
+                            const hasFallbackContent = qty > 0 || !!cleanNote;
+
+                            if (Number.isInteger(idx) && idx >= 0 && idx < rowCount) {
+                                const prev = alignedMaterials[idx];
+                                if (!prev) {
+                                    alignedMaterials[idx] = currentPacked;
+                                    return;
+                                }
+                                const prevQty = Number(prev?.row?.quantity || 0);
+                                const prevNote = String(prev?.parsed?.note || '').trim();
+                                // Nếu trùng rowIndex, ưu tiên bản ghi có dữ liệu thực (qty/note) để tránh bám nhầm dòng rỗng cũ.
+                                if ((prevQty <= 0 && qty > 0) || (!prevNote && cleanNote)) {
+                                    alignedMaterials[idx] = currentPacked;
+                                }
+                            } else {
+                                // Chỉ dùng fallback cho dòng thực sự có dữ liệu; bỏ qua dòng rỗng cũ để tránh "nhảy" khi reopen.
+                                if (hasFallbackContent) {
+                                    fallbackMaterials.push(currentPacked);
+                                }
+                            }
+                        });
+                        for (let i = 0; i < rowCount; i += 1) {
+                            if (alignedMaterials[i]) continue;
+                            alignedMaterials[i] = fallbackMaterials.shift() || null;
+                        }
+                        return Array.from({ length: rowCount }, (_, idx) => {
+                            const packed = alignedMaterials[idx] || {};
+                            const m = packed.row || {};
+                            const parsedNpl = packed.parsed || parseNplNoteMeta(m.note || '');
+                            const sizeByIndex = normalizedSizes[idx] || { sku_sp: '', sku_sp_name: '', quantity: 0, note: '' };
+                            const totalNeeded = Number(m.quantity || 0);
+                            const fallbackQty = Number(sizeByIndex.quantity || 0);
+                            const baseQty = sizeByIndex.sku_sp
+                                ? fallbackQty
+                                : Number(parsedNpl.productQuantity ?? fallbackQty);
+                            const consumption = sizeByIndex.sku_sp
+                                ? (baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0)
+                                : Number(parsedNpl.consumptionRate ?? (baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0));
+                            return {
+                                id: m.id || null,
+                                material_variant_id: m.material_variant_id || null,
+                                sku_sp: sizeByIndex.sku_sp || '',
+                                sku_sp_name: sizeByIndex.sku_sp_name || '',
+                                sku_sp_note: sizeByIndex.note || '',
+                                npl_note: parsedNpl.note || '',
+                                consumption_rate: Number(consumption || 0),
+                                product_quantity: Number(baseQty || 0),
+                            };
+                        });
+                    })()
                     : [],
                 
                 // Đổ dữ liệu NVL
@@ -465,42 +586,111 @@ const ProductionPage = () => {
             if (isEditNewOrder) {
                 const planRows = values.edit_material_rows || [];
                 const skuPlan = buildSkuSpPlan(planRows);
-                if (!skuPlan.lines.length) {
+                if (!skuPlan.hasSkuRows) {
                     message.warning("Cần nhập SKU SP và số lượng sản phẩm > 0.");
                     return;
                 }
-                cleanSizes = skuPlan.lines.map((line, idx) => ({
-                    id: values?.sizes?.[idx]?.id ? parseInt(values.sizes[idx].id) : null,
-                    size: `SKU:${line.sku_sp}`,
-                    quantity: parseInt(Number(line.quantity || 0)),
-                    note: "",
-                }));
-
-                const materialAggMap = new Map();
-                planRows.forEach((row) => {
-                    const materialId = Number(row?.material_variant_id || 0);
-                    const lineQty = Number(row?.product_quantity || 0);
-                    const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
-                    if (!materialId || requiredQty <= 0) return;
-
-                    const existing = materialAggMap.get(materialId) || {
-                        material_variant_id: materialId,
-                        quantity: 0,
-                        note: row?.note || "",
+                cleanSizes = skuPlan.lines.map((line) => {
+                    const srcIdx = Number(line.line_no ?? 0);
+                    const formSizeRow = values?.sizes?.[srcIdx];
+                    const cachedSizeRow = editSizeRows?.[srcIdx];
+                    return {
+                        id: formSizeRow?.id
+                            ? parseInt(formSizeRow.id)
+                            : (cachedSizeRow?.id ? parseInt(cachedSizeRow.id) : null),
+                        size: buildSkuSizeLabel(line.sku_sp, line.sku_sp_name),
+                        quantity: parseInt(Number(line.quantity || 0)),
+                        note: line.sku_sp_note || "",
                     };
-                    existing.quantity = Number((existing.quantity + requiredQty).toFixed(4));
-                    if (!existing.note && row?.note) existing.note = row.note;
-                    materialAggMap.set(materialId, existing);
                 });
 
-                cleanMaterials = Array.from(materialAggMap.values()).map((m) => {
-                    const existing = (editExistingMaterials || []).find((x) => Number(x.material_variant_id) === Number(m.material_variant_id));
-                    return {
-                        id: existing?.id ? parseInt(existing.id) : null,
-                        material_variant_id: m.material_variant_id,
-                        quantity: parseNum(m.quantity),
-                        note: m.note || "",
-                    };
+                const usedResolvedIds = new Set();
+                const legacyPoolsByMaterial = new Map();
+                (editExistingMaterials || []).forEach((x) => {
+                    const mid = Number(x?.material_variant_id || 0);
+                    const rid = Number(x?.id || 0);
+                    const rIdx = Number(x?.rowIndex);
+                    if (!mid || !rid) return;
+                    if (Number.isInteger(rIdx) && rIdx >= 0) return;
+                    if (!legacyPoolsByMaterial.has(mid)) legacyPoolsByMaterial.set(mid, []);
+                    legacyPoolsByMaterial.get(mid).push(rid);
+                });
+
+                cleanMaterials = planRows
+                    .map((row, idx) => {
+                        const materialId = Number(row?.material_variant_id || 0);
+                        if (!materialId) return null;
+                        const lineQty = Number(row?.product_quantity || 0);
+                        const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
+                        const hasSku = normalizeSkuSp(row?.sku_sp).length > 0;
+                        const rowId = row?.id ? parseInt(row.id) : null;
+                        const original = rowId
+                            ? (editExistingMaterials || []).find((x) => Number(x.id) === Number(rowId))
+                            : null;
+                        const matchedByRowIndex = (editExistingMaterials || []).find(
+                            (x) => Number(x.rowIndex) === idx && Number(x.material_variant_id) === materialId
+                        );
+                        // Nếu user đổi SKU vải trên dòng cũ thì không giữ id cũ,
+                        // để backend tạo dòng mới đúng vật liệu và không check nhầm tồn theo vật liệu cũ.
+                        const materialChanged = !!(original && Number(original.material_variant_id) !== materialId);
+                        const hasAnyContent = hasSku
+                            || Number(row?.consumption_rate || 0) > 0
+                            || Number(row?.product_quantity || 0) > 0
+                            || String(row?.npl_note || '').trim()
+                            || String(row?.sku_sp_name || '').trim()
+                            || String(row?.sku_sp_note || '').trim();
+                        if (!hasAnyContent && !rowId && !matchedByRowIndex?.id) return null;
+                        let resolvedId = null;
+                        if (!materialChanged) {
+                            resolvedId = rowId || (matchedByRowIndex?.id ? parseInt(matchedByRowIndex.id) : null);
+                            if (!resolvedId) {
+                                const pool = legacyPoolsByMaterial.get(materialId) || [];
+                                while (pool.length > 0 && !resolvedId) {
+                                    const candidate = Number(pool.shift());
+                                    if (candidate > 0 && !usedResolvedIds.has(candidate)) {
+                                        resolvedId = candidate;
+                                    }
+                                }
+                            }
+                        }
+                        if (resolvedId) {
+                            usedResolvedIds.add(Number(resolvedId));
+                        }
+                        return {
+                            id: resolvedId,
+                            material_variant_id: materialId,
+                            quantity: parseNum(requiredQty),
+                            note: buildNplNoteWithMeta({
+                                note: row?.npl_note || '',
+                                consumptionRate: row?.consumption_rate,
+                                productQuantity: row?.product_quantity,
+                                includeMeta: !hasSku,
+                                rowIndex: idx,
+                            }),
+                        };
+                    })
+                    .filter(Boolean);
+
+                // Các dòng cũ không còn xuất hiện trong lần submit này:
+                // gửi quantity=0 để backend hoàn kho/clear dữ liệu đúng theo lần chỉnh sửa.
+                const submittedIds = new Set(
+                    cleanMaterials
+                        .map((m) => Number(m.id))
+                        .filter((id) => Number.isFinite(id) && id > 0)
+                );
+                (editExistingMaterials || []).forEach((oldRow) => {
+                    const oldId = Number(oldRow?.id || 0);
+                    if (!oldId || submittedIds.has(oldId)) return;
+                    cleanMaterials.push({
+                        id: oldId,
+                        material_variant_id: Number(oldRow.material_variant_id || 0),
+                        quantity: 0,
+                        note: buildNplNoteWithMeta({
+                            note: '',
+                            includeMeta: false,
+                            rowIndex: Number(oldRow?.rowIndex ?? -1),
+                        }),
+                    });
                 });
             } else {
                 // 1. Chuẩn bị dữ liệu NVL (đơn cũ)
@@ -540,9 +730,9 @@ const ProductionPage = () => {
                 new_sku: values.new_sku,
                 new_product_name: values.new_product_name,
                 shipping_fee: parseNum(values.shipping_fee),
-                other_fee: isEditNewOrder ? 0 : parseNum(values.other_fee),
+                other_fee: parseNum(values.other_fee),
                 labor_fee: parseNum(values.labor_fee),
-                marketing_fee: isEditNewOrder ? 0 : parseNum(values.marketing_fee),
+                marketing_fee: parseNum(values.marketing_fee),
                 packaging_fee: parseNum(values.packaging_fee),
                 print_fee: parseNum(values.print_fee),
                 note: values.note || "",
@@ -576,7 +766,7 @@ const ProductionPage = () => {
             const data = res.data.map(item => ({...item, receiving: 0, inventory_code: ''}));
             setOrderSizes(data);
             setReceiveSku(printRes?.data?.sku || '');
-            setReceiveLineLabel(printRes?.data?.use_sku_sp_mode ? 'SKU SP' : 'Size');
+            setReceiveLineLabel((printRes?.data?.use_sku_sp_mode || printRes?.data?.is_new_sku_order) ? 'SKU SP' : 'Size');
             setIsReceiveModalOpen(true);
         } catch (error) {
             message.error("Lỗi tải chi tiết");
@@ -989,7 +1179,7 @@ const ProductionPage = () => {
                     <Row gutter={[24, 16]}>
                         <Col xs={24} lg={5}>
                             <Card size="small" title="1. Thông tin Chung" bordered={false} style={{background: '#f9f9f9', marginBottom: 16}}>
-                                <Form.Item label="Mã Lệnh" name="code" rules={[{ required: true }]}><Input placeholder="LSX-001" /></Form.Item>
+                                <Form.Item label="Mã Lệnh" name="code" rules={[{ required: true }]}><Input placeholder="LSX-001" maxLength={70} /></Form.Item>
                                 <Form.Item label="Nhãn/Kho tổng quản lý" name="owner_central_id" rules={[{ required: true, message: 'Chọn kho tổng quản lý' }]}>
                                     <Select placeholder="Chọn kho tổng">
                                         {centralOptions.map(w => <Select.Option key={w.id} value={w.id}>{w.name}</Select.Option>)}
@@ -1013,11 +1203,14 @@ const ProductionPage = () => {
                                 <Form.List name="materials">
                                     {(fields, { add, remove }) => (
                                         <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1400 }}>
                                                 <thead>
                                                     <tr>
-                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>SKU nguyên vật liệu</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 430 }}>SKU nguyên vật liệu</th>
                                                         <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>SKU SP</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 150 }}>Tên</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>Ghi chú SKU SP</th>
+                                                        <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 200 }}>Ghi chú NPL</th>
                                                         <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 120 }}>Đơn vị tính</th>
                                                         <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Định mức tiêu hao</th>
                                                         <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Số lượng SP</th>
@@ -1069,10 +1262,36 @@ const ProductionPage = () => {
                                                                 <Form.Item
                                                                     {...restField}
                                                                     name={[name, 'sku_sp']}
-                                                                    rules={[{ required: true, message: 'Nhập SKU SP' }]}
                                                                     style={{ marginBottom: 0 }}
                                                                 >
                                                                     <Input placeholder="VD: HD26ub27-9-12m" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'sku_sp_name']}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <Input placeholder="Tên SKU SP (không bắt buộc)" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'sku_sp_note']}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <Input placeholder="Ghi chú SKU SP" />
+                                                                </Form.Item>
+                                                            </td>
+                                                            <td style={{ padding: '8px 8px' }}>
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'npl_note']}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <Input placeholder="Ghi chú NPL" />
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ padding: '8px 8px' }}>
@@ -1088,7 +1307,6 @@ const ProductionPage = () => {
                                                                 <Form.Item
                                                                     {...restField}
                                                                     name={[name, 'consumption_rate']}
-                                                                    rules={[{ required: true, message: 'Nhập định mức' }]}
                                                                     style={{ marginBottom: 0 }}
                                                                 >
                                                                     <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
@@ -1098,7 +1316,6 @@ const ProductionPage = () => {
                                                                 <Form.Item
                                                                     {...restField}
                                                                     name={[name, 'product_quantity']}
-                                                                    rules={[{ required: true, message: 'Nhập SL SP' }]}
                                                                     style={{ marginBottom: 0 }}
                                                                 >
                                                                     <InputNumber min={0} step={1} style={{ width: '100%' }} placeholder="VD: 500" />
@@ -1130,10 +1347,12 @@ const ProductionPage = () => {
                                 <Divider style={{margin: '12px 0'}} />
                                 
                                 <Row gutter={8}>
-                                    <Col span={6}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
-                                    <Col span={6}><Form.Item label="In ấn" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
-                                    <Col span={6}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
-                                    <Col span={6}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="Gia công" name="labor_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="In ấn" name="print_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="Marketing" name="marketing_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}><Form.Item label="Phụ phí khác" name="other_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
                                 </Row>
                                 
                                 <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}>
@@ -1152,7 +1371,7 @@ const ProductionPage = () => {
             </Modal>
 
             {/* Modal Sửa (Edit) */}
-            <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={isEditNewOrder ? 1500 : 1000} footer={null} style={{top: 20}}>
+            <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={isEditNewOrder ? 1680 : 1000} footer={null} style={{top: 20}}>
                 <Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}>
                     
                     {/* --- 1. THÔNG TIN CHUNG --- */}
@@ -1194,11 +1413,14 @@ const ProductionPage = () => {
                             <Form.List name="edit_material_rows">
                                 {(fields, { add, remove }) => (
                                     <div style={{ maxHeight: 380, overflowY: 'auto', overflowX: 'auto', marginBottom: 20 }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1450 }}>
                                             <thead>
                                                 <tr>
-                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>SKU nguyên vật liệu</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 280 }}>SKU nguyên vật liệu</th>
                                                     <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>SKU SP</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 150 }}>Tên</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 170 }}>Ghi chú SKU SP</th>
+                                                    <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 200 }}>Ghi chú NPL</th>
                                                     <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 120 }}>Đơn vị tính</th>
                                                     <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Định mức tiêu hao</th>
                                                     <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #f0f0f0', width: 160 }}>Số lượng SP</th>
@@ -1210,6 +1432,9 @@ const ProductionPage = () => {
                                                 {fields.map(({ key, name, ...restField }) => (
                                                     <tr key={key}>
                                                         <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'id']} hidden>
+                                                                <Input />
+                                                            </Form.Item>
                                                             <Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true, message: 'Chọn NVL' }]} style={{ marginBottom: 0 }}>
                                                                 <Select placeholder="Chọn NVL..." showSearch filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}>
                                                                     {warehouseMaterials.map(p => (
@@ -1224,8 +1449,23 @@ const ProductionPage = () => {
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
-                                                            <Form.Item {...restField} name={[name, 'sku_sp']} rules={[{ required: true, message: 'Nhập SKU SP' }]} style={{ marginBottom: 0 }}>
+                                                            <Form.Item {...restField} name={[name, 'sku_sp']} style={{ marginBottom: 0 }}>
                                                                 <Input placeholder="VD: HD26ub27-9-12m" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'sku_sp_name']} style={{ marginBottom: 0 }}>
+                                                                <Input placeholder="Tên SKU SP" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'sku_sp_note']} style={{ marginBottom: 0 }}>
+                                                                <Input placeholder="Ghi chú SKU SP" />
+                                                            </Form.Item>
+                                                        </td>
+                                                        <td style={{ padding: '8px 8px' }}>
+                                                            <Form.Item {...restField} name={[name, 'npl_note']} style={{ marginBottom: 0 }}>
+                                                                <Input placeholder="Ghi chú NPL" />
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
@@ -1238,12 +1478,12 @@ const ProductionPage = () => {
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
-                                                            <Form.Item {...restField} name={[name, 'consumption_rate']} rules={[{ required: true, message: 'Nhập định mức' }]} style={{ marginBottom: 0 }}>
+                                                            <Form.Item {...restField} name={[name, 'consumption_rate']} style={{ marginBottom: 0 }}>
                                                                 <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
-                                                            <Form.Item {...restField} name={[name, 'product_quantity']} rules={[{ required: true, message: 'Nhập SL SP' }]} style={{ marginBottom: 0 }}>
+                                                            <Form.Item {...restField} name={[name, 'product_quantity']} style={{ marginBottom: 0 }}>
                                                                 <InputNumber min={0} step={1} style={{ width: '100%' }} placeholder="VD: 500" />
                                                             </Form.Item>
                                                         </td>
@@ -1467,9 +1707,9 @@ const ProductionPage = () => {
                         <Col span={8}><Form.Item label="Gia công" name="labor_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                         <Col span={8}><Form.Item label="In/Thêu" name="print_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                         <Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
-                        {!isEditNewOrder && <Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col>}
+                        <Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                         <Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
-                        {!isEditNewOrder && <Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col>}
+                        <Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                     </Row>
                     <Row>
                         <Col span={24}>
@@ -1620,14 +1860,20 @@ const ProductionPage = () => {
                                     <thead style={{ background: '#f5f5f5' }}>
                                         <tr>
                                             <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>{printData.use_sku_sp_mode ? 'SKU SP' : 'Size'}</th>
+                                            {printData.use_sku_sp_mode && (
+                                                <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Tên</th>
+                                            )}
                                             <th style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>Số lượng đặt</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {printData.sizes.map((s, idx) => (
                                             <tr key={idx}>
-                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%' }}><b>{s.size}</b></td>
-                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', width: '50%', fontWeight: 'bold' }}>{s.qty}</td>
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}><b>{s.size}</b></td>
+                                                {printData.use_sku_sp_mode && (
+                                                    <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center' }}>{s.sku_sp_name || ''}</td>
+                                                )}
+                                                <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>{s.qty}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1696,13 +1942,9 @@ const ProductionPage = () => {
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Gia Công</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.labor_fee)}</td></tr>
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí In/Thêu</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.print_fee)}</td></tr>
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Vận Chuyển</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.shipping_fee)}</td></tr>
-                                        {!(printData.is_compact_order || printData.is_new_sku_order) && (
-                                            <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
-                                        )}
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Marketing</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.marketing_fee)}</td></tr>
                                         <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phí Đóng Gói</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.packaging_fee)}</td></tr>
-                                        {!(printData.is_compact_order || printData.is_new_sku_order) && (
-                                            <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
-                                        )}
+                                        <tr><td style={{border: '1px solid #333', padding: '8px'}}>Phụ phí khác</td><td style={{border: '1px solid #333'}}></td><td style={{border: '1px solid #333', textAlign: 'right', padding: '8px'}}>{new Intl.NumberFormat('vi-VN').format(printData.other_fee)}</td></tr>
 
                                         {/* TỔNG KẾT */}
                                         <tr style={{ background: '#e6f7ff', fontSize: 16 }}>
@@ -1716,7 +1958,8 @@ const ProductionPage = () => {
                                                         (printData.print_fee||0) +
                                                         (printData.shipping_fee||0) +
                                                         (printData.packaging_fee||0) +
-                                                        ((printData.is_compact_order || printData.is_new_sku_order) ? 0 : ((printData.marketing_fee||0) + (printData.other_fee||0)))
+                                                        (printData.marketing_fee||0) +
+                                                        (printData.other_fee||0)
                                                     )}
                                                 </b>
                                             </td>
@@ -1747,7 +1990,8 @@ const ProductionPage = () => {
                                                     (printData.print_fee || 0) +
                                                     (printData.shipping_fee || 0) +
                                                     (printData.packaging_fee || 0) +
-                                                    ((printData.is_compact_order || printData.is_new_sku_order) ? 0 : ((printData.marketing_fee || 0) + (printData.other_fee || 0)))
+                                                    (printData.marketing_fee || 0) +
+                                                    (printData.other_fee || 0)
                                                 ) / printData.total_qty
                                                 : 0
                                         )} ₫</b>

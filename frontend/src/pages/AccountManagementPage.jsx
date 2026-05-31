@@ -28,6 +28,7 @@ const MODULE_OPTIONS = [
   { key: 'reports', label: 'Báo cáo' },
   { key: 'drafts', label: 'Đơn hàng dự kiến' },
   { key: 'sales-management', label: 'Quản lý số bán' },
+  { key: 'fabric-planning', label: 'Kế hoạch đặt vải' },
   { key: 'material-cost', label: 'Xem giá vốn nguyên phụ liệu' },
 ];
 
