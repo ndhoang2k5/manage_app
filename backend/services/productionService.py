@@ -46,6 +46,223 @@ class ProductionService:
             return raw.strip()
         return raw[:marker_idx].strip()
 
+    def _collect_order_snapshot(self, order_id: int) -> Optional[Dict]:
+        order = self.db.execute(
+            text(
+                """
+                SELECT
+                    po.id, po.code, po.status, po.warehouse_id, po.owner_central_id, po.product_variant_id,
+                    po.quantity_planned, po.quantity_finished, po.start_date, po.due_date,
+                    po.shipping_fee, po.other_fee, po.labor_fee, po.marketing_fee, po.packaging_fee, po.print_fee,
+                    po.note, po.created_by, po.progress_data
+                FROM production_orders po
+                WHERE po.id = :id
+                """
+            ),
+            {"id": order_id},
+        ).fetchone()
+        if not order:
+            return None
+
+        progress_data = order[18]
+        try:
+            if isinstance(progress_data, str) and progress_data:
+                progress_data = json.loads(progress_data)
+        except Exception:
+            pass
+
+        sizes = self.db.execute(
+            text(
+                """
+                SELECT id, size_label, quantity_planned, quantity_finished, note
+                FROM production_order_items
+                WHERE production_order_id = :oid
+                ORDER BY id ASC
+                """
+            ),
+            {"oid": order_id},
+        ).fetchall()
+
+        reservations = self.db.execute(
+            text(
+                """
+                SELECT id, material_variant_id, quantity_reserved, note
+                FROM production_material_reservations
+                WHERE production_order_id = :oid
+                ORDER BY id ASC
+                """
+            ),
+            {"oid": order_id},
+        ).fetchall()
+
+        bom_materials = self.db.execute(
+            text(
+                """
+                SELECT bm.id, bm.bom_id, bm.material_variant_id, bm.quantity_needed, bm.note
+                FROM bom_materials bm
+                JOIN bom b ON b.id = bm.bom_id
+                WHERE b.product_variant_id = :pid
+                ORDER BY bm.id ASC
+                """
+            ),
+            {"pid": order[5]},
+        ).fetchall()
+
+        images = self.db.execute(
+            text(
+                """
+                SELECT id, image_url
+                FROM production_order_images
+                WHERE production_order_id = :oid
+                ORDER BY id ASC
+                """
+            ),
+            {"oid": order_id},
+        ).fetchall()
+
+        return {
+            "captured_at": datetime.utcnow().isoformat(),
+            "order": {
+                "id": order[0],
+                "code": order[1],
+                "status": order[2],
+                "warehouse_id": order[3],
+                "owner_central_id": order[4],
+                "product_variant_id": order[5],
+                "quantity_planned": float(order[6] or 0),
+                "quantity_finished": float(order[7] or 0),
+                "start_date": str(order[8]) if order[8] else None,
+                "due_date": str(order[9]) if order[9] else None,
+                "shipping_fee": float(order[10] or 0),
+                "other_fee": float(order[11] or 0),
+                "labor_fee": float(order[12] or 0),
+                "marketing_fee": float(order[13] or 0),
+                "packaging_fee": float(order[14] or 0),
+                "print_fee": float(order[15] or 0),
+                "note": order[16] or "",
+                "created_by": order[17],
+                "progress_data": progress_data,
+            },
+            "sizes": [
+                {
+                    "id": r[0],
+                    "size_label": r[1] or "",
+                    "quantity_planned": float(r[2] or 0),
+                    "quantity_finished": float(r[3] or 0),
+                    "note": r[4] or "",
+                }
+                for r in sizes
+            ],
+            "material_reservations": [
+                {
+                    "id": r[0],
+                    "material_variant_id": r[1],
+                    "quantity_reserved": float(r[2] or 0),
+                    "note": r[3] or "",
+                }
+                for r in reservations
+            ],
+            "bom_materials": [
+                {
+                    "id": r[0],
+                    "bom_id": r[1],
+                    "material_variant_id": r[2],
+                    "quantity_needed": float(r[3] or 0),
+                    "note": r[4] or "",
+                }
+                for r in bom_materials
+            ],
+            "images": [{"id": r[0], "image_url": r[1]} for r in images],
+        }
+
+    def _write_order_snapshot(self, order_id: int, event_type: str, actor_user_id: Optional[int] = None, note: str = ""):
+        """
+        Best-effort snapshot logger:
+        - Không làm hỏng luồng nghiệp vụ nếu table snapshot chưa migrate.
+        - Dùng để khôi phục dữ liệu khi cần truy vết mất dòng NVL/SKU.
+        """
+        try:
+            payload = self._collect_order_snapshot(order_id)
+            if not payload:
+                return
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO production_order_snapshots
+                        (production_order_id, event_type, actor_user_id, note, snapshot_json)
+                    VALUES
+                        (:oid, :evt, :uid, :note, :payload)
+                    """
+                ),
+                {
+                    "oid": order_id,
+                    "evt": str(event_type or "").strip() or "unknown",
+                    "uid": actor_user_id,
+                    "note": str(note or "").strip(),
+                    "payload": json.dumps(payload, ensure_ascii=False),
+                },
+            )
+        except Exception as snapshot_err:
+            err_msg = str(snapshot_err).lower()
+            # Nếu migration chưa chạy (table chưa tồn tại), cho phép bỏ qua để không chặn vận hành.
+            if "production_order_snapshots" in err_msg and ("doesn't exist" in err_msg or "1146" in err_msg):
+                return
+            print(f"[WARN] snapshot failed for order {order_id}: {snapshot_err}")
+
+    def get_order_snapshots(self, order_id: int, limit: int = 30):
+        safe_limit = max(1, min(int(limit or 30), 200))
+        rows = self.db.execute(
+            text(
+                """
+                SELECT id, production_order_id, event_type, actor_user_id, note, snapshot_json, created_at
+                FROM production_order_snapshots
+                WHERE production_order_id = :oid
+                ORDER BY id DESC
+                LIMIT :lim
+                """
+            ),
+            {"oid": order_id, "lim": safe_limit},
+        ).fetchall()
+        out = []
+        for r in rows:
+            snap = None
+            try:
+                snap = json.loads(r[5]) if r[5] else None
+            except Exception:
+                snap = None
+            out.append(
+                {
+                    "id": r[0],
+                    "production_order_id": r[1],
+                    "event_type": r[2],
+                    "actor_user_id": r[3],
+                    "note": r[4] or "",
+                    "snapshot": snap,
+                    "created_at": str(r[6]) if r[6] else None,
+                }
+            )
+        return out
+
+    def create_manual_snapshot(self, order_id: int, actor_user_id: Optional[int] = None, note: str = ""):
+        try:
+            exists = self.db.execute(
+                text("SELECT id FROM production_orders WHERE id = :id LIMIT 1"),
+                {"id": order_id},
+            ).fetchone()
+            if not exists:
+                raise Exception("Không tìm thấy lệnh sản xuất")
+            self._write_order_snapshot(
+                order_id,
+                "manual_backup",
+                actor_user_id=actor_user_id,
+                note=note or "Sao lưu thủ công trước khi chỉnh sửa",
+            )
+            self.db.commit()
+            return {"status": "success", "message": "Đã tạo snapshot thủ công cho lệnh sản xuất"}
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
     # 1. Tạo Công thức (BOM) - GIỮ NGUYÊN
     def create_bom(self, data: BOMCreateRequest):
         try:
@@ -234,7 +451,8 @@ class ProductionService:
                     self.db.execute(query_img, {"oid": order_id, "url": url})
 
             if data.auto_start:
-                self.start_production(order_id, commit=False) 
+                self.start_production(order_id, commit=False, actor_user_id=user_id)
+            self._write_order_snapshot(order_id, "create_quick", actor_user_id=user_id, note="Snapshot khi tạo đơn nhanh")
             self.db.commit()
 
             return {"status": "success", "message": "Đã tạo Mẫu & Lệnh SX thành công!"}
@@ -273,8 +491,9 @@ class ProductionService:
 
 
     # 4. Bắt đầu SX (Có tham số commit để hỗ trợ transaction lồng)
-    def start_production(self, order_id: int, commit: bool = True):
+    def start_production(self, order_id: int, commit: bool = True, actor_user_id: Optional[int] = None):
         try:
+            self._write_order_snapshot(order_id, "start_before", actor_user_id=actor_user_id, note="Snapshot trước khi start")
             # Lấy thông tin lệnh
             order = self.db.execute(text("""
                 SELECT warehouse_id, owner_central_id, product_variant_id, quantity_planned
@@ -368,6 +587,7 @@ class ProductionService:
 
             # Cập nhật trạng thái lệnh
             self.db.execute(text("UPDATE production_orders SET status = 'in_progress' WHERE id = :id"), {"id": order_id})
+            self._write_order_snapshot(order_id, "start_after", actor_user_id=actor_user_id, note="Snapshot sau khi start")
             
             if commit:
                 self.db.commit()
@@ -380,8 +600,9 @@ class ProductionService:
             raise e
 
     # 5. NHẬP KHO THÀNH PHẨM TỪNG ĐỢT (Receive Goods)
-    def receive_goods(self, order_id: int, data: ReceiveGoodsRequest):
+    def receive_goods(self, order_id: int, data: ReceiveGoodsRequest, actor_user_id: Optional[int] = None):
         try:
+            self._write_order_snapshot(order_id, "receive_before", actor_user_id=actor_user_id, note="Snapshot trước khi nhập kho thành phẩm")
             # ... (Phần lấy thông tin lệnh giữ nguyên) ...
             order = self.db.execute(text("""
                 SELECT po.warehouse_id, po.product_variant_id, po.code, pv.sku
@@ -465,6 +686,7 @@ class ProductionService:
                         "doc": f"PROD_RECEIVE:{order_id}",
                     })
 
+            self._write_order_snapshot(order_id, "receive_after", actor_user_id=actor_user_id, note=f"Snapshot sau khi nhập {total_received_now} thành phẩm")
             self.db.commit()
             return {"status": "success", "message": f"Đã nhập {total_received_now} SP và lưu lịch sử."}
 
@@ -1406,9 +1628,10 @@ class ProductionService:
             "images": list_imgs
         }
     
-    def update_production_order(self, order_id: int, data: ProductionUpdateRequest):
+    def update_production_order(self, order_id: int, data: ProductionUpdateRequest, actor_user_id: Optional[int] = None):
         try:
             print(f"--- DEBUG UPDATE ORDER {order_id} ---")
+            self._write_order_snapshot(order_id, "update_before", actor_user_id=actor_user_id, note="Snapshot trước khi cập nhật đơn")
             order = self.db.execute(text("SELECT warehouse_id, owner_central_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy đơn hàng")
             workshop_wid = order[0]
@@ -1680,6 +1903,7 @@ class ProductionService:
                     for url in data.image_urls:
                         self.db.execute(query_img, {"oid": order_id, "url": url})
 
+            self._write_order_snapshot(order_id, "update_after", actor_user_id=actor_user_id, note="Snapshot sau khi cập nhật đơn")
             self.db.commit()
             return {"status": "success", "message": "Cập nhật thành công!"}
         except Exception as e:

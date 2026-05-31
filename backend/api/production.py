@@ -194,7 +194,7 @@ def create_quick_order(
         assert_warehouse_scope(user, db, request.warehouse_id)
         if request.owner_central_id:
             assert_central_scope(user, db, request.owner_central_id)
-        return service.create_quick_order(request)
+        return service.create_quick_order(request, user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 
@@ -207,7 +207,7 @@ def start_production(
     service = ProductionService(db)
     try:
         assert_production_order_scope(user, db, order_id)
-        return service.start_production(order_id)
+        return service.start_production(order_id, actor_user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 
@@ -247,7 +247,7 @@ def receive_goods(
     service = ProductionService(db)
     try:
         assert_production_order_scope(user, db, order_id)
-        return service.receive_goods(order_id, request)
+        return service.receive_goods(order_id, request, actor_user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 
@@ -337,7 +337,37 @@ def update_order(
     service = ProductionService(db)
     try:
         assert_production_order_scope(user, db, order_id)
-        return service.update_production_order(order_id, request)
+        return service.update_production_order(order_id, request, actor_user_id=user.get("id"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
+
+
+@router.get("/production/orders/{order_id}/snapshots")
+def get_order_snapshots(
+    order_id: int,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("production", require_manage=True)),
+):
+    service = ProductionService(db)
+    assert_production_order_scope(user, db, order_id)
+    try:
+        return service.get_order_snapshots(order_id, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
+
+
+@router.post("/production/orders/{order_id}/snapshots/manual")
+def create_manual_snapshot(
+    order_id: int,
+    note: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("production", require_manage=True)),
+):
+    service = ProductionService(db)
+    assert_production_order_scope(user, db, order_id)
+    try:
+        return service.create_manual_snapshot(order_id, actor_user_id=user.get("id"), note=note or "")
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 
