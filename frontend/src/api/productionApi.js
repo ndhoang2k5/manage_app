@@ -11,6 +11,8 @@ const productionApi = {
     getOrderDetails: (id) => axiosClient.get(`/production/orders/${id}/details`),
     getReceiveHistory: (id) => axiosClient.get(`/production/orders/${id}/history`),
     getPrintData: (id) => axiosClient.get(`/production/orders/${id}/print`),
+    getSnapshots: (id, params) => axiosClient.get(`/production/orders/${id}/snapshots`, { params }),
+    createManualSnapshot: (id, params) => axiosClient.post(`/production/orders/${id}/snapshots/manual`, null, { params }),
      
     // Lấy danh sách đặt trước
     getReservations: (id) => axiosClient.get(`/production/orders/${id}/reservations`),

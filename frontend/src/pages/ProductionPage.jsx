@@ -482,18 +482,40 @@ const ProductionPage = () => {
                 })),
                 edit_material_rows: isNewOrderMode
                     ? (() => {
-                        const rowCount = Math.max(normalizedSizes.length, 1);
+                        const materialRowsWithContent = (materials || []).filter((m) => {
+                            const parsed = parseNplNoteMeta(m.note || '');
+                            const qty = Number(m?.quantity || 0);
+                            const cleanNote = String(parsed?.note || '').trim();
+                            const hasMaterialSelected = Number(m?.material_variant_id || 0) > 0;
+                            const hasMetaValue = (
+                                parsed?.consumptionRate !== undefined
+                                || parsed?.productQuantity !== undefined
+                                || parsed?.rowIndex !== undefined
+                            );
+                            return hasMaterialSelected || qty > 0 || !!cleanNote || hasMetaValue;
+                        }).length;
+                        const rowCount = Math.max(normalizedSizes.length, materialRowsWithContent, 1);
                         const alignedMaterials = Array.from({ length: rowCount }, () => null);
                         const fallbackMaterials = [];
                         (materials || []).forEach((m) => {
                             const parsed = parseNplNoteMeta(m.note || '');
-                            const idx = Number(parsed.rowIndex);
+                            const parsedRowIndex = parsed?.rowIndex;
+                            const hasIndexedRow = Number.isInteger(parsedRowIndex) && parsedRowIndex >= 0;
+                            const idx = hasIndexedRow ? parsedRowIndex : -1;
                             const currentPacked = { row: m, parsed };
                             const qty = Number(m?.quantity || 0);
                             const cleanNote = String(parsed?.note || '').trim();
-                            const hasFallbackContent = qty > 0 || !!cleanNote;
+                            const hasMaterialSelected = Number(m?.material_variant_id || 0) > 0;
+                            const hasFallbackContent = (
+                                hasMaterialSelected
+                                || qty > 0
+                                || !!cleanNote
+                                || parsed?.consumptionRate !== undefined
+                                || parsed?.productQuantity !== undefined
+                                || parsed?.rowIndex !== undefined
+                            );
 
-                            if (Number.isInteger(idx) && idx >= 0 && idx < rowCount) {
+                            if (hasIndexedRow && idx < rowCount) {
                                 const prev = alignedMaterials[idx];
                                 if (!prev) {
                                     alignedMaterials[idx] = currentPacked;
