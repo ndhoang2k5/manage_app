@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.authService import AuthService 
 from drivers.dependencies import get_current_user, require_admin
+from drivers.error_messages import humanize_error
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -48,4 +49,4 @@ def register(req: RegisterRequest, db: Session = Depends(get_db), admin: dict = 
             req.warehouse_ids # Truyền list
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))

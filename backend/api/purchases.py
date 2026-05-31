@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
+from drivers.error_messages import humanize_error
 from services.purchaseService import PurchaseService
 from drivers.dependencies import (
     get_current_user,
@@ -28,7 +29,7 @@ def create_supplier(
     try:
         return service.create_supplier(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.get("/suppliers", response_model=list[SupplierResponse])
 def list_suppliers(
@@ -61,7 +62,7 @@ def create_purchase_order(
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 2. Lấy danh sách (List)
 @router.get("/purchases")
@@ -103,7 +104,7 @@ def get_po_detail(
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
  
 # 4. Cập nhật phiếu (PUT)
 @router.put("/purchases/{po_id}")
@@ -130,7 +131,7 @@ def update_purchase_order(
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 5. Xóa Phiếu Nhập (Và hoàn tác kho)
 @router.delete("/purchases/{po_id}")
@@ -149,4 +150,4 @@ def delete_purchase_order(
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))

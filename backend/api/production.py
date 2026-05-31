@@ -8,6 +8,7 @@ import uuid
 from typing import Optional
 from datetime import date
 from fastapi.responses import StreamingResponse
+from drivers.error_messages import humanize_error
 from drivers.dependencies import (
     get_current_user,
     get_allowed_warehouse_ids,
@@ -75,7 +76,7 @@ def export_orders_excel(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.get("/production/orders/management")
 def list_orders_management(
@@ -165,7 +166,7 @@ def create_bom(
     try:
         return service.create_bom(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.post("/production/orders/create")
 def create_order(
@@ -180,7 +181,7 @@ def create_order(
             assert_central_scope(user, db, request.owner_central_id)
         return service.create_order(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.post("/production/orders/create-quick")
 def create_quick_order(
@@ -195,7 +196,7 @@ def create_quick_order(
             assert_central_scope(user, db, request.owner_central_id)
         return service.create_quick_order(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.post("/production/orders/{order_id}/start")
 def start_production(
@@ -208,7 +209,7 @@ def start_production(
         assert_production_order_scope(user, db, order_id)
         return service.start_production(order_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.post("/production/orders/{order_id}/complete")
 def finish_production(
@@ -221,7 +222,7 @@ def finish_production(
         assert_production_order_scope(user, db, order_id)
         return service.finish_production(order_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 # 1. API Lấy chi tiết Size (Nguyên nhân gây lỗi nếu thiếu cái này)
@@ -248,7 +249,7 @@ def receive_goods(
         assert_production_order_scope(user, db, order_id)
         return service.receive_goods(order_id, request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 3. API Chốt đơn
 @router.post("/production/orders/{order_id}/force-finish")
@@ -312,7 +313,7 @@ def upload_image(
             
         return {"url": f"/static/images/{new_filename}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi upload: {str(e)}")
+        raise HTTPException(status_code=500, detail=humanize_error(e))
     
 # 4. API Lấy lịch sử nhập hàng theo đợt
 @router.get("/production/orders/{order_id}/history")
@@ -338,7 +339,7 @@ def update_order(
         assert_production_order_scope(user, db, order_id)
         return service.update_production_order(order_id, request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 5.1 API Xoá lệnh sản xuất
 @router.delete("/production/orders/{order_id}")
@@ -352,7 +353,7 @@ def delete_order(
         assert_production_order_scope(user, db, order_id)
         return service.delete_production_order(order_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 @router.put("/production/orders/{order_id}/progress")
 def update_progress(
@@ -366,7 +367,7 @@ def update_progress(
         assert_production_order_scope(user, db, order_id)
         return service.update_progress(order_id, request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
         
 # 6. API Hoàn tác nhập hàng
 @router.delete("/production/receive-logs/{log_id}")
@@ -380,7 +381,7 @@ def revert_receive(
         assert_receive_log_scope(user, db, log_id)
         return service.revert_receive_log(log_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 7. API Lấy danh sách đặt trước cho lệnh sản xuất
 @router.get("/production/orders/{order_id}/reservations")

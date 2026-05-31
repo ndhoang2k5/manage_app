@@ -15,6 +15,7 @@ from entities.sales_management import (
     ProductPlanning4WRequest,
 )
 from services.salesManagementService import SalesManagementService
+from drivers.error_messages import humanize_error
 
 router = APIRouter()
 
@@ -35,7 +36,7 @@ def fetch_sales_report(
         )
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.get("/sales-management/report")
@@ -71,7 +72,7 @@ def get_sales_report(
         )
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.get("/sales-management/sync-status")
@@ -84,7 +85,7 @@ def get_sync_status(
         data = service.get_sync_status()
         return {"status": "success", "data": data}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/sync-now")
@@ -97,7 +98,7 @@ def sync_now(
         result = service.sync_now(user=user)
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/sync-stock")
@@ -110,7 +111,7 @@ def sync_stock(
         result = service.sync_product_stock()
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/backfill")
@@ -130,7 +131,7 @@ def backfill_history(
         )
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.get("/sales-management/priority-codes")
@@ -143,7 +144,7 @@ def get_priority_codes(
         data = service.get_priority_codes()
         return {"status": "success", "data": data}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.get("/sales-management/product-codes/search")
@@ -158,14 +159,29 @@ def search_product_codes(
         data = service.search_product_codes(keyword=keyword, limit=limit)
         return {"status": "success", "data": data}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
+
+
+@router.get("/sales-management/product-planning/product-codes/search")
+def search_product_codes_for_planning(
+    keyword: Optional[str] = Query(None),
+    limit: int = Query(30),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("fabric-planning")),
+):
+    try:
+        service = SalesManagementService(db)
+        data = service.search_product_codes(keyword=keyword, limit=limit)
+        return {"status": "success", "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/product-planning/4w")
 def get_product_planning_4w(
     req: ProductPlanning4WRequest,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_module_access("sales-management")),
+    user: dict = Depends(require_module_access("fabric-planning")),
 ):
     try:
         service = SalesManagementService(db)
@@ -176,7 +192,7 @@ def get_product_planning_4w(
         )
         return {"status": "success", "data": data}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/priority-codes")
@@ -195,7 +211,7 @@ def upsert_priority_codes(
         )
         return {"status": "success", "data": result}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.get("/sales-management/export")
@@ -267,4 +283,4 @@ def export_sales_report(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=humanize_error(exc))

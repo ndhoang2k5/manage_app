@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope
 from drivers.db_client import get_db
+from drivers.error_messages import humanize_error
 from services.productService import ProductService
 from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse, MaterialUpdateRequest
 
@@ -16,7 +17,7 @@ def create_material(request: MaterialCreateRequest, db: Session = Depends(get_db
     try:
         return service.create_material(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 2. API Tạo Nhóm NVL (Set)
 @router.post("/materials/groups/create")
@@ -25,7 +26,7 @@ def create_group(request: MaterialGroupCreateRequest, db: Session = Depends(get_
     try:
         return service.create_material_group(request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 3. API Lấy danh sách NVL
 @router.get("/materials", response_model=list[ProductVariantResponse])
@@ -50,7 +51,7 @@ def update_material(material_id: int, request: MaterialUpdateRequest, db: Sessio
     try:
         return service.update_material(material_id, request)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 6. API Lấy danh sách NVL theo kho
 @router.get("/materials/warehouse/{warehouse_id}")

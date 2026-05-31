@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from drivers.db_client import get_db
 from drivers.dependencies import require_admin, get_current_user
+from drivers.error_messages import humanize_error
 from entities.account import (
     AccountCreateRequest,
     AccountUpdateRequest,
@@ -32,7 +33,7 @@ def create_account(
     try:
         return service.create_account(req)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.put("/accounts/{account_id}")
@@ -46,7 +47,7 @@ def update_account(
     try:
         return service.update_account(account_id, req)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.delete("/accounts/{account_id}")
@@ -61,7 +62,7 @@ def delete_account(
     try:
         return service.delete_account(account_id, current_user.get("id"))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.get("/accounts/{account_id}/permissions")
@@ -74,7 +75,7 @@ def get_account_permissions(
     try:
         return service.get_account_permissions(account_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.put("/accounts/{account_id}/permissions/modules")
@@ -88,7 +89,7 @@ def update_module_permissions(
     try:
         return service.update_module_permissions(account_id, req.module_permissions)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.put("/accounts/{account_id}/permissions/scopes")
@@ -102,4 +103,4 @@ def update_scope_permissions(
     try:
         return service.update_scope_permissions(account_id, req.warehouse_ids)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))

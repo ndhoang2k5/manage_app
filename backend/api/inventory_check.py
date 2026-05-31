@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from drivers.dependencies import require_module_access
 from drivers.db_client import get_db
+from drivers.error_messages import humanize_error
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import json
@@ -489,7 +490,7 @@ def import_accounting_movements(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 
 @router.get("/inventory-check/accounting/movements")
