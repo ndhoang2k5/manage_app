@@ -22,9 +22,16 @@ import inventoryCheckApi from '../api/inventoryCheckApi';
 import { getStoredUser, canManageModule, canViewMaterialCost, canViewMaterialCostForBrand } from '../utils/permissions';
 import AccessModeBadge from '../components/AccessModeBadge';
 
-const BASE_URL = window.location.origin; 
+const BASE_URL = window.location.origin;
+const MATERIAL_QTY_DECIMALS = 5;
+const roundMaterialQty = (value) => {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return 0;
+    return Number(num.toFixed(MATERIAL_QTY_DECIMALS));
+};
 
 const ProductionPage = () => {
+    const inventoryCheckEnabled = String(import.meta.env.VITE_INVENTORY_CHECK_ENABLED || 'false').toLowerCase() === 'true';
     const user = getStoredUser();
     const canManageProduction = canManageModule(user, 'production');
     const canExportProductionExcel = canManageModule(user, 'sales-management');
@@ -72,6 +79,7 @@ const ProductionPage = () => {
     const [orderForm] = Form.useForm();
     const [editForm] = Form.useForm();
     const selectedOwnerCentralId = Form.useWatch('owner_central_id', orderForm);
+    const selectedProductionWarehouseId = Form.useWatch('warehouse_id', orderForm);
 
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
     const sizeStandardOptions = sizeStandards.map((s) => ({ value: s, label: s }));
@@ -192,14 +200,29 @@ const ProductionPage = () => {
         const encoded = raw.slice(markerIdx + NPL_META_PREFIX.length).trim();
         try {
             const parsed = JSON.parse(encoded || '{}');
+            const hasConsumptionRate = Object.prototype.hasOwnProperty.call(parsed, 'consumptionRate');
+            const hasProductQuantity = Object.prototype.hasOwnProperty.call(parsed, 'productQuantity');
             return {
                 note: cleanNote,
-                consumptionRate: Number.isFinite(Number(parsed?.consumptionRate)) ? Number(parsed.consumptionRate) : null,
-                productQuantity: Number.isFinite(Number(parsed?.productQuantity)) ? Number(parsed.productQuantity) : null,
+                hasConsumptionRate,
+                hasProductQuantity,
+                consumptionRate: hasConsumptionRate && Number.isFinite(Number(parsed.consumptionRate))
+                    ? Number(parsed.consumptionRate)
+                    : null,
+                productQuantity: hasProductQuantity && Number.isFinite(Number(parsed.productQuantity))
+                    ? Number(parsed.productQuantity)
+                    : null,
                 rowIndex: Number.isInteger(Number(parsed?.rowIndex)) ? Number(parsed.rowIndex) : null,
             };
         } catch (e) {
-            return { note: cleanNote, consumptionRate: null, productQuantity: null, rowIndex: null };
+            return {
+                note: cleanNote,
+                hasConsumptionRate: false,
+                hasProductQuantity: false,
+                consumptionRate: null,
+                productQuantity: null,
+                rowIndex: null,
+            };
         }
     };
 
@@ -242,7 +265,7 @@ const ProductionPage = () => {
     const calculateRequiredQuantity = (consumptionRate, productQuantity) => {
         const rate = Number(consumptionRate || 0);
         const qty = Number(productQuantity || 0);
-        return Number((rate * qty).toFixed(4));
+        return roundMaterialQty(rate * qty);
     };
 
     const getMaterialById = (materialId) => {
@@ -252,7 +275,7 @@ const ProductionPage = () => {
     };
 
     // --- LOGIC KHO & NVL ---
-    const loadMaterialsByCentral = useCallback(async (centralId) => {
+    const loadMaterialsByCentral = useCallback(async (centralId, workshopId) => {
         if (!centralId) {
             setWarehouseMaterials([]);
             return;
@@ -260,7 +283,7 @@ const ProductionPage = () => {
         orderForm.setFieldsValue({ materials: [] });
         setEstimatedCost(0);
         try {
-            const res = await productApi.getByWarehouse(centralId);
+            const res = await productApi.getByWarehouse(centralId, workshopId || undefined);
             setWarehouseMaterials(res.data || []);
             message.success(`Đã cập nhật danh sách NVL theo kho tổng!`);
         } catch (error) {
@@ -270,8 +293,8 @@ const ProductionPage = () => {
 
     useEffect(() => {
         if (!isOrderModalOpen) return;
-        loadMaterialsByCentral(selectedOwnerCentralId);
-    }, [selectedOwnerCentralId, isOrderModalOpen, loadMaterialsByCentral]);
+        loadMaterialsByCentral(selectedOwnerCentralId, selectedProductionWarehouseId);
+    }, [selectedOwnerCentralId, selectedProductionWarehouseId, isOrderModalOpen, loadMaterialsByCentral]);
 
     // --- TÍNH GIÁ VỐN ---
     const calculateCost = () => {
@@ -354,7 +377,7 @@ const ProductionPage = () => {
                             note: row?.npl_note || '',
                             consumptionRate: row?.consumption_rate,
                             productQuantity: row?.product_quantity,
-                            includeMeta: !hasSku,
+                            includeMeta: true,
                             rowIndex: idx,
                         }),
                     };
@@ -409,9 +432,14 @@ const ProductionPage = () => {
         setCurrentOrder(record);
 
         // 1. Lấy danh sách NVL của kho để nạp vào Dropdown
-        if (record.warehouse_id) {
+        const sourceCentralId = Number(record?.owner_central_id || 0);
+        const workshopId = Number(record?.warehouse_id || 0);
+        if (sourceCentralId || workshopId) {
             try {
-                const res = await productApi.getByWarehouse(record.warehouse_id);
+                const res = await productApi.getByWarehouse(
+                    sourceCentralId || workshopId,
+                    sourceCentralId ? workshopId : undefined
+                );
                 setWarehouseMaterials(Array.isArray(res.data) ? res.data : []);
             } catch (error) {
                 console.error("Lỗi tải NVL tại kho:", error);
@@ -548,9 +576,11 @@ const ProductionPage = () => {
                             const baseQty = sizeByIndex.sku_sp
                                 ? fallbackQty
                                 : Number(parsedNpl.productQuantity ?? fallbackQty);
-                            const consumption = sizeByIndex.sku_sp
-                                ? (baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0)
-                                : Number(parsedNpl.consumptionRate ?? (baseQty > 0 ? Number((totalNeeded / baseQty).toFixed(4)) : 0));
+                            const consumption = parsedNpl.hasConsumptionRate
+                                ? Number(parsedNpl.consumptionRate || 0)
+                                : (baseQty > 0 && totalNeeded > 0
+                                    ? roundMaterialQty(totalNeeded / baseQty)
+                                    : 0);
                             return {
                                 id: m.id || null,
                                 material_variant_id: m.material_variant_id || null,
@@ -567,7 +597,7 @@ const ProductionPage = () => {
                 
                 // Đổ dữ liệu NVL
                 materials: (materials || []).map(m => {
-                    const cleanQty = parseFloat(Number(m.quantity).toFixed(4));
+                    const cleanQty = roundMaterialQty(m.quantity);
                     return {
                         id: m.id,
                         material_variant_id: m.material_variant_id,
@@ -656,6 +686,7 @@ const ProductionPage = () => {
                         // để backend tạo dòng mới đúng vật liệu và không check nhầm tồn theo vật liệu cũ.
                         const materialChanged = !!(original && Number(original.material_variant_id) !== materialId);
                         const hasAnyContent = hasSku
+                            || materialId > 0
                             || Number(row?.consumption_rate || 0) > 0
                             || Number(row?.product_quantity || 0) > 0
                             || String(row?.npl_note || '').trim()
@@ -686,7 +717,7 @@ const ProductionPage = () => {
                                 note: row?.npl_note || '',
                                 consumptionRate: row?.consumption_rate,
                                 productQuantity: row?.product_quantity,
-                                includeMeta: !hasSku,
+                                includeMeta: true,
                                 rowIndex: idx,
                             }),
                         };
@@ -812,14 +843,16 @@ const ProductionPage = () => {
                 message.warning("Có dòng đang để trống mã (vẫn cho nhập, nhưng sẽ không cộng tăng kiểm tồn cho dòng đó).");
             }
 
-            // Nếu có nhập mã, bắt buộc mã đó phải tồn tại bên kiểm tồn (Salework product list)
-            for (const code of filledCodes) {
-                const res = await inventoryCheckApi.getSaleworkProducts({ page: 1, limit: 5, include_zero: true, search: code });
-                const list = res.data?.items || [];
-                const ok = list.some((p) => String(p.code || '').trim() === String(code).trim());
-                if (!ok) {
-                    message.warning(`Mã "${code}" không tồn tại bên kiểm tồn. Không thể hoàn tất nhập.`);
-                    return;
+            // Nếu bật module kiểm tồn, xác thực mã kiểm tồn trên Salework trước khi nhập.
+            if (inventoryCheckEnabled) {
+                for (const code of filledCodes) {
+                    const res = await inventoryCheckApi.getSaleworkProducts({ page: 1, limit: 5, include_zero: true, search: code });
+                    const list = res.data?.items || [];
+                    const ok = list.some((p) => String(p.code || '').trim() === String(code).trim());
+                    if (!ok) {
+                        message.warning(`Mã "${code}" không tồn tại bên kiểm tồn. Không thể hoàn tất nhập.`);
+                        return;
+                    }
                 }
             }
 
@@ -1331,7 +1364,7 @@ const ProductionPage = () => {
                                                                     name={[name, 'consumption_rate']}
                                                                     style={{ marginBottom: 0 }}
                                                                 >
-                                                                    <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                                    <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 1.2" />
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ padding: '8px 8px' }}>
@@ -1349,7 +1382,7 @@ const ProductionPage = () => {
                                                                         const consumptionRate = getFieldValue(['materials', name, 'consumption_rate']);
                                                                         const productQuantity = getFieldValue(['materials', name, 'product_quantity']);
                                                                         const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
-                                                                        return <InputNumber value={requiredQty} disabled style={{ width: '100%' }} />;
+                                                                        return <InputNumber value={requiredQty} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
                                                                     }}
                                                                 </Form.Item>
                                                             </td>
@@ -1501,7 +1534,7 @@ const ProductionPage = () => {
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
                                                             <Form.Item {...restField} name={[name, 'consumption_rate']} style={{ marginBottom: 0 }}>
-                                                                <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                                <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 1.2" />
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
@@ -1515,7 +1548,7 @@ const ProductionPage = () => {
                                                                     const consumptionRate = getFieldValue(['edit_material_rows', name, 'consumption_rate']);
                                                                     const productQuantity = getFieldValue(['edit_material_rows', name, 'product_quantity']);
                                                                     const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
-                                                                    return <InputNumber value={requiredQty} disabled style={{ width: '100%' }} />;
+                                                                    return <InputNumber value={requiredQty} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
                                                                 }}
                                                             </Form.Item>
                                                         </td>

@@ -7,15 +7,33 @@ from urllib import request, error
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from services.salesManagementUtils import aggregate_sales_report, aggregate_product_stock
+from services.salesManagementUtils import (
+    aggregate_sales_report,
+    aggregate_sales_report_by_shop,
+    aggregate_product_stock,
+    filter_nested_runs,
+)
 
 
 class SalesManagementService:
     REPORT_URL = "https://salework.net/api/open/stock/v1/report/product"
     PRODUCT_LIST_URL = "https://salework.net/api/open/stock/v1/product/list"
 
+    @staticmethod
+    def _build_in_clause(param_prefix: str, values: List, params: Dict) -> str:
+        if not values:
+            return "NULL"
+        keys = []
+        for idx, value in enumerate(values):
+            key = f"{param_prefix}_{idx}"
+            keys.append(f":{key}")
+            params[key] = value
+        return ", ".join(keys)
+
     def __init__(self, db: Session):
         self.db = db
+        # Chặn các run quá dài vì dễ gây cộng dồn doanh số khi chồng khoảng thời gian.
+        self.max_report_window_ms = int(os.getenv("SALEWORK_MAX_REPORT_WINDOW_MS", "86400000"))  # 24h
         # Avoid DDL on every request in production; keep optional bootstrap for dev.
         if os.getenv("SALEWORK_AUTO_BOOTSTRAP_SCHEMA", "false").lower() == "true":
             self._ensure_tables()
@@ -185,6 +203,12 @@ class SalesManagementService:
     def fetch_and_store(self, time_start: int, time_end: int, user: dict, force_refresh: bool = False) -> Dict:
         if time_start >= time_end:
             raise ValueError("Khoảng thời gian không hợp lệ")
+        if (time_end - time_start) > self.max_report_window_ms:
+            max_hours = round(self.max_report_window_ms / 1000 / 3600, 2)
+            raise ValueError(
+                f"Khoảng lấy số bán quá dài (> {max_hours} giờ). "
+                "Vui lòng đồng bộ theo chunk (backfill) để tránh trùng doanh số."
+            )
 
         existing_run_id = self._get_run_id_for_period(time_start, time_end)
         if existing_run_id and not force_refresh:
@@ -493,16 +517,18 @@ class SalesManagementService:
 
         params = {"min_qty": min_qty, "min_revenue": min_revenue}
         where_clauses = []
+        safe_window_clause = "(r.time_end - r.time_start) <= :max_window_ms"
+        params["max_window_ms"] = self.max_report_window_ms
         if run_id is not None:
             where_clauses.append("i.run_id = :run_id")
             params["run_id"] = run_id
         else:
-            # Use contained windows only to avoid inflating totals from partially
-            # overlapping runs whose aggregates cannot be safely prorated.
-            where_clauses.append("r.time_start >= :time_start")
-            where_clauses.append("r.time_end <= :time_end")
-            params["time_start"] = int(time_start)
-            params["time_end"] = int(time_end)
+            # Chỉ lấy các run không lồng nhau để tránh cộng dồn doanh số trùng.
+            filtered_run_ids = self._get_filtered_run_ids_for_period(int(time_start), int(time_end))
+            if not filtered_run_ids:
+                return {"run_id": None, "items": [], "total": 0, "page": page, "page_size": page_size}
+            in_clause = self._build_in_clause("run_id", filtered_run_ids, params)
+            where_clauses.append(f"i.run_id IN ({in_clause})")
 
         if keyword:
             params["keyword"] = f"%{keyword.strip()}%"
@@ -648,6 +674,218 @@ class SalesManagementService:
         if top_n and top_n > 0:
             return rows[:top_n]
         return rows
+
+    def _fetch_runs_with_payload(
+        self,
+        run_id: Optional[int] = None,
+        time_start: Optional[int] = None,
+        time_end: Optional[int] = None,
+        exclude_nested: bool = True,
+    ) -> List:
+        if run_id is not None:
+            return self.db.execute(
+                text(
+                    """
+                    SELECT id, time_start, time_end, raw_payload
+                    FROM sales_report_runs
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            ).fetchall()
+
+        safe_window_clause = "(time_end - time_start) <= :max_window_ms"
+        runs = self.db.execute(
+            text(
+                f"""
+                SELECT id, time_start, time_end, raw_payload
+                FROM sales_report_runs
+                WHERE time_start >= :time_start
+                  AND time_end <= :time_end
+                  AND {safe_window_clause}
+                ORDER BY id ASC
+                """
+            ),
+            {
+                "time_start": int(time_start),
+                "time_end": int(time_end),
+                "max_window_ms": self.max_report_window_ms,
+            },
+        ).fetchall()
+        if exclude_nested:
+            return filter_nested_runs(runs)
+        return runs
+
+    def _get_filtered_run_ids_for_period(self, time_start: int, time_end: int) -> List[int]:
+        runs = self._fetch_runs_with_payload(
+            time_start=time_start,
+            time_end=time_end,
+            exclude_nested=True,
+        )
+        return [int(run[0]) for run in runs if run and run[0] is not None]
+
+    def get_report_by_shop_for_export(
+        self,
+        run_id: Optional[int] = None,
+        time_start: Optional[int] = None,
+        time_end: Optional[int] = None,
+        keyword: Optional[str] = None,
+        only_priority_codes: bool = False,
+        min_qty: float = 0,
+        min_revenue: float = 0,
+        sort_by: str = "sold_qty",
+        sort_dir: str = "desc",
+        top_n: int = 0,
+    ) -> List[Dict]:
+        if run_id is None and (time_start is None or time_end is None):
+            raise ValueError("Cần run_id hoặc khoảng thời gian hợp lệ để xuất Excel")
+
+        runs = self._fetch_runs_with_payload(
+            run_id=run_id,
+            time_start=time_start,
+            time_end=time_end,
+        )
+
+        shop_aggregate: Dict[tuple, Dict] = {}
+        product_totals: Dict[str, Dict] = {}
+
+        for run in runs:
+            raw_payload = run[3] if len(run) > 3 else (run[1] if len(run) > 1 else None)
+            if not raw_payload:
+                continue
+            try:
+                parsed = json.loads(raw_payload)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            product_report = parsed.get("data", {}).get("product_report", {})
+            for row in aggregate_sales_report_by_shop(product_report):
+                code = row["code"]
+                key = (code, row["channel"], row["shop_id"])
+                bucket = shop_aggregate.setdefault(
+                    key,
+                    {
+                        "code": code,
+                        "name": row.get("name") or "",
+                        "channel": row["channel"],
+                        "shop_id": row["shop_id"],
+                        "sold_qty": 0.0,
+                        "sold_revenue": 0.0,
+                    },
+                )
+                if row.get("name") and not bucket["name"]:
+                    bucket["name"] = row["name"]
+                bucket["sold_qty"] += float(row.get("sold_qty") or 0)
+                bucket["sold_revenue"] += float(row.get("sold_revenue") or 0)
+
+                product_bucket = product_totals.setdefault(
+                    code,
+                    {"code": code, "name": bucket["name"], "sold_qty": 0.0, "sold_revenue": 0.0},
+                )
+                if bucket["name"] and not product_bucket["name"]:
+                    product_bucket["name"] = bucket["name"]
+                product_bucket["sold_qty"] += float(row.get("sold_qty") or 0)
+                product_bucket["sold_revenue"] += float(row.get("sold_revenue") or 0)
+
+        if not shop_aggregate:
+            return []
+
+        priority_rows = self.db.execute(
+            text("SELECT code FROM sales_priority_codes WHERE is_active = 1")
+        ).fetchall()
+        priority_codes = {str(r[0]).strip().upper() for r in priority_rows if r and r[0]}
+
+        keyword_value = str(keyword or "").strip().lower()
+        qualifying_codes = set()
+        for code, totals in product_totals.items():
+            if float(totals.get("sold_qty") or 0) < float(min_qty or 0):
+                continue
+            if float(totals.get("sold_revenue") or 0) < float(min_revenue or 0):
+                continue
+            if keyword_value:
+                haystack = f"{code} {totals.get('name') or ''}".lower()
+                if keyword_value not in haystack:
+                    continue
+            if only_priority_codes and code not in priority_codes:
+                continue
+            qualifying_codes.add(code)
+
+        if not qualifying_codes:
+            return []
+
+        stock_params: Dict = {}
+        code_in_clause = self._build_in_clause("stock_code", list(qualifying_codes), stock_params)
+        stock_rows = self.db.execute(
+            text(
+                f"""
+                SELECT code, total_stock
+                FROM sales_product_stock_current
+                WHERE code IN ({code_in_clause})
+                """
+            ),
+            stock_params,
+        ).fetchall()
+        stock_map = {str(r[0]).upper(): float(r[1] or 0) for r in stock_rows}
+
+        export_rows: List[Dict] = []
+        for key, row in shop_aggregate.items():
+            code = row["code"]
+            if code not in qualifying_codes:
+                continue
+            export_rows.append(
+                {
+                    "code": code,
+                    "name": row.get("name") or product_totals.get(code, {}).get("name") or "",
+                    "sold_qty": float(row.get("sold_qty") or 0),
+                    "sold_revenue": float(row.get("sold_revenue") or 0),
+                    "current_stock": stock_map.get(code, 0.0),
+                    "channel": row.get("channel") or "",
+                    "shop_id": row.get("shop_id") or "",
+                    "is_priority": code in priority_codes,
+                }
+            )
+
+        sort_column = {
+            "sold_qty": "sold_qty",
+            "sold_revenue": "sold_revenue",
+            "code": "code",
+            "current_stock": "current_stock",
+        }.get(str(sort_by), "sold_qty")
+        reverse = str(sort_dir).lower() != "asc"
+
+        product_sort_values: Dict[str, object] = {}
+        for code in qualifying_codes:
+            if sort_column == "current_stock":
+                product_sort_values[code] = stock_map.get(code, 0.0)
+            elif sort_column == "code":
+                product_sort_values[code] = code
+            else:
+                product_sort_values[code] = float(product_totals.get(code, {}).get(sort_column) or 0)
+
+        export_rows.sort(
+            key=lambda r: (
+                product_sort_values.get(r["code"], 0),
+                float(r.get("sold_qty") or 0),
+                float(r.get("sold_revenue") or 0),
+                r.get("code") or "",
+                r.get("channel") or "",
+                r.get("shop_id") or "",
+            ),
+            reverse=reverse,
+        )
+
+        if top_n and top_n > 0:
+            ordered_codes: List[str] = []
+            for row in export_rows:
+                code = row["code"]
+                if code not in ordered_codes:
+                    ordered_codes.append(code)
+                if len(ordered_codes) >= top_n:
+                    break
+            allowed_codes = set(ordered_codes[:top_n])
+            export_rows = [row for row in export_rows if row["code"] in allowed_codes]
+
+        return export_rows
 
     @staticmethod
     def _normalize_codes(codes: List[str]) -> List[str]:

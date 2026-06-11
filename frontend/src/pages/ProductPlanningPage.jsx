@@ -125,15 +125,26 @@ const ProductPlanningPage = () => {
       const data = payload?.data || [];
       total = Number(payload?.total || 0);
 
+      const normalizeSizeToSku = (rawValue) => {
+        const raw = String(rawValue || '').trim();
+        if (!raw) return '';
+        let normalized = raw;
+        if (normalized.toUpperCase().startsWith('SKU:')) {
+          normalized = normalized.slice(4).trim();
+        }
+        const nameSepIdx = normalized.toUpperCase().indexOf('||TEN:');
+        if (nameSepIdx >= 0) {
+          normalized = normalized.slice(0, nameSepIdx).trim();
+        }
+        return normalized.toUpperCase();
+      };
+
       data.forEach((order) => {
         // Ưu tiên tính theo từng dòng SKU SP trong bảng sizes.
         const sizes = Array.isArray(order?.sizes) ? order.sizes : [];
         sizes.forEach((line) => {
-          const rawSku = String(line?.size || '').trim();
-          if (!rawSku) return;
-          const normalizedSku = rawSku.toUpperCase().startsWith('SKU:')
-            ? rawSku.slice(4).trim().toUpperCase()
-            : rawSku.toUpperCase();
+          const normalizedSku = normalizeSizeToSku(line?.size);
+          if (!normalizedSku) return;
           if (!codeSet.has(normalizedSku)) return;
 
           const planned = Number(line?.quantity || 0);
@@ -213,6 +224,30 @@ const ProductPlanningPage = () => {
     return map;
   }, [materials]);
 
+  const getFabricUsedByOtherRows = (rowId, materialId, rows = conversionRows) => {
+    const mid = Number(materialId || 0);
+    if (!mid) return 0;
+    return (rows || [])
+      .filter((r) => r.id !== rowId && Number(r.material_id) === mid)
+      .reduce((acc, r) => acc + Number(r.fabric_qty || 0), 0);
+  };
+
+  const getAvailableFabricForRow = (rowId, materialId, rows = conversionRows) => {
+    const mid = Number(materialId || 0);
+    if (!mid) return 0;
+    const baseStock = Number(materialMap.get(mid)?.quantity_on_hand || 0);
+    const usedByOthers = getFabricUsedByOtherRows(rowId, mid, rows);
+    return Math.max(baseStock - usedByOthers, 0);
+  };
+
+  const getMaxFabricQtyForRow = (rowId, materialId, rows = conversionRows) => {
+    const mid = Number(materialId || 0);
+    if (!mid) return undefined;
+    const baseStock = Number(materialMap.get(mid)?.quantity_on_hand || 0);
+    const usedByOthers = getFabricUsedByOtherRows(rowId, mid, rows);
+    return Math.max(baseStock - usedByOthers, 0);
+  };
+
   const productCodeOptionsForConvert = useMemo(() => {
     const seen = new Set();
     const opts = [];
@@ -244,24 +279,42 @@ const ProductPlanningPage = () => {
     ]);
   };
 
+  const normalizeConversionRows = (rows) =>
+    (rows || []).map((r) => {
+      if (!r.material_id) return r;
+      const maxQty = getMaxFabricQtyForRow(r.id, r.material_id, rows);
+      const currentQty = Number(r.fabric_qty || 0);
+      if (currentQty > maxQty) {
+        return { ...r, fabric_qty: maxQty };
+      }
+      return r;
+    });
+
   const updateConversionRow = (rowId, patch) => {
-    setConversionRows((prev) =>
-      prev.map((r) => {
+    setConversionRows((prev) => {
+      const updated = prev.map((r) => {
         if (r.id !== rowId) return r;
         const next = { ...r, ...patch };
         if (Object.prototype.hasOwnProperty.call(patch, 'material_id')) {
-          const mat = materialMap.get(Number(patch.material_id));
-          if (mat) {
-            next.fabric_qty = Number(mat.quantity_on_hand || 0);
+          const materialId = Number(patch.material_id || 0);
+          if (materialId > 0) {
+            next.fabric_qty = getAvailableFabricForRow(rowId, materialId, prev);
+          } else {
+            next.fabric_qty = 0;
           }
         }
+        if (Object.prototype.hasOwnProperty.call(patch, 'fabric_qty') && next.material_id) {
+          const maxQty = getMaxFabricQtyForRow(rowId, next.material_id, prev);
+          next.fabric_qty = Math.min(Number(next.fabric_qty || 0), Number(maxQty || 0));
+        }
         return next;
-      })
-    );
+      });
+      return normalizeConversionRows(updated);
+    });
   };
 
   const removeConversionRow = (rowId) => {
-    setConversionRows((prev) => prev.filter((r) => r.id !== rowId));
+    setConversionRows((prev) => normalizeConversionRows(prev.filter((r) => r.id !== rowId)));
   };
 
   // Với mỗi SKU, lấy tồn bán thành phẩm theo loại vải thấp nhất (bottleneck).
@@ -458,10 +511,13 @@ const ProductPlanningPage = () => {
             style={{ width: '100%' }}
             loading={loadingMaterials}
             optionFilterProp="label"
-            options={(materials || []).map((m) => ({
-              value: m.id,
-              label: `${m.sku} - ${m.variant_name} (Tồn: ${Number(m.quantity_on_hand || 0).toLocaleString('vi-VN')})`,
-            }))}
+            options={(materials || []).map((m) => {
+              const available = getAvailableFabricForRow(record.id, m.id);
+              return {
+                value: m.id,
+                label: `${m.sku} - ${m.variant_name} (Tồn: ${Number(available || 0).toLocaleString('vi-VN')})`,
+              };
+            })}
             onChange={(v) => updateConversionRow(record.id, { material_id: v })}
           />
         ),
@@ -474,6 +530,7 @@ const ProductPlanningPage = () => {
         render: (value, record) => (
           <InputNumber
             min={0}
+            max={record.material_id ? getMaxFabricQtyForRow(record.id, record.material_id) : undefined}
             step={0.0001}
             value={value}
             style={{ width: '100%' }}
@@ -534,7 +591,7 @@ const ProductPlanningPage = () => {
         ),
       },
     ],
-    [loadingMaterials, materials, productCodeOptionsForConvert]
+    [loadingMaterials, materials, productCodeOptionsForConvert, conversionRows, materialMap]
   );
 
   const aggregateRow = useMemo(() => {

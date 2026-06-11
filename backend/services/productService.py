@@ -269,7 +269,7 @@ class ProductService:
             raise e
 
     # 7. Lấy danh sách vật tư theo kho (MỚI)
-    def get_materials_by_warehouse(self, warehouse_id: int):
+    def get_materials_by_warehouse(self, warehouse_id: int, include_warehouse_id: int = None):
         scope_ids = [int(warehouse_id)]
         wh = self.db.execute(
             text("SELECT id, is_central FROM warehouses WHERE id = :id"),
@@ -278,21 +278,28 @@ class ProductService:
         if not wh:
             raise Exception("Kho không tồn tại")
 
-        # Nếu là kho tổng thì gộp cả các xưởng liên kết để hiển thị tổng tồn theo cụm.
+        # Nếu là kho tổng thì có 2 chế độ:
+        # - có include_warehouse_id: chỉ cộng tồn kho tổng + kho con cụ thể của đơn.
+        # - không có include_warehouse_id: cộng tồn toàn bộ kho con liên kết như trước.
         if int(wh[1] or 0) == 1:
-            try:
-                linked_rows = self.db.execute(
-                    text("""
-                        SELECT workshop_warehouse_id
-                        FROM central_workshop_links
-                        WHERE central_warehouse_id = :cid
-                    """),
-                    {"cid": warehouse_id},
-                ).fetchall()
-                scope_ids.extend(int(r[0]) for r in linked_rows if r and r[0] is not None)
-            except Exception:
-                # Fallback an toàn nếu bảng liên kết chưa có.
-                pass
+            if include_warehouse_id and int(include_warehouse_id) != int(warehouse_id):
+                # Ưu tiên tính tồn theo ngữ cảnh đơn sản xuất: luôn cộng kho xưởng được truyền vào.
+                # Nhiều dữ liệu cũ thiếu mapping central_workshop_links sẽ làm hiển thị tồn = 0 sai thực tế.
+                scope_ids.append(int(include_warehouse_id))
+            else:
+                try:
+                    linked_rows = self.db.execute(
+                        text("""
+                            SELECT workshop_warehouse_id
+                            FROM central_workshop_links
+                            WHERE central_warehouse_id = :cid
+                        """),
+                        {"cid": warehouse_id},
+                    ).fetchall()
+                    scope_ids.extend(int(r[0]) for r in linked_rows if r and r[0] is not None)
+                except Exception:
+                    # Fallback an toàn nếu bảng liên kết chưa có.
+                    pass
 
         scope_ids = sorted(set(scope_ids))
         ids_str = ",".join(str(i) for i in scope_ids)

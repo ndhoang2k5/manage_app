@@ -12,12 +12,23 @@ from datetime import date, datetime, timedelta
 from openpyxl import Workbook
 from copy import copy
 
+MATERIAL_QTY_QUANT = Decimal("0.00001")
+
 class ProductionService:
     def __init__(self, db: Session):
         self.db = db
         self.MAX_ORDER_CODE_LEN = 70
         self.SKU_SP_NAME_SEPARATOR = "||TEN:"
-        self.NPL_META_PREFIX = "__NPLMETA__:"
+        self.NPL_META_PREFIX = "__NPLMETA:"
+        self.material_qty_quant = MATERIAL_QTY_QUANT
+
+    @staticmethod
+    def _quantize_material_qty(value) -> Decimal:
+        return Decimal(str(value or 0)).quantize(MATERIAL_QTY_QUANT)
+
+    @classmethod
+    def _material_qty_float(cls, value) -> float:
+        return float(cls._quantize_material_qty(value))
 
     def _build_sku_size_label(self, sku_sp: str, sku_sp_name: Optional[str] = None) -> str:
         sku = str(sku_sp or "").strip()
@@ -520,7 +531,7 @@ class ProductionService:
                 order_qty = float(quantity_planned)
                 raw_total = qty_needed_per_unit * order_qty
                
-                total_qty_needed = round(raw_total, 4) 
+                total_qty_needed = self._material_qty_float(raw_total)
 
                 workshop_stock_row = self.db.execute(text("""
                     SELECT quantity_on_hand
@@ -542,7 +553,7 @@ class ProductionService:
                     """), {"wid": source_central_wid, "mid": mat_id}).fetchone()
                     central_stock = float(central_stock_row[0]) if central_stock_row else 0.0
                     if central_stock < shortage:
-                        raise Exception(f"Kho tổng thiếu nguyên liệu ID {mat_id}. Cần thêm {round(shortage, 4)}, chỉ còn {central_stock}")
+                        raise Exception(f"Kho tổng thiếu nguyên liệu ID {mat_id}. Cần thêm {self._material_qty_float(shortage)}, chỉ còn {central_stock}")
 
                     self.db.execute(text("""
                         UPDATE inventory_stocks
@@ -835,7 +846,7 @@ class ProductionService:
         # Lấy dữ liệu
         data_sql = text(f"""
             SELECT po.id, po.code, w.name as warehouse_name, pv.variant_name as product_name,
-                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date, po.progress_data, po.warehouse_id,
+                   po.quantity_planned, po.quantity_finished, po.status, po.start_date, po.due_date, po.progress_data, po.warehouse_id, po.owner_central_id,
                    COALESCE(wc.brand_id, w.brand_id) as owner_brand_id
             FROM production_orders po
             JOIN warehouses w ON po.warehouse_id = w.id
@@ -875,7 +886,8 @@ class ProductionService:
                 "start_date": r[7], 
                 "due_date": r[8], 
                 "warehouse_id": r[10],
-                "owner_brand_id": int(r[11]) if r[11] is not None else None,
+                "owner_central_id": int(r[11]) if r[11] is not None else None,
+                "owner_brand_id": int(r[12]) if r[12] is not None else None,
                 "progress": progress_parsed 
             })
 
@@ -1168,6 +1180,7 @@ class ProductionService:
         limit: int = 50,
         search: Optional[str] = None,
         warehouse_id: Optional[int] = None,
+        owner_central_id: Optional[int] = None,
         start_date_from: Optional[date] = None,
         start_date_to: Optional[date] = None,
         due_date_from: Optional[date] = None,
@@ -1207,6 +1220,10 @@ class ProductionService:
         if warehouse_id is not None:
             conditions.append("po.warehouse_id = :warehouse_id")
             params["warehouse_id"] = warehouse_id
+
+        if owner_central_id is not None:
+            conditions.append("po.owner_central_id = :owner_central_id")
+            params["owner_central_id"] = owner_central_id
 
         if search:
             conditions.append("(po.code LIKE :search OR pv.sku LIKE :search OR pv.variant_name LIKE :search)")
@@ -1301,9 +1318,13 @@ class ProductionService:
                 )
             ).fetchall()
             for oid, size_label, qty_planned, qty_finished in size_rows:
+                parsed_size = self._parse_sku_size_label(size_label)
                 sizes_by_order[int(oid)].append(
                     {
-                        "size": size_label,
+                        # Trả về SKU SP đã tách tên để frontend filter/match theo mã chính xác.
+                        "size": parsed_size.get("size", "") or str(size_label or ""),
+                        "size_label": size_label,
+                        "sku_sp_name": parsed_size.get("sku_sp_name", ""),
                         "quantity": float(qty_planned or 0),
                         "finished": float(qty_finished or 0),
                     }
@@ -1340,7 +1361,7 @@ class ProductionService:
                     )
                 ).fetchall()
                 for oid, sku, name, qty, unit_cost, note in res_rows:
-                    qty_f = float(Decimal(str(qty or 0)).quantize(Decimal("0.0001")))
+                    qty_f = self._material_qty_float(qty)
                     unit = float(unit_cost or 0)
                     mats_by_order[int(oid)].append(
                         {
@@ -1379,7 +1400,9 @@ class ProductionService:
                 ).fetchall()
                 for oid, sku, name, per_unit, qty_planned, unit_cost, note in bom_rows:
                     total_needed = float(
-                        (Decimal(str(per_unit or 0)) * Decimal(str(qty_planned or 0))).quantize(Decimal("0.0001"))
+                        self._quantize_material_qty(
+                            Decimal(str(per_unit or 0)) * Decimal(str(qty_planned or 0))
+                        )
                     )
                     unit = float(unit_cost or 0)
                     mats_by_order[int(oid)].append(
@@ -1551,8 +1574,7 @@ class ProductionService:
             materials = self.db.execute(query_res, {"oid": order_id}).fetchall()
             
             for m in materials:
-                # Sửa dòng này: Thêm round(..., 4)
-                total_needed = round(float(m[2]), 4)
+                total_needed = self._material_qty_float(m[2])
                 if total_needed <= 0:
                     continue
                 
@@ -1802,11 +1824,11 @@ class ProductionService:
                                         raise Exception(f"Kho xưởng không đủ hàng mới! Cần {req_qty}, còn {stock_dec}")
                                     self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": consume_wid, "m": mat_id})
                                     self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": consume_wid, "m": mat_id, "q": -req_qty, "ref": order_id})
-                                if req_qty > 0:
-                                    self.db.execute(
-                                        text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"),
-                                        {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note},
-                                    )
+                                # Giữ dòng reservation kể cả qty=0 (NVL đi kèm chưa có định mức).
+                                self.db.execute(
+                                    text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"),
+                                    {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note},
+                                )
                         else: 
                             # Thêm mới
                             if not item.material_variant_id: continue
@@ -1843,11 +1865,11 @@ class ProductionService:
                                 self.db.execute(text("UPDATE inventory_stocks SET quantity_on_hand = quantity_on_hand - :q WHERE warehouse_id=:w AND product_variant_id=:m"), {"q": req_qty, "w": consume_wid, "m": mat_id})
                                 self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :m, 'production_out', :q, :ref, 'Thêm NVL mới')"), {"w": consume_wid, "m": mat_id, "q": -req_qty, "ref": order_id})
                             
-                            if req_qty > 0:
-                                self.db.execute(
-                                    text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"),
-                                    {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note},
-                                )
+                            # Giữ dòng reservation kể cả qty=0 (NVL đi kèm chưa có định mức).
+                            self.db.execute(
+                                text("INSERT INTO production_material_reservations (production_order_id, material_variant_id, quantity_reserved, note) VALUES (:oid, :mid, :qty, :note)"),
+                                {"oid": order_id, "mid": mat_id, "qty": req_qty, "note": item.note},
+                            )
 
                     # === TRƯỜNG HỢP B: ĐƠN NHÁP (DRAFT) -> Sửa bảng BOM ===
                     else:
@@ -2098,7 +2120,7 @@ class ProductionService:
                     "material_variant_id": r[1], 
                     "sku": r[2], 
                     "name": r[3], 
-                    "quantity": float(Decimal(str(r[4] or 0)).quantize(Decimal("0.0001"))), 
+                    "quantity": self._material_qty_float(r[4]),
                     "note": r[5], 
                     "unit_price": r[6] or 0
                 } for r in results
@@ -2124,7 +2146,9 @@ class ProductionService:
                     
                     # --- SỬA ĐOẠN NÀY: Dùng Decimal để nhân chính xác rồi mới làm tròn ---
                     "quantity": float(
-                        (Decimal(str(r[4])) * Decimal(str(qty_planned))).quantize(Decimal("0.0001"))
+                        self._quantize_material_qty(
+                            Decimal(str(r[4])) * Decimal(str(qty_planned))
+                        )
                     ),
                     # -------------------------------------------------------------------
                     

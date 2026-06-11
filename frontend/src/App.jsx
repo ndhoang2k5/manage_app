@@ -60,6 +60,7 @@ const App = () => {
   const [centralWarehouses, setCentralWarehouses] = useState([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
   const canViewReports = canViewModule(user, 'reports');
+  const inventoryCheckEnabled = String(import.meta.env.VITE_INVENTORY_CHECK_ENABLED || 'false').toLowerCase() === 'true';
 
   const { token: { colorBgContainer } } = theme.useToken();
 
@@ -110,7 +111,7 @@ const App = () => {
         }]
       : []),
     { key: '/', icon: <DatabaseOutlined />, label: <Link to="/">Kho Vật Tư</Link> },
-    ...(canViewModule(user, 'inventory-check')
+    ...(inventoryCheckEnabled && canViewModule(user, 'inventory-check')
       ? [{ key: '/inventory-check', icon: <DatabaseOutlined />, label: <Link to="/inventory-check">Kiểm tồn (Salework)</Link> }]
       : []),
     { key: '/warehouses', icon: <ShopOutlined />, label: <Link to="/warehouses">Kho & Xưởng</Link> },
@@ -181,7 +182,7 @@ const App = () => {
                 <Route path="/dashboard/:id" element={canViewReports ? <CentralDashboard /> : <Navigate to="/" replace />} />
                 <Route path="/workshop/:id" element={canViewReports ? <WorkshopDetail /> : <Navigate to="/" replace />} />
                 <Route path="/" element={<InventoryPage />} />
-                <Route path="/inventory-check" element={canViewModule(user, 'inventory-check') ? <InventoryCheckPage /> : <Navigate to="/" replace />} />
+                <Route path="/inventory-check" element={(inventoryCheckEnabled && canViewModule(user, 'inventory-check')) ? <InventoryCheckPage /> : <Navigate to="/" replace />} />
                 <Route path="/warehouses" element={<WarehousePage />} />
                 <Route path="/purchases" element={canViewModule(user, 'purchases') ? <PurchasePage /> : <Navigate to="/" replace />} />
                 <Route path="/production" element={canViewModule(user, 'production') ? <ProductionPage /> : <Navigate to="/" replace />} />

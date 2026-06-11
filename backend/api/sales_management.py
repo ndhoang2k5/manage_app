@@ -231,7 +231,7 @@ def export_sales_report(
 ):
     try:
         service = SalesManagementService(db)
-        rows = service.get_report_for_export(
+        rows = service.get_report_by_shop_for_export(
             run_id=run_id,
             time_start=time_start,
             time_end=time_end,
@@ -254,7 +254,7 @@ def export_sales_report(
             "Doanh so",
             "Ton kho hien tai",
             "Kenh",
-            "So shop",
+            "Shop",
             "Uu tien",
         ])
         for row in rows:
@@ -264,8 +264,8 @@ def export_sales_report(
                 row.get("sold_qty", 0),
                 row.get("sold_revenue", 0),
                 row.get("current_stock", 0),
-                ", ".join(row.get("channels", [])),
-                row.get("shops_count", 0),
+                row.get("channel", ""),
+                row.get("shop_id", ""),
                 "Yes" if row.get("is_priority") else "",
             ])
 

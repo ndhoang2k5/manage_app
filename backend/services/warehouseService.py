@@ -138,7 +138,7 @@ class WarehouseService:
                 vid = item.product_variant_id
                 
                 # Làm tròn số lượng cần chuyển (để tránh lỗi 49.200000001)
-                req_qty = round(float(item.quantity), 4)
+                req_qty = round(float(item.quantity), 5)
 
                 # A. Kiểm tra Kho Đi có đủ hàng không
                 stock_check = self.db.execute(text("""
@@ -147,7 +147,7 @@ class WarehouseService:
                 """), {"wid": data.from_warehouse_id, "vid": vid}).fetchone()
 
                 # Lấy tồn kho và làm tròn luôn
-                current_qty = round(float(stock_check[0]), 4) if stock_check else 0.0
+                current_qty = round(float(stock_check[0]), 5) if stock_check else 0.0
                 
                 # So sánh sau khi đã làm tròn
                 if current_qty < req_qty:

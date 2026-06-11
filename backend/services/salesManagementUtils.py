@@ -1,4 +1,34 @@
-from typing import Dict, List
+from typing import Dict, List, Tuple
+
+
+def filter_nested_runs(runs: List) -> List:
+    """Drop runs fully contained in another run to avoid double counting."""
+    if not runs or len(runs) <= 1:
+        return runs
+
+    parsed: List[Tuple] = []
+    for run in runs:
+        if len(run) >= 4:
+            rid, ts, te, payload = run[0], int(run[1]), int(run[2]), run[3]
+        else:
+            rid, payload = run[0], run[1]
+            ts, te = 0, 0
+        parsed.append((rid, ts, te, payload))
+
+    parsed.sort(key=lambda x: (x[2] - x[1]), reverse=True)
+    selected: List[Tuple] = []
+    for candidate in parsed:
+        if any(candidate[1] >= sts and candidate[2] <= ste for _, sts, ste, _ in selected):
+            continue
+        selected = [
+            kept
+            for kept in selected
+            if not (kept[1] >= candidate[1] and kept[2] <= candidate[2])
+        ]
+        selected.append(candidate)
+
+    selected.sort(key=lambda x: x[1])
+    return [(r[0], r[1], r[2], r[3]) for r in selected]
 
 
 def aggregate_sales_report(product_report: Dict) -> List[Dict]:
@@ -61,6 +91,62 @@ def aggregate_sales_report(product_report: Dict) -> List[Dict]:
         )
 
     results.sort(key=lambda x: (x["sold_qty"], x["sold_revenue"]), reverse=True)
+    return results
+
+
+def aggregate_sales_report_by_shop(product_report: Dict) -> List[Dict]:
+    """Normalize Salework product_report to rows per product + channel + shop."""
+    aggregate: Dict[tuple, Dict] = {}
+
+    if not isinstance(product_report, dict):
+        return []
+
+    for channel, shops in product_report.items():
+        if not isinstance(shops, list):
+            continue
+        channel_name = str(channel or "").strip()
+        for shop in shops:
+            if not isinstance(shop, dict):
+                continue
+            shop_id = str(shop.get("shopId", "")).strip()
+            products = shop.get("products", [])
+            if not isinstance(products, list):
+                continue
+            for product in products:
+                if not isinstance(product, dict):
+                    continue
+
+                raw_code = str(product.get("code", "")).strip()
+                if not raw_code:
+                    continue
+                code = raw_code.upper()
+
+                amount = float(product.get("amount") or 0)
+                revenue = float(product.get("revenue") or 0)
+                name = str(product.get("name") or "").strip()
+                key = (code, channel_name, shop_id)
+
+                row = aggregate.setdefault(
+                    key,
+                    {
+                        "code": code,
+                        "name": name,
+                        "channel": channel_name,
+                        "shop_id": shop_id,
+                        "sold_qty": 0.0,
+                        "sold_revenue": 0.0,
+                    },
+                )
+                if name and not row["name"]:
+                    row["name"] = name
+                row["sold_qty"] += amount
+                row["sold_revenue"] += revenue
+
+    results = list(aggregate.values())
+    results.sort(
+        key=lambda x: (x["sold_qty"], x["sold_revenue"], x["code"], x["channel"], x["shop_id"]),
+        reverse=True,
+    )
     return results
 
 

@@ -45,12 +45,20 @@ export default function OrderManagementPage() {
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
 
   const [search, setSearch] = useState('');
   const [warehouseId, setWarehouseId] = useState(undefined);
+  const [centralId, setCentralId] = useState(undefined);
   const [startRange, setStartRange] = useState(null);
   const [dueRange, setDueRange] = useState(null);
   const [includeCompleted, setIncludeCompleted] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     const loadWarehouses = async () => {
@@ -72,6 +80,7 @@ export default function OrderManagementPage() {
         limit,
         search: search || undefined,
         warehouse_id: warehouseId || undefined,
+        owner_central_id: centralId || undefined,
         include_completed: includeCompleted,
       };
 
@@ -95,7 +104,7 @@ export default function OrderManagementPage() {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, limit, warehouseId, includeCompleted]);
+  }, [page, limit, warehouseId, centralId, includeCompleted]);
 
   const columns = useMemo(() => {
     return [
@@ -330,9 +339,21 @@ export default function OrderManagementPage() {
       .map((w) => ({ value: w.id, label: w.name }));
   }, [warehouses]);
 
+  const centralOptions = useMemo(() => {
+    return (warehouses || [])
+      .filter((w) => w.type_name === 'Kho Tổng')
+      .map((w) => ({ value: w.id, label: w.name }));
+  }, [warehouses]);
+
+  const tableScrollY = Math.max(320, viewportHeight - 340);
+
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card title="Quản lý đơn (Sản xuất)" size="small">
+    <div style={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Card
+        title="Quản lý đơn (Sản xuất)"
+        size="small"
+        style={{ position: 'sticky', top: 0, zIndex: 20, flexShrink: 0 }}
+      >
         <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={8}>
             <Input.Search
@@ -361,6 +382,20 @@ export default function OrderManagementPage() {
             />
           </Col>
 
+          <Col xs={24} md={6}>
+            <Select
+              placeholder="Lọc theo kho tổng"
+              allowClear
+              style={{ width: '100%' }}
+              options={centralOptions}
+              value={centralId}
+              onChange={(v) => {
+                setPage(1);
+                setCentralId(v);
+              }}
+            />
+          </Col>
+
           <Col xs={24} md={5}>
             <RangePicker
               style={{ width: '100%' }}
@@ -372,7 +407,7 @@ export default function OrderManagementPage() {
             />
           </Col>
 
-          <Col xs={24} md={5}>
+          <Col xs={24} md={4}>
             <RangePicker
               style={{ width: '100%' }}
               placeholder={['Kết thúc từ', 'Kết thúc đến']}
@@ -392,7 +427,7 @@ export default function OrderManagementPage() {
         </Row>
       </Card>
 
-      <Card size="small" bodyStyle={{ padding: 0 }}>
+      <Card size="small" bodyStyle={{ padding: 0, height: '100%' }} style={{ flex: 1, overflow: 'hidden' }}>
         <Table
           rowKey="id"
           loading={loading}
@@ -408,11 +443,12 @@ export default function OrderManagementPage() {
               setLimit(ps);
             },
           }}
-          scroll={{ x: 2100 }}
+          scroll={{ x: 2100, y: tableScrollY }}
+          sticky
           size="small"
         />
       </Card>
-    </Space>
+    </div>
   );
 }
 

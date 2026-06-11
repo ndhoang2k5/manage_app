@@ -57,9 +57,12 @@ def update_material(material_id: int, request: MaterialUpdateRequest, db: Sessio
 @router.get("/materials/warehouse/{warehouse_id}")
 def get_materials_by_warehouse(
     warehouse_id: int,
+    include_warehouse_id: Optional[int] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("inventory")),
 ):
     service = ProductService(db)
     assert_warehouse_scope(user, db, warehouse_id)
-    return service.get_materials_by_warehouse(warehouse_id)
+    if include_warehouse_id is not None:
+        assert_warehouse_scope(user, db, include_warehouse_id)
+    return service.get_materials_by_warehouse(warehouse_id, include_warehouse_id=include_warehouse_id)

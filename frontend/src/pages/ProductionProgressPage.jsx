@@ -59,6 +59,7 @@ const ProductionProgressPage = () => {
     const [rows, setRows] = useState([]);
     const [page, setPage] = useState(1);
     const [limit, setLimit] = useState(20);
+    const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
     const [search, setSearch] = useState('');
     const [includeCompleted, setIncludeCompleted] = useState(false);
     const [warehouseId, setWarehouseId] = useState(undefined);
@@ -68,6 +69,13 @@ const ProductionProgressPage = () => {
     const [deadlineFilter, setDeadlineFilter] = useState('all');
     const [fulfillmentFilter, setFulfillmentFilter] = useState('all');
     const [startDateRange, setStartDateRange] = useState(null);
+    const [endDateRange, setEndDateRange] = useState(null);
+
+    useEffect(() => {
+        const onResize = () => setViewportHeight(window.innerHeight);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
 
     useEffect(() => {
         const loadWarehouses = async () => {
@@ -180,9 +188,18 @@ const ProductionProgressPage = () => {
                 if (to && startVal.isAfter(to)) return false;
             }
 
+            if (endDateRange && endDateRange.length === 2) {
+                const endVal = meta.endDeadline || (row?.due_date ? dayjs(row.due_date) : null);
+                if (!endVal || !endVal.isValid()) return false;
+                const from = endDateRange[0]?.startOf('day');
+                const to = endDateRange[1]?.endOf('day');
+                if (from && endVal.isBefore(from)) return false;
+                if (to && endVal.isAfter(to)) return false;
+            }
+
             return true;
         });
-    }, [rows, search, brandFilter, statusFilter, deadlineFilter, fulfillmentFilter, startDateRange]);
+    }, [rows, search, brandFilter, statusFilter, deadlineFilter, fulfillmentFilter, startDateRange, endDateRange]);
 
     const pagedRows = useMemo(() => {
         const start = (page - 1) * limit;
@@ -266,9 +283,11 @@ const ProductionProgressPage = () => {
         },
     ];
 
+    const tableScrollY = Math.max(320, viewportHeight - 330);
+
     return (
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            <Card title="Tiến trình sản xuất" size="small">
+        <div style={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Card title="Tiến trình sản xuất" size="small" style={{ position: 'sticky', top: 0, zIndex: 20, flexShrink: 0 }}>
                 <Space wrap>
                     <Input.Search
                         placeholder="Tìm nhãn/mã lệnh/SKU/tên sản phẩm"
@@ -298,6 +317,15 @@ const ProductionProgressPage = () => {
                             setStartDateRange(v);
                         }}
                         placeholder={['Bắt đầu từ ngày', 'Bắt đầu đến ngày']}
+                        style={{ width: 290 }}
+                    />
+                    <RangePicker
+                        value={endDateRange}
+                        onChange={(v) => {
+                            setPage(1);
+                            setEndDateRange(v);
+                        }}
+                        placeholder={['Kết thúc từ ngày', 'Kết thúc đến ngày']}
                         style={{ width: 290 }}
                     />
                     <Select
@@ -376,6 +404,7 @@ const ProductionProgressPage = () => {
                             setDeadlineFilter('all');
                             setFulfillmentFilter('all');
                             setStartDateRange(null);
+                            setEndDateRange(null);
                             setIncludeCompleted(false);
                         }}
                     >
@@ -384,14 +413,15 @@ const ProductionProgressPage = () => {
                 </Space>
             </Card>
 
-            <Card size="small" bodyStyle={{ padding: 0 }}>
+            <Card size="small" bodyStyle={{ padding: 0, height: '100%' }} style={{ flex: 1, overflow: 'hidden' }}>
                 <Table
                     rowKey="id"
                     loading={loading}
                     columns={columns}
                     dataSource={pagedRows}
                     size="small"
-                    scroll={{ x: 1750 }}
+                    scroll={{ x: 1750, y: tableScrollY }}
+                    sticky
                     pagination={{
                         current: page,
                         pageSize: limit,
@@ -405,7 +435,7 @@ const ProductionProgressPage = () => {
                     }}
                 />
             </Card>
-        </Space>
+        </div>
     );
 };
 
