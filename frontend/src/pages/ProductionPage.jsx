@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import dayjs from 'dayjs'; 
@@ -7,7 +7,7 @@ dayjs.extend(timezone);
 import { 
     Table, Card, Button, Modal, Form, Select, Input, AutoComplete, Popconfirm,
     InputNumber, DatePicker, Tag, message, Divider, Space, 
-    Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty, Spin, List
+    Checkbox, Statistic, Row, Col, Progress, Typography, Upload, Empty, Spin, List, Tabs
 } from 'antd';
 import { 
     PlusOutlined, DeleteOutlined, PlayCircleOutlined, 
@@ -30,6 +30,13 @@ const roundMaterialQty = (value) => {
     return Number(num.toFixed(MATERIAL_QTY_DECIMALS));
 };
 
+const PRODUCTION_BRAND_TABS = [
+    { key: 'unbee', label: 'Unbee', keywords: ['unbee'] },
+    { key: 'ranbee', label: 'Ranbee', keywords: ['ranbee'] },
+    { key: 'mathor', label: 'Mathor', keywords: ['mathor'] },
+    { key: 'himomi', label: 'Himomi', keywords: ['himomi'] },
+];
+
 const ProductionPage = () => {
     const inventoryCheckEnabled = String(import.meta.env.VITE_INVENTORY_CHECK_ENABLED || 'false').toLowerCase() === 'true';
     const user = getStoredUser();
@@ -45,9 +52,13 @@ const ProductionPage = () => {
     const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 });
     const [searchText, setSearchText] = useState('');
     const [filterWarehouse, setFilterWarehouse] = useState(null);
+    const [selectedBrandTab, setSelectedBrandTab] = useState(PRODUCTION_BRAND_TABS[0].key);
     const [statusFilter, setStatusFilter] = useState(null);
     const [completedTotal, setCompletedTotal] = useState(0);
     const [exportStartDateFrom, setExportStartDateFrom] = useState(null);
+    const [viewportHeight, setViewportHeight] = useState(
+        typeof window !== 'undefined' ? window.innerHeight : 900
+    );
 
     // 3. UI States
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -89,45 +100,112 @@ const ProductionPage = () => {
         ? canViewMaterialCostForBrand(user, selectedOwnerCentral.brand_id)
         : canViewMaterialCost(user);
 
+    const brandTabItems = useMemo(() => {
+        const centrals = warehouses.filter((w) => w.type_name === 'Kho Tổng');
+        return PRODUCTION_BRAND_TABS.map((tab) => {
+            const matched = centrals.find((w) => {
+                const name = String(w.name || '').toLowerCase();
+                return tab.keywords.some((kw) => name.includes(kw));
+            });
+            return {
+                key: tab.key,
+                label: tab.label,
+                centralId: matched?.id ?? null,
+            };
+        });
+    }, [warehouses]);
+
+    const selectedCentralId = useMemo(() => {
+        const current = brandTabItems.find((t) => t.key === selectedBrandTab);
+        return current?.centralId ?? null;
+    }, [brandTabItems, selectedBrandTab]);
+
+    const resolveCentralId = (warehousesList = warehouses, brandTab = selectedBrandTab) => {
+        const centrals = (warehousesList || []).filter((w) => w.type_name === 'Kho Tổng');
+        const tab = PRODUCTION_BRAND_TABS.find((t) => t.key === brandTab);
+        if (!tab) return undefined;
+        const matched = centrals.find((w) => {
+            const name = String(w.name || '').toLowerCase();
+            return tab.keywords.some((kw) => name.includes(kw));
+        });
+        return matched?.id || undefined;
+    };
+
     // --- HÀM LOAD DỮ LIỆU ---
-    const fetchData = async (page = 1, pageSize = 10, search = null, warehouse = null, status = null) => {
+    const fetchData = async (
+        page = 1,
+        pageSize = 10,
+        brandTab = selectedBrandTab,
+        workshopFilter = filterWarehouse,
+        search = searchText,
+        status = statusFilter
+    ) => {
         setLoading(true);
         try {
             const [prodRes, wareRes] = await Promise.all([
                 productApi.getAll(),
                 warehouseApi.getAllWarehouses()
             ]);
+            const warehouseList = Array.isArray(wareRes.data) ? wareRes.data : [];
             setProducts(Array.isArray(prodRes.data) ? prodRes.data : []);
-            setWarehouses(Array.isArray(wareRes.data) ? wareRes.data : []);
+            setWarehouses(warehouseList);
 
-            const params = {
-                page: page,
-                limit: pageSize,
+            const commonParams = {
                 search: search || undefined,
-                warehouse: warehouse || undefined,
-                status: status || undefined,
+                warehouse: workshopFilter || undefined,
             };
-            const res = await productionApi.getOrders(params);
+            Object.keys(commonParams).forEach((key) => {
+                if (commonParams[key] === undefined || commonParams[key] === null || commonParams[key] === '') {
+                    delete commonParams[key];
+                }
+            });
 
-            // Lấy tổng số đơn completed để hiển thị ô lọc nhanh "Đơn đã hoàn thành"
-            const completedRes = await productionApi.getOrders({
+            const centralId = resolveCentralId(warehouseList, brandTab);
+
+            const listParams = {
+                ...commonParams,
+                page,
+                limit: pageSize,
+            };
+            if (status === 'completed') {
+                listParams.status = 'completed';
+            } else {
+                listParams.exclude_completed = true;
+            }
+            if (centralId) {
+                listParams.owner_central_id = centralId;
+            }
+
+            const completedCountParams = {
+                ...commonParams,
                 page: 1,
                 limit: 1,
-                search: search || undefined,
-                warehouse: warehouse || undefined,
                 status: 'completed',
-            });
-            const completedCount = completedRes?.data?.total || 0;
-            setCompletedTotal(completedCount);
-            
-            if (res.data && Array.isArray(res.data.data)) {
-                setOrders(res.data.data);
-                setPagination({ current: page, pageSize: pageSize, total: res.data.total });
-            } else if (Array.isArray(res.data)) {
-                setOrders(res.data); // Fallback
-                setPagination({ current: 1, pageSize: 10, total: res.data.length });
+            };
+            if (centralId) {
+                completedCountParams.owner_central_id = centralId;
+            }
+
+            const [listRes, completedRes] = await Promise.all([
+                productionApi.getOrders(listParams),
+                productionApi.getOrders(completedCountParams),
+            ]);
+
+            setCompletedTotal(completedRes?.data?.total || 0);
+
+            if (listRes.data && Array.isArray(listRes.data.data)) {
+                setOrders(listRes.data.data);
+                setPagination({
+                    current: page,
+                    pageSize,
+                    total: listRes.data.total || 0,
+                });
+            } else if (Array.isArray(listRes.data)) {
+                setOrders(listRes.data);
+                setPagination({ current: 1, pageSize: 10, total: listRes.data.length });
             } else {
                 setOrders([]);
+                setPagination({ current: page, pageSize, total: 0 });
             }
         } catch (error) {
             console.error("Lỗi fetch data:", error);
@@ -161,6 +239,13 @@ const ProductionPage = () => {
 
     useEffect(() => {
         fetchData(1, 10);
+    }, []);
+
+    useEffect(() => {
+        const updateViewport = () => setViewportHeight(window.innerHeight);
+        updateViewport();
+        window.addEventListener('resize', updateViewport);
+        return () => window.removeEventListener('resize', updateViewport);
     }, []);
 
     const normalizeSkuSp = (value) => String(value || '').trim();
@@ -331,14 +416,31 @@ const ProductionPage = () => {
     };
     const onFormValuesChange = () => calculateCost();
 
+    const reloadOrders = () => {
+        fetchData(pagination.current, pagination.pageSize);
+    };
+
     // --- CÁC HÀM XỬ LÝ ---
-    const handleSearch = () => { fetchData(1, pagination.pageSize, searchText, filterWarehouse, statusFilter); };
-    const handleFilterWarehouse = (val) => { setFilterWarehouse(val); fetchData(1, pagination.pageSize, searchText, val, statusFilter); };
-    const handleTableChange = (newPagination) => { fetchData(newPagination.current, newPagination.pageSize, searchText, filterWarehouse, statusFilter); };
+    const handleSearch = (value) => {
+        const nextSearch = value ?? searchText;
+        setSearchText(nextSearch);
+        fetchData(1, pagination.pageSize, selectedBrandTab, filterWarehouse, nextSearch, statusFilter);
+    };
+    const handleFilterWarehouse = (val) => {
+        setFilterWarehouse(val);
+        fetchData(1, pagination.pageSize, selectedBrandTab, val, searchText, statusFilter);
+    };
+    const handleTableChange = (newPagination) => {
+        fetchData(newPagination.current, newPagination.pageSize);
+    };
     const handleToggleCompletedFilter = () => {
         const nextStatus = statusFilter === 'completed' ? null : 'completed';
         setStatusFilter(nextStatus);
-        fetchData(1, pagination.pageSize, searchText, filterWarehouse, nextStatus);
+        fetchData(1, pagination.pageSize, selectedBrandTab, filterWarehouse, searchText, nextStatus);
+    };
+    const handleBrandTabChange = (tabKey) => {
+        setSelectedBrandTab(tabKey);
+        fetchData(1, pagination.pageSize, tabKey, filterWarehouse, searchText, statusFilter);
     };
 
     const handleUpload = async ({ file, onSuccess, onError }) => {
@@ -421,7 +523,7 @@ const ProductionPage = () => {
             setIsOrderModalOpen(false);
             orderForm.resetFields();
             setFileList([]); setEstimatedCost(0);
-            fetchData(1, pagination.pageSize, searchText, filterWarehouse, statusFilter);
+            reloadOrders();
         } catch (error) {
             message.error("Lỗi: " + (error.response?.data?.detail || "Lỗi tạo lệnh"));
         }
@@ -800,15 +902,15 @@ const ProductionPage = () => {
             message.success("Cập nhật thành công!");
             setIsEditModalOpen(false);
             
-            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter);
+            reloadOrders();
         } catch (error) {
             console.error(error);
             message.error("Lỗi: " + (error.response?.data?.detail || "Không thể lưu"));
         }
     };
-    const handleDeleteOrder = async (id) => { if(window.confirm("CẢNH BÁO: Xóa đơn hàng sẽ HOÀN TRẢ nguyên liệu!")) { try { if (productionApi.deleteOrder) { await productionApi.deleteOrder(id); message.success("Đã xóa!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } else { message.error("Chưa cấu hình API xóa!"); } } catch (error) { message.error("Lỗi xóa: " + error.response?.data?.detail); } } }
-    const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Bắt đầu SX!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
-    const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt!"); fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
+    const handleDeleteOrder = async (id) => { if(window.confirm("CẢNH BÁO: Xóa đơn hàng sẽ HOÀN TRẢ nguyên liệu!")) { try { if (productionApi.deleteOrder) { await productionApi.deleteOrder(id); message.success("Đã xóa!"); reloadOrders(); } else { message.error("Chưa cấu hình API xóa!"); } } catch (error) { message.error("Lỗi xóa: " + error.response?.data?.detail); } } }
+    const handleStart = async (id) => { try { await productionApi.startOrder(id); message.success("Bắt đầu SX!"); reloadOrders(); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } };
+    const handleForceFinish = async (id) => { if(window.confirm("Kết thúc đơn?")) { try { await productionApi.forceFinish(id); message.success("Đã chốt!"); reloadOrders(); } catch (error) { message.error("Lỗi: " + error.response?.data?.detail); } } };
     const openReceiveModal = async (order) => {
         setCurrentOrder(order);
         try {
@@ -859,7 +961,7 @@ const ProductionPage = () => {
             await productionApi.receiveGoods(currentOrder.id, { items: itemsToReceive });
             message.success("Đã nhập kho!");
             setIsReceiveModalOpen(false);
-            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter);
+            reloadOrders();
         } catch (error) {
             message.error("Lỗi: " + (error.response?.data?.detail || error.message || 'unknown'));
         }
@@ -937,7 +1039,7 @@ const ProductionPage = () => {
             await productionApi.updateProgress(currentOrder.id, { steps: currentTodos });
             message.success("Đã cập nhật tiến độ!");
             setIsTodoModalOpen(false);
-            fetchData(pagination.current, pagination.pageSize, searchText, filterWarehouse, statusFilter); // Reload để cập nhật màu nút
+            reloadOrders(); // Reload để cập nhật màu nút
         } catch (error) {
             message.error("Lỗi lưu tiến độ");
         }
@@ -1141,12 +1243,19 @@ const ProductionPage = () => {
         }
     ];
 
+    const selectedBrandLabel = PRODUCTION_BRAND_TABS.find((t) => t.key === selectedBrandTab)?.label || '';
+    const tableScrollY = Math.max(220, viewportHeight - 500);
+    const isCompletedView = statusFilter === 'completed';
+
     return (
-        <div>
-            <Card title={<span>Quản Lý Sản Xuất <AccessModeBadge canManage={canManageProduction} label="Sản xuất" /></span>} bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)'}}
+        <div style={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Card
+                title={<span>Quản Lý Sản Xuất <AccessModeBadge canManage={canManageProduction} label="Sản xuất" /></span>}
+                bordered={false}
+                style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)', flexShrink: 0, position: 'sticky', top: 0, zIndex: 20 }}
                 extra={canManageProduction ? <Button type="primary" onClick={handleOpenCreateModal} size="large" icon={<PlusOutlined />}>Lên Kế Hoạch / Mẫu Mới</Button> : null}
             >
-                <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ marginBottom: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                     <Input.Search placeholder="Tìm theo Mã/Tên..." style={{ width: 300 }} value={searchText} onChange={e => setSearchText(e.target.value)} onSearch={handleSearch} enterButton allowClear />
                     <Select placeholder="Lọc theo Xưởng" style={{ width: 200 }} allowClear onChange={handleFilterWarehouse} value={filterWarehouse}>
                         {warehouses.filter(w => !w.is_central).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
@@ -1164,18 +1273,54 @@ const ProductionPage = () => {
                             </Button>
                         </>
                     )}
-                    <Tag color="blue">Tổng: {pagination.total} đơn</Tag>
+                    <Tag color="blue">
+                        {isCompletedView ? `Hoàn thành (${selectedBrandLabel}): ${pagination.total} đơn` : `Tổng: ${pagination.total} đơn`}
+                    </Tag>
                     <Tag
-                        color={statusFilter === 'completed' ? 'green' : 'default'}
+                        color={isCompletedView ? 'green' : 'default'}
                         style={{ cursor: 'pointer', userSelect: 'none' }}
                         onClick={handleToggleCompletedFilter}
                     >
-                        Đơn đã hoàn thành: {completedTotal}
+                        Đơn đã hoàn thành ({selectedBrandLabel}): {completedTotal}
                     </Tag>
                 </div>
-                {/* --- FIX LỖI "filteredOrders is not defined" --- */}
+                <Tabs
+                    activeKey={selectedBrandTab}
+                    onChange={handleBrandTabChange}
+                    items={brandTabItems.map((tab) => ({ key: tab.key, label: tab.label }))}
+                />
+                {!selectedCentralId && (
+                    <Tag color="warning" style={{ marginTop: 8 }}>
+                        Chưa tìm thấy kho tổng cho nhãn {selectedBrandLabel}
+                    </Tag>
+                )}
+            </Card>
+
+            <Card
+                size="small"
+                title={isCompletedView ? `Đơn đã hoàn thành (${selectedBrandLabel})` : `Đơn đang sản xuất (${selectedBrandLabel})`}
+                style={{ flex: 1, minHeight: 0 }}
+                bodyStyle={{ padding: 0 }}
+            >
                 {Array.isArray(orders) ? (
-                    <Table dataSource={orders} columns={orderColumns} rowKey="id" loading={loading} pagination={{ current: pagination.current, pageSize: pagination.pageSize, total: pagination.total, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }} onChange={handleTableChange} />
+                    <Table
+                        dataSource={orders}
+                        columns={orderColumns}
+                        rowKey="id"
+                        loading={loading}
+                        size="small"
+                        sticky
+                        scroll={{ y: tableScrollY }}
+                        pagination={{
+                            current: pagination.current,
+                            pageSize: pagination.pageSize,
+                            total: pagination.total,
+                            showSizeChanger: true,
+                            pageSizeOptions: ['10', '20', '50'],
+                            showTotal: (total) => `Tổng ${total} đơn`,
+                        }}
+                        onChange={handleTableChange}
+                    />
                 ) : (
                     <Empty />
                 )}
