@@ -30,6 +30,8 @@ def list_orders(
     search: Optional[str] = None, 
     warehouse: Optional[str] = None,
     status: Optional[str] = None,
+    owner_central_id: Optional[int] = None,
+    exclude_completed: bool = False,
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("production")) # 1. Bắt buộc đăng nhập + module
 ):
@@ -45,6 +47,8 @@ def list_orders(
         search,
         warehouse,
         status,
+        owner_central_id=owner_central_id,
+        exclude_completed=exclude_completed,
         allowed_warehouse_ids=allowed_ids,
         allowed_central_ids=allowed_central_ids,
     )

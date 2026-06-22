@@ -797,6 +797,8 @@ class ProductionService:
         search=None,
         warehouse_name=None,
         status=None,
+        owner_central_id: Optional[int] = None,
+        exclude_completed: bool = False,
         allowed_warehouse_ids: Optional[List[int]] = None,
         allowed_central_ids: Optional[List[int]] = None,
     ):
@@ -826,9 +828,14 @@ class ProductionService:
         if warehouse_name:
             conditions.append("w.name = :wname")
             params["wname"] = warehouse_name
+        if owner_central_id is not None:
+            conditions.append("po.owner_central_id = :owner_central_id")
+            params["owner_central_id"] = owner_central_id
         if status:
             conditions.append("po.status = :status")
             params["status"] = status
+        elif exclude_completed:
+            conditions.append("po.status != 'completed'")
         conditions.append("po.status != 'cancelled'")
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
@@ -854,7 +861,6 @@ class ProductionService:
             JOIN product_variants pv ON po.product_variant_id = pv.id 
             {where_clause}
             ORDER BY
-                CASE WHEN po.status = 'completed' THEN 1 ELSE 0 END ASC,
                 w.name ASC,
                 po.id DESC
             LIMIT :limit OFFSET :offset
