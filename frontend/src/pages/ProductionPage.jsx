@@ -311,6 +311,79 @@ const ProductionPage = () => {
         }
     };
 
+    const hasNplRowContent = (materialRow, parsedMeta = null) => {
+        const parsed = parsedMeta || parseNplNoteMeta(materialRow?.note || '');
+        const qty = Number(materialRow?.quantity || 0);
+        const cleanNote = String(parsed?.note || '').trim();
+        const hasMaterialSelected = Number(materialRow?.material_variant_id || 0) > 0;
+        return (
+            hasMaterialSelected
+            || qty > 0
+            || !!cleanNote
+            || parsed?.hasConsumptionRate
+            || parsed?.hasProductQuantity
+        );
+    };
+
+    const scoreNplMaterialRow = (materialRow, parsedMeta = null) => {
+        const parsed = parsedMeta || parseNplNoteMeta(materialRow?.note || '');
+        const qty = Number(materialRow?.quantity || 0);
+        const cleanNote = String(parsed?.note || '').trim();
+        let score = qty;
+        if (Number(materialRow?.material_variant_id || 0) > 0) score += 1000;
+        if (parsed?.hasConsumptionRate) score += 100;
+        if (parsed?.hasProductQuantity) score += 50;
+        if (cleanNote) score += 10;
+        return score;
+    };
+
+    const dedupeMaterialsByRowIndex = (materials = []) => {
+        const byIndex = new Map();
+        const legacy = [];
+        (materials || []).forEach((row) => {
+            const parsed = parseNplNoteMeta(row?.note || '');
+            if (!hasNplRowContent(row, parsed)) return;
+            const idx = parsed?.rowIndex;
+            if (!Number.isInteger(idx) || idx < 0) {
+                legacy.push({ row, parsed });
+                return;
+            }
+            const prev = byIndex.get(idx);
+            if (!prev || scoreNplMaterialRow(row, parsed) > scoreNplMaterialRow(prev.row, prev.parsed)) {
+                byIndex.set(idx, { row, parsed });
+            }
+        });
+        const maxIndexed = byIndex.size ? Math.max(...byIndex.keys()) + 1 : 0;
+        const rowCount = Math.max(maxIndexed, legacy.length, 1);
+        const aligned = Array.from({ length: rowCount }, (_, idx) => byIndex.get(idx) || null);
+        legacy.forEach((packed) => {
+            const emptyIdx = aligned.findIndex((slot) => !slot);
+            if (emptyIdx >= 0) aligned[emptyIdx] = packed;
+        });
+        return aligned;
+    };
+
+    const getEditMaterialRowCount = (sizes = [], materials = []) => {
+        let maxIdx = 0;
+        (materials || []).forEach((m) => {
+            const parsed = parseNplNoteMeta(m?.note || '');
+            if (!hasNplRowContent(m, parsed)) return;
+            if (Number.isInteger(parsed?.rowIndex) && parsed.rowIndex >= 0) {
+                maxIdx = Math.max(maxIdx, parsed.rowIndex + 1);
+            } else {
+                maxIdx += 1;
+            }
+        });
+        (sizes || []).forEach((s, idx) => {
+            const hasSizeContent = !!normalizeSkuSp(s?.sku_sp)
+                || !!String(s?.sku_sp_name || '').trim()
+                || !!String(s?.note || '').trim()
+                || Number(s?.quantity || 0) > 0;
+            if (hasSizeContent) maxIdx = Math.max(maxIdx, idx + 1);
+        });
+        return Math.max(maxIdx, 1);
+    };
+
     const buildNplNoteWithMeta = ({ note, consumptionRate, productQuantity, includeMeta, rowIndex }) => {
         const cleanNote = String(note || '').trim();
         const metaObj = { rowIndex: Number(rowIndex ?? -1) };
@@ -612,72 +685,20 @@ const ProductionPage = () => {
                 })),
                 edit_material_rows: isNewOrderMode
                     ? (() => {
-                        const materialRowsWithContent = (materials || []).filter((m) => {
-                            const parsed = parseNplNoteMeta(m.note || '');
-                            const qty = Number(m?.quantity || 0);
-                            const cleanNote = String(parsed?.note || '').trim();
-                            const hasMaterialSelected = Number(m?.material_variant_id || 0) > 0;
-                            const hasMetaValue = (
-                                parsed?.consumptionRate !== undefined
-                                || parsed?.productQuantity !== undefined
-                                || parsed?.rowIndex !== undefined
-                            );
-                            return hasMaterialSelected || qty > 0 || !!cleanNote || hasMetaValue;
-                        }).length;
-                        const rowCount = Math.max(normalizedSizes.length, materialRowsWithContent, 1);
-                        const alignedMaterials = Array.from({ length: rowCount }, () => null);
-                        const fallbackMaterials = [];
-                        (materials || []).forEach((m) => {
-                            const parsed = parseNplNoteMeta(m.note || '');
-                            const parsedRowIndex = parsed?.rowIndex;
-                            const hasIndexedRow = Number.isInteger(parsedRowIndex) && parsedRowIndex >= 0;
-                            const idx = hasIndexedRow ? parsedRowIndex : -1;
-                            const currentPacked = { row: m, parsed };
-                            const qty = Number(m?.quantity || 0);
-                            const cleanNote = String(parsed?.note || '').trim();
-                            const hasMaterialSelected = Number(m?.material_variant_id || 0) > 0;
-                            const hasFallbackContent = (
-                                hasMaterialSelected
-                                || qty > 0
-                                || !!cleanNote
-                                || parsed?.consumptionRate !== undefined
-                                || parsed?.productQuantity !== undefined
-                                || parsed?.rowIndex !== undefined
-                            );
-
-                            if (hasIndexedRow && idx < rowCount) {
-                                const prev = alignedMaterials[idx];
-                                if (!prev) {
-                                    alignedMaterials[idx] = currentPacked;
-                                    return;
-                                }
-                                const prevQty = Number(prev?.row?.quantity || 0);
-                                const prevNote = String(prev?.parsed?.note || '').trim();
-                                // Nếu trùng rowIndex, ưu tiên bản ghi có dữ liệu thực (qty/note) để tránh bám nhầm dòng rỗng cũ.
-                                if ((prevQty <= 0 && qty > 0) || (!prevNote && cleanNote)) {
-                                    alignedMaterials[idx] = currentPacked;
-                                }
-                            } else {
-                                // Chỉ dùng fallback cho dòng thực sự có dữ liệu; bỏ qua dòng rỗng cũ để tránh "nhảy" khi reopen.
-                                if (hasFallbackContent) {
-                                    fallbackMaterials.push(currentPacked);
-                                }
-                            }
-                        });
-                        for (let i = 0; i < rowCount; i += 1) {
-                            if (alignedMaterials[i]) continue;
-                            alignedMaterials[i] = fallbackMaterials.shift() || null;
-                        }
+                        const dedupedMaterials = dedupeMaterialsByRowIndex(materials);
+                        const rowCount = getEditMaterialRowCount(normalizedSizes, materials);
                         return Array.from({ length: rowCount }, (_, idx) => {
-                            const packed = alignedMaterials[idx] || {};
+                            const packed = dedupedMaterials[idx] || {};
                             const m = packed.row || {};
                             const parsedNpl = packed.parsed || parseNplNoteMeta(m.note || '');
                             const sizeByIndex = normalizedSizes[idx] || { sku_sp: '', sku_sp_name: '', quantity: 0, note: '' };
+                            const rowSku = normalizeSkuSp(sizeByIndex.sku_sp);
                             const totalNeeded = Number(m.quantity || 0);
-                            const fallbackQty = Number(sizeByIndex.quantity || 0);
-                            const baseQty = sizeByIndex.sku_sp
-                                ? fallbackQty
-                                : Number(parsedNpl.productQuantity ?? fallbackQty);
+                            const baseQty = rowSku
+                                ? Number(sizeByIndex.quantity || 0)
+                                : (parsedNpl.hasProductQuantity
+                                    ? Number(parsedNpl.productQuantity || 0)
+                                    : 0);
                             const consumption = parsedNpl.hasConsumptionRate
                                 ? Number(parsedNpl.consumptionRate || 0)
                                 : (baseQty > 0 && totalNeeded > 0
@@ -686,9 +707,9 @@ const ProductionPage = () => {
                             return {
                                 id: m.id || null,
                                 material_variant_id: m.material_variant_id || null,
-                                sku_sp: sizeByIndex.sku_sp || '',
-                                sku_sp_name: sizeByIndex.sku_sp_name || '',
-                                sku_sp_note: sizeByIndex.note || '',
+                                sku_sp: rowSku,
+                                sku_sp_name: rowSku ? String(sizeByIndex.sku_sp_name || '').trim() : '',
+                                sku_sp_note: rowSku ? String(sizeByIndex.note || '').trim() : '',
                                 npl_note: parsedNpl.note || '',
                                 consumption_rate: Number(consumption || 0),
                                 product_quantity: Number(baseQty || 0),
@@ -746,15 +767,12 @@ const ProductionPage = () => {
                 }
                 cleanSizes = skuPlan.lines.map((line) => {
                     const srcIdx = Number(line.line_no ?? 0);
-                    const formSizeRow = values?.sizes?.[srcIdx];
                     const cachedSizeRow = editSizeRows?.[srcIdx];
                     return {
-                        id: formSizeRow?.id
-                            ? parseInt(formSizeRow.id)
-                            : (cachedSizeRow?.id ? parseInt(cachedSizeRow.id) : null),
+                        id: cachedSizeRow?.id ? parseInt(cachedSizeRow.id) : null,
                         size: buildSkuSizeLabel(line.sku_sp, line.sku_sp_name),
                         quantity: parseInt(Number(line.quantity || 0)),
-                        note: line.sku_sp_note || "",
+                        note: line.sku_sp_note || '',
                     };
                 });
 
@@ -838,13 +856,9 @@ const ProductionPage = () => {
                     if (!oldId || submittedIds.has(oldId)) return;
                     cleanMaterials.push({
                         id: oldId,
-                        material_variant_id: Number(oldRow.material_variant_id || 0),
+                        material_variant_id: null,
                         quantity: 0,
-                        note: buildNplNoteWithMeta({
-                            note: '',
-                            includeMeta: false,
-                            rowIndex: Number(oldRow?.rowIndex ?? -1),
-                        }),
+                        note: '',
                     });
                 });
             } else {
@@ -1635,7 +1649,26 @@ const ProductionPage = () => {
                                                             <Form.Item {...restField} name={[name, 'id']} hidden>
                                                                 <Input />
                                                             </Form.Item>
-                                                            <Form.Item {...restField} name={[name, 'material_variant_id']} rules={[{ required: true, message: 'Chọn NVL' }]} style={{ marginBottom: 0 }}>
+                                                            <Form.Item
+                                                                {...restField}
+                                                                name={[name, 'material_variant_id']}
+                                                                rules={[{
+                                                                    validator: (_, value) => {
+                                                                        const row = editForm.getFieldValue(['edit_material_rows', name]) || {};
+                                                                        const hasOther = normalizeSkuSp(row?.sku_sp)
+                                                                            || String(row?.sku_sp_name || '').trim()
+                                                                            || String(row?.sku_sp_note || '').trim()
+                                                                            || String(row?.npl_note || '').trim()
+                                                                            || Number(row?.consumption_rate || 0) > 0
+                                                                            || Number(row?.product_quantity || 0) > 0;
+                                                                        if (hasOther && !value) {
+                                                                            return Promise.reject(new Error('Chọn NVL'));
+                                                                        }
+                                                                        return Promise.resolve();
+                                                                    },
+                                                                }]}
+                                                                style={{ marginBottom: 0 }}
+                                                            >
                                                                 <Select placeholder="Chọn NVL..." showSearch filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}>
                                                                     {warehouseMaterials.map(p => (
                                                                         <Select.Option key={p.id} value={p.id} label={`${p.sku} ${p.variant_name}`}>
