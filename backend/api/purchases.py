@@ -151,3 +151,35 @@ def delete_purchase_order(
         raise e
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
+
+# 6. Xóa 1 dòng nguyên liệu trong phiếu (hoàn tác kho) — chỉ user có quyền kho của phiếu
+@router.delete("/purchases/{po_id}/items/{item_id}")
+def delete_purchase_order_item(
+    po_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("purchases", require_manage=True)),
+):
+    service = PurchaseService(db)
+    try:
+        scope_row = db.execute(
+            text(
+                """
+                SELECT po.warehouse_id, w.brand_id
+                FROM purchase_orders po
+                JOIN warehouses w ON w.id = po.warehouse_id
+                WHERE po.id = :id
+                """
+            ),
+            {"id": po_id},
+        ).fetchone()
+        if not scope_row:
+            raise Exception("Phiếu nhập không tồn tại")
+        wid, brand_id = int(scope_row[0]), int(scope_row[1])
+        assert_warehouse_scope(user, db, wid)
+        assert_material_cost_brand_scope(user, db, brand_id)
+        return service.delete_purchase_order_item(po_id, item_id)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
