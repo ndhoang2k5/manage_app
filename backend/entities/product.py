@@ -34,6 +34,7 @@ class MaterialGroupCreateRequest(BaseModel):
 class MaterialUpdateRequest(BaseModel):
     sku: str
     name: str
+    variant_name: Optional[str] = None
     unit: str
     attributes: Optional[str] = ""
     note: Optional[str] = ""
