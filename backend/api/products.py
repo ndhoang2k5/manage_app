@@ -53,6 +53,14 @@ def update_material(material_id: int, request: MaterialUpdateRequest, db: Sessio
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 
+@router.delete("/materials/{material_id}")
+def delete_material(material_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = ProductService(db)
+    try:
+        return service.delete_material(material_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
+
 # 6. API Lấy danh sách NVL theo kho
 @router.get("/materials/warehouse/{warehouse_id}")
 def get_materials_by_warehouse(
