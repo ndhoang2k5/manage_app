@@ -15,9 +15,123 @@ from entities.sales_management import (
     ProductPlanning4WRequest,
 )
 from services.salesManagementService import SalesManagementService
+from services.householdSalesService import HouseholdSalesService
 from drivers.error_messages import humanize_error
 
 router = APIRouter()
+
+
+@router.get("/sales-management/households")
+def list_sales_households(
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    return {"status": "success", "data": HouseholdSalesService.list_households()}
+
+
+@router.get("/sales-management/household/report")
+def get_household_sales_report(
+    household_key: str = Query(...),
+    time_start: int = Query(...),
+    time_end: int = Query(...),
+    keyword: Optional[str] = Query(None),
+    min_qty: float = Query(0),
+    min_revenue: float = Query(0),
+    page: int = Query(1),
+    page_size: int = Query(50),
+    sort_by: str = Query("sold_qty"),
+    sort_dir: str = Query("desc"),
+    top_n: int = Query(0),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    try:
+        data = HouseholdSalesService(db).get_report(
+            household_key=household_key,
+            time_start=time_start,
+            time_end=time_end,
+            keyword=keyword,
+            min_qty=min_qty,
+            min_revenue=min_revenue,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            top_n=top_n,
+        )
+        return {"status": "success", "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
+
+
+@router.get("/sales-management/household/export")
+def export_household_sales_report(
+    household_key: str = Query(...),
+    time_start: int = Query(...),
+    time_end: int = Query(...),
+    keyword: Optional[str] = Query(None),
+    min_qty: float = Query(0),
+    min_revenue: float = Query(0),
+    sort_by: str = Query("sold_qty"),
+    sort_dir: str = Query("desc"),
+    top_n: int = Query(0),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    try:
+        data = HouseholdSalesService(db).get_report(
+            household_key=household_key,
+            time_start=time_start,
+            time_end=time_end,
+            keyword=keyword,
+            min_qty=min_qty,
+            min_revenue=min_revenue,
+            page=1,
+            page_size=5000,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            top_n=top_n,
+        )
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "household_sales"
+        ws.append([
+            "Ma SP",
+            "Ten san pham",
+            "SL ban",
+            "Doanh so",
+            "Ton kho hien tai",
+            "Kenh",
+            "Shop",
+            "Shop ID",
+            "Nguon Salework",
+        ])
+        for row in data.get("items") or []:
+            shops = row.get("shops") or []
+            ws.append([
+                row.get("code", ""),
+                row.get("name", ""),
+                row.get("sold_qty", 0),
+                row.get("sold_revenue", 0),
+                row.get("current_stock", 0),
+                ", ".join(row.get("channels") or []),
+                ", ".join(sorted({str(s.get("shop_name") or "") for s in shops if s.get("shop_name")})),
+                ", ".join(sorted({str(s.get("shop_id") or "") for s in shops if s.get("shop_id")})),
+                ", ".join(sorted({str(s.get("brand_key") or "") for s in shops if s.get("brand_key")})),
+            ])
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="sales_household_{household_key}_{time_start}_{time_end}.xlsx"'
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
 
 
 @router.post("/sales-management/fetch")
@@ -27,7 +141,7 @@ def fetch_sales_report(
     user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=req.brand_key)
         result = service.fetch_and_store(
             time_start=req.time_start,
             time_end=req.time_end,
@@ -41,6 +155,7 @@ def fetch_sales_report(
 
 @router.get("/sales-management/report")
 def get_sales_report(
+    brand_key: str = Query("unbee"),
     run_id: Optional[int] = None,
     time_start: Optional[int] = Query(None),
     time_end: Optional[int] = Query(None),
@@ -52,11 +167,12 @@ def get_sales_report(
     page_size: int = Query(50),
     sort_by: str = Query("sold_qty"),
     sort_dir: str = Query("desc"),
+    top_n: int = Query(0),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         result = service.get_report(
             run_id=run_id,
             time_start=time_start,
@@ -69,6 +185,7 @@ def get_sales_report(
             page_size=page_size,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            top_n=top_n,
         )
         return {"status": "success", "data": result}
     except Exception as exc:
@@ -77,11 +194,12 @@ def get_sales_report(
 
 @router.get("/sales-management/sync-status")
 def get_sync_status(
+    brand_key: str = Query("unbee"),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         data = service.get_sync_status()
         return {"status": "success", "data": data}
     except Exception as exc:
@@ -90,11 +208,12 @@ def get_sync_status(
 
 @router.post("/sales-management/sync-now")
 def sync_now(
+    brand_key: str = Query("unbee"),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         result = service.sync_now(user=user)
         return {"status": "success", "data": result}
     except Exception as exc:
@@ -103,11 +222,12 @@ def sync_now(
 
 @router.post("/sales-management/sync-stock")
 def sync_stock(
+    brand_key: str = Query("unbee"),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         result = service.sync_product_stock()
         return {"status": "success", "data": result}
     except Exception as exc:
@@ -121,7 +241,7 @@ def backfill_history(
     user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=req.brand_key)
         result = service.backfill_history(
             user=user,
             time_start=req.time_start,
@@ -136,11 +256,12 @@ def backfill_history(
 
 @router.get("/sales-management/priority-codes")
 def get_priority_codes(
+    brand_key: str = Query("unbee"),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         data = service.get_priority_codes()
         return {"status": "success", "data": data}
     except Exception as exc:
@@ -149,13 +270,14 @@ def get_priority_codes(
 
 @router.get("/sales-management/product-codes/search")
 def search_product_codes(
+    brand_key: str = Query("unbee"),
     keyword: Optional[str] = Query(None),
     limit: int = Query(30),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         data = service.search_product_codes(keyword=keyword, limit=limit)
         return {"status": "success", "data": data}
     except Exception as exc:
@@ -202,7 +324,7 @@ def upsert_priority_codes(
     user: dict = Depends(require_module_access("sales-management", require_manage=True)),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=req.brand_key)
         result = service.save_priority_codes(
             codes=req.codes,
             user=user,
@@ -216,6 +338,7 @@ def upsert_priority_codes(
 
 @router.get("/sales-management/export")
 def export_sales_report(
+    brand_key: str = Query("unbee"),
     run_id: Optional[int] = None,
     time_start: Optional[int] = Query(None),
     time_end: Optional[int] = Query(None),
@@ -230,7 +353,7 @@ def export_sales_report(
     user: dict = Depends(require_module_access("sales-management")),
 ):
     try:
-        service = SalesManagementService(db)
+        service = SalesManagementService(db, brand_key=brand_key)
         rows = service.get_report_by_shop_for_export(
             run_id=run_id,
             time_start=time_start,

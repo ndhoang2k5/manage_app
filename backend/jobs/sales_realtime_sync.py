@@ -10,14 +10,15 @@ _worker_started = False
 
 def _sync_worker_loop(interval_seconds: int) -> None:
     while True:
-        db = SessionLocal()
-        try:
-            service = SalesManagementService(db)
-            service.sync_now(user={"id": 0})
-        except Exception as exc:
-            print(f"[sales-realtime-sync] sync failed: {exc}")
-        finally:
-            db.close()
+        for brand_key in ("unbee", "himomi", "ranbee"):
+            db = SessionLocal()
+            try:
+                service = SalesManagementService(db, brand_key=brand_key)
+                service.sync_now(user={"id": 0})
+            except Exception as exc:
+                print(f"[sales-realtime-sync] sync failed brand={brand_key}: {exc}")
+            finally:
+                db.close()
         time.sleep(interval_seconds)
 
 

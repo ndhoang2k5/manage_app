@@ -9,23 +9,24 @@ import {
 
 
 
-// Import Pages
-import InventoryPage from './pages/InventoryPage';
-import InventoryCheckPage from './pages/InventoryCheckPage';
-import PurchasePage from './pages/PurchasePage';
-import ProductionPage from './pages/ProductionPage';
-import ProductionProgressPage from './pages/ProductionProgressPage';
-import WarehousePage from './pages/WarehousePage';
-import CentralDashboard from './pages/CentralDashboard';
-import WorkshopDetail from './pages/WorkshopDetail';
 import LoginPage from './pages/LoginPage';
 import warehouseApi from './api/warehouseApi';
-import DraftPage from './pages/DraftPage';
-import SalesManagementPage from './pages/SalesManagementPage';
-import AccountManagementPage from './pages/AccountManagementPage';
-import OrderManagementPage from './pages/OrderManagementPage';
-import ProductPlanningPage from './pages/ProductPlanningPage';
 import { canViewModule } from './utils/permissions';
+
+// Tách bundle theo route để lần mở đầu không phải tải toàn bộ màn hình nghiệp vụ.
+const InventoryPage = React.lazy(() => import('./pages/InventoryPage'));
+const InventoryCheckPage = React.lazy(() => import('./pages/InventoryCheckPage'));
+const PurchasePage = React.lazy(() => import('./pages/PurchasePage'));
+const ProductionPage = React.lazy(() => import('./pages/ProductionPage'));
+const ProductionProgressPage = React.lazy(() => import('./pages/ProductionProgressPage'));
+const WarehousePage = React.lazy(() => import('./pages/WarehousePage'));
+const CentralDashboard = React.lazy(() => import('./pages/CentralDashboard'));
+const WorkshopDetail = React.lazy(() => import('./pages/WorkshopDetail'));
+const DraftPage = React.lazy(() => import('./pages/DraftPage'));
+const SalesManagementPage = React.lazy(() => import('./pages/SalesManagementPage'));
+const AccountManagementPage = React.lazy(() => import('./pages/AccountManagementPage'));
+const OrderManagementPage = React.lazy(() => import('./pages/OrderManagementPage'));
+const ProductPlanningPage = React.lazy(() => import('./pages/ProductPlanningPage'));
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -177,22 +178,24 @@ const App = () => {
 
           <Content style={{ margin: '24px 16px', overflow: 'initial' }}>
             <div style={{ padding: 24, minHeight: '80vh' }}>
-              <Routes>
-                <Route path="/login" element={<Navigate to="/" replace />} />
-                <Route path="/dashboard/:id" element={canViewReports ? <CentralDashboard /> : <Navigate to="/" replace />} />
-                <Route path="/workshop/:id" element={canViewReports ? <WorkshopDetail /> : <Navigate to="/" replace />} />
-                <Route path="/" element={<InventoryPage />} />
-                <Route path="/inventory-check" element={(inventoryCheckEnabled && canViewModule(user, 'inventory-check')) ? <InventoryCheckPage /> : <Navigate to="/" replace />} />
-                <Route path="/warehouses" element={<WarehousePage />} />
-                <Route path="/purchases" element={canViewModule(user, 'purchases') ? <PurchasePage /> : <Navigate to="/" replace />} />
-                <Route path="/production" element={canViewModule(user, 'production') ? <ProductionPage /> : <Navigate to="/" replace />} />
-                <Route path="/production-progress" element={canViewModule(user, 'production') ? <ProductionProgressPage /> : <Navigate to="/" replace />} />
-                <Route path="/order-management" element={canViewModule(user, 'order-management') ? <OrderManagementPage /> : <Navigate to="/" replace />} />
-                <Route path="/drafts" element={canViewModule(user, 'drafts') ? <DraftPage /> : <Navigate to="/" replace />} />
-                <Route path="/sales-management" element={canViewModule(user, 'sales-management') ? <SalesManagementPage /> : <Navigate to="/" replace />} />
-                <Route path="/product-planning" element={canViewModule(user, 'fabric-planning') ? <ProductPlanningPage /> : <Navigate to="/" replace />} />
-                <Route path="/accounts" element={user.role === 'admin' ? <AccountManagementPage /> : <Navigate to="/" replace />} />
-              </Routes>
+              <React.Suspense fallback={<div style={{ textAlign: 'center', padding: 48 }}><Spin size="large" /></div>}>
+                <Routes>
+                  <Route path="/login" element={<Navigate to="/" replace />} />
+                  <Route path="/dashboard/:id" element={canViewReports ? <CentralDashboard /> : <Navigate to="/" replace />} />
+                  <Route path="/workshop/:id" element={canViewReports ? <WorkshopDetail /> : <Navigate to="/" replace />} />
+                  <Route path="/" element={<InventoryPage />} />
+                  <Route path="/inventory-check" element={(inventoryCheckEnabled && canViewModule(user, 'inventory-check')) ? <InventoryCheckPage /> : <Navigate to="/" replace />} />
+                  <Route path="/warehouses" element={<WarehousePage />} />
+                  <Route path="/purchases" element={canViewModule(user, 'purchases') ? <PurchasePage /> : <Navigate to="/" replace />} />
+                  <Route path="/production" element={canViewModule(user, 'production') ? <ProductionPage /> : <Navigate to="/" replace />} />
+                  <Route path="/production-progress" element={canViewModule(user, 'production') ? <ProductionProgressPage /> : <Navigate to="/" replace />} />
+                  <Route path="/order-management" element={canViewModule(user, 'order-management') ? <OrderManagementPage /> : <Navigate to="/" replace />} />
+                  <Route path="/drafts" element={canViewModule(user, 'drafts') ? <DraftPage /> : <Navigate to="/" replace />} />
+                  <Route path="/sales-management" element={canViewModule(user, 'sales-management') ? <SalesManagementPage /> : <Navigate to="/" replace />} />
+                  <Route path="/product-planning" element={canViewModule(user, 'fabric-planning') ? <ProductPlanningPage /> : <Navigate to="/" replace />} />
+                  <Route path="/accounts" element={user.role === 'admin' ? <AccountManagementPage /> : <Navigate to="/" replace />} />
+                </Routes>
+              </React.Suspense>
             </div>
           </Content>
         </Layout>

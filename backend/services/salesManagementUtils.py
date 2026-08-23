@@ -2,7 +2,10 @@ from typing import Dict, List, Tuple
 
 
 def filter_nested_runs(runs: List) -> List:
-    """Drop runs fully contained in another run to avoid double counting."""
+    """Drop runs fully contained in another run to avoid double counting.
+
+    Complexity is O(n log n) via interval sweep instead of nested scans.
+    """
     if not runs or len(runs) <= 1:
         return runs
 
@@ -10,22 +13,24 @@ def filter_nested_runs(runs: List) -> List:
     for run in runs:
         if len(run) >= 4:
             rid, ts, te, payload = run[0], int(run[1]), int(run[2]), run[3]
+        elif len(run) >= 3:
+            rid, ts, te = run[0], int(run[1]), int(run[2])
+            payload = run[3] if len(run) > 3 else None
         else:
-            rid, payload = run[0], run[1]
+            rid, payload = run[0], run[1] if len(run) > 1 else None
             ts, te = 0, 0
         parsed.append((rid, ts, te, payload))
 
-    parsed.sort(key=lambda x: (x[2] - x[1]), reverse=True)
+    # Start ASC, end DESC => wider parents appear before nested children.
+    parsed.sort(key=lambda x: (x[1], -x[2], x[0]))
     selected: List[Tuple] = []
+    max_end = None
     for candidate in parsed:
-        if any(candidate[1] >= sts and candidate[2] <= ste for _, sts, ste, _ in selected):
+        _, _, te, _ = candidate
+        if max_end is not None and te <= max_end:
             continue
-        selected = [
-            kept
-            for kept in selected
-            if not (kept[1] >= candidate[1] and kept[2] <= candidate[2])
-        ]
         selected.append(candidate)
+        max_end = te if max_end is None else max(max_end, te)
 
     selected.sort(key=lambda x: x[1])
     return [(r[0], r[1], r[2], r[3]) for r in selected]
