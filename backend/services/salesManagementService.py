@@ -14,6 +14,7 @@ from services.salesManagementUtils import (
     aggregate_product_stock,
     filter_nested_runs,
 )
+from services.salesManagementShops import get_shop_options, normalize_shop_id
 
 
 class SalesManagementService:
@@ -143,7 +144,46 @@ class SalesManagementService:
                 """
             )
         )
+        self._ensure_shop_tables()
         self.db.commit()
+
+    def _ensure_shop_tables(self) -> None:
+        """Per-shop split of the sales report (needed for the shop filter)."""
+        self.db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS sales_report_shop_items (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    run_id INT NOT NULL,
+                    code VARCHAR(128) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    channel VARCHAR(64) NOT NULL DEFAULT '',
+                    shop_id VARCHAR(128) NOT NULL DEFAULT '',
+                    sold_qty DECIMAL(18, 4) NOT NULL DEFAULT 0,
+                    sold_revenue DECIMAL(18, 2) NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_sales_shop_items_run_shop_code (run_id, shop_id, code),
+                    INDEX idx_sales_shop_items_shop_code (shop_id, code),
+                    CONSTRAINT fk_sales_shop_items_run
+                        FOREIGN KEY (run_id) REFERENCES sales_report_runs(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+        )
+        self.db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS sales_report_shop_built (
+                    run_id INT PRIMARY KEY,
+                    built_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_sales_shop_built_run
+                        FOREIGN KEY (run_id) REFERENCES sales_report_runs(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+        )
 
     def _get_salework_credentials(self) -> Dict[str, str]:
         load_dotenv("local.env", override=True)
@@ -324,6 +364,7 @@ class SalesManagementService:
                     ],
                 )
 
+            self._insert_shop_items(run_id, product_report)
             self.db.commit()
             return {"run_id": run_id, "reused": False, "items_count": len(items)}
         except Exception:
@@ -551,6 +592,110 @@ class SalesManagementService:
             "total_stock_products": int(stock_status[1] or 0),
         }
 
+    def get_shop_options(self) -> List[Dict]:
+        return get_shop_options(self.brand_key)
+
+    def _insert_shop_items(self, run_id: int, product_report: Dict) -> int:
+        """Split one run's product_report per channel + shopId and mark the run as built.
+
+        Does not commit; caller owns the transaction.
+        """
+        rows = aggregate_sales_report_by_shop(product_report)
+        self.db.execute(
+            text("DELETE FROM sales_report_shop_items WHERE run_id = :run_id"),
+            {"run_id": int(run_id)},
+        )
+        batch_size = 1000
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO sales_report_shop_items
+                    (run_id, code, name, channel, shop_id, sold_qty, sold_revenue)
+                    VALUES (:run_id, :code, :name, :channel, :shop_id, :sold_qty, :sold_revenue)
+                    """
+                ),
+                [
+                    {
+                        "run_id": int(run_id),
+                        "code": row["code"],
+                        "name": row.get("name") or "",
+                        "channel": str(row.get("channel") or "")[:64],
+                        "shop_id": str(row.get("shop_id") or "")[:128],
+                        "sold_qty": float(row.get("sold_qty") or 0),
+                        "sold_revenue": float(row.get("sold_revenue") or 0),
+                    }
+                    for row in batch
+                ],
+            )
+        self.db.execute(
+            text(
+                """
+                INSERT INTO sales_report_shop_built (run_id)
+                VALUES (:run_id)
+                ON DUPLICATE KEY UPDATE built_at = CURRENT_TIMESTAMP
+                """
+            ),
+            {"run_id": int(run_id)},
+        )
+        return len(rows)
+
+    def _ensure_shop_items_for_runs(self, run_ids: List[int]) -> int:
+        """Lazily backfill per-shop rows for runs synced before the shop table existed.
+
+        Must be called before temp tables are created: it commits, and a commit may
+        hand the session a different pooled connection (temp tables are per connection).
+        """
+        unique_ids = sorted({int(x) for x in run_ids if x is not None})
+        if not unique_ids:
+            return 0
+
+        pending: List[int] = []
+        batch_size = 800
+        for start in range(0, len(unique_ids), batch_size):
+            batch = unique_ids[start:start + batch_size]
+            params: Dict = {}
+            in_clause = self._build_in_clause("run", batch, params)
+            rows = self.db.execute(
+                text(
+                    f"""
+                    SELECT r.id
+                    FROM sales_report_runs r
+                    LEFT JOIN sales_report_shop_built b ON b.run_id = r.id
+                    WHERE r.id IN ({in_clause})
+                      AND b.run_id IS NULL
+                    """
+                ),
+                params,
+            ).fetchall()
+            pending.extend(int(r[0]) for r in rows if r and r[0] is not None)
+
+        if not pending:
+            return 0
+
+        built = 0
+        try:
+            for run_id in pending:
+                payload_row = self.db.execute(
+                    text("SELECT raw_payload FROM sales_report_runs WHERE id = :run_id"),
+                    {"run_id": run_id},
+                ).fetchone()
+                product_report: Dict = {}
+                if payload_row and payload_row[0]:
+                    try:
+                        parsed = json.loads(payload_row[0])
+                        product_report = (parsed.get("data") or {}).get("product_report") or {}
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        product_report = {}
+                self._insert_shop_items(run_id, product_report)
+                built += 1
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return built
+
     def get_report(
         self,
         run_id: Optional[int] = None,
@@ -565,6 +710,7 @@ class SalesManagementService:
         sort_by: str = "sold_qty",
         sort_dir: str = "desc",
         top_n: int = 0,
+        shop_id: Optional[str] = None,
     ) -> Dict:
         if page < 1:
             page = 1
@@ -601,11 +747,14 @@ class SalesManagementService:
         else:
             run_ids = self._get_filtered_run_ids_for_period(int(time_start), int(time_end))
 
+        shop_filter = normalize_shop_id(shop_id)
         params: Dict = {
             "brand_key": self.brand_key,
             "min_qty": float(min_qty or 0),
             "min_revenue": float(min_revenue or 0),
         }
+        if shop_filter:
+            params["shop_id"] = shop_filter
         keyword_where = ""
         stock_keyword_where = ""
         kw = str(keyword or "").strip()
@@ -618,9 +767,12 @@ class SalesManagementService:
         if not run_ids and not kw:
             return {"run_id": None, "items": [], "total": 0, "page": page, "page_size": page_size}
 
+        if shop_filter:
+            # Old runs may predate the per-shop table; split them from raw_payload first.
+            self._ensure_shop_items_for_runs(run_ids)
         self._prepare_tmp_run_ids(run_ids)
         # Materialize period codes so stock UNION does not reopen tmp_sales_run_ids (MySQL 1137).
-        self._prepare_tmp_period_sold_codes()
+        self._prepare_tmp_period_sold_codes(shop_filter)
 
         priority_join = ""
         stock_priority_join = ""
@@ -639,22 +791,41 @@ class SalesManagementService:
             """
 
         # Số bán trong kỳ được chọn.
-        sales_aggregate_sql = f"""
-            SELECT
-                i.code AS code,
-                MAX(i.name) AS name,
-                SUM(i.sold_qty) AS sold_qty,
-                SUM(i.sold_revenue) AS sold_revenue,
-                SUM(i.shops_count) AS shops_count
-            FROM sales_report_items i
-            INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
-            {priority_join}
-            WHERE 1=1
-              {keyword_where}
-            GROUP BY i.code
-            HAVING SUM(i.sold_qty) >= :min_qty
-               AND SUM(i.sold_revenue) >= :min_revenue
-        """
+        if shop_filter:
+            # Lọc theo shop: dùng bảng tách theo shop, chỉ lấy đúng shop_id.
+            sales_aggregate_sql = f"""
+                SELECT
+                    i.code AS code,
+                    MAX(i.name) AS name,
+                    SUM(i.sold_qty) AS sold_qty,
+                    SUM(i.sold_revenue) AS sold_revenue,
+                    COUNT(DISTINCT i.shop_id) AS shops_count
+                FROM sales_report_shop_items i
+                INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                {priority_join}
+                WHERE i.shop_id = :shop_id
+                  {keyword_where}
+                GROUP BY i.code
+                HAVING SUM(i.sold_qty) >= :min_qty
+                   AND SUM(i.sold_revenue) >= :min_revenue
+            """
+        else:
+            sales_aggregate_sql = f"""
+                SELECT
+                    i.code AS code,
+                    MAX(i.name) AS name,
+                    SUM(i.sold_qty) AS sold_qty,
+                    SUM(i.sold_revenue) AS sold_revenue,
+                    SUM(i.shops_count) AS shops_count
+                FROM sales_report_items i
+                INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                {priority_join}
+                WHERE 1=1
+                  {keyword_where}
+                GROUP BY i.code
+                HAVING SUM(i.sold_qty) >= :min_qty
+                   AND SUM(i.sold_revenue) >= :min_revenue
+            """
 
         # Khi có keyword: bổ sung mã khớp từ tồn kho (kể cả SL bán = 0 trong kỳ).
         if kw:
@@ -717,7 +888,7 @@ class SalesManagementService:
         ).fetchall()
 
         page_codes = [str(r[0]) for r in page_rows if r and r[0]]
-        channels_map = self._load_channels_for_codes(page_codes)
+        channels_map = self._load_channels_for_codes(page_codes, shop_filter)
         stock_map = self._load_stock_for_codes(page_codes)
         priority_set = self._load_priority_codes_set(page_codes)
 
@@ -747,6 +918,7 @@ class SalesManagementService:
             "total": total,
             "page": page,
             "page_size": page_size,
+            "shop_id": shop_filter or None,
         }
 
     def _prepare_tmp_run_ids(self, run_ids: List[int]) -> None:
@@ -759,7 +931,7 @@ class SalesManagementService:
             values_sql = ", ".join(f"({rid})" for rid in batch)
             self.db.execute(text(f"INSERT INTO tmp_sales_run_ids (id) VALUES {values_sql}"))
 
-    def _prepare_tmp_period_sold_codes(self) -> None:
+    def _prepare_tmp_period_sold_codes(self, shop_id: str = "") -> None:
         self.db.execute(text("DROP TEMPORARY TABLE IF EXISTS tmp_period_sold_codes"))
         self.db.execute(
             text(
@@ -770,23 +942,55 @@ class SalesManagementService:
                 """
             )
         )
-        self.db.execute(
-            text(
-                """
-                INSERT IGNORE INTO tmp_period_sold_codes (code)
-                SELECT DISTINCT i.code
-                FROM sales_report_items i
-                INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
-                """
+        if shop_id:
+            self.db.execute(
+                text(
+                    """
+                    INSERT IGNORE INTO tmp_period_sold_codes (code)
+                    SELECT DISTINCT i.code
+                    FROM sales_report_shop_items i
+                    INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                    WHERE i.shop_id = :shop_id
+                    """
+                ),
+                {"shop_id": shop_id},
             )
-        )
+        else:
+            self.db.execute(
+                text(
+                    """
+                    INSERT IGNORE INTO tmp_period_sold_codes (code)
+                    SELECT DISTINCT i.code
+                    FROM sales_report_items i
+                    INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                    """
+                )
+            )
 
-    def _load_channels_for_codes(self, codes: List[str]) -> Dict[str, set]:
+    def _load_channels_for_codes(self, codes: List[str], shop_id: str = "") -> Dict[str, set]:
         result: Dict[str, set] = {code: set() for code in codes}
         if not codes:
             return result
         params: Dict = {}
         in_clause = self._build_in_clause("code", codes, params)
+        if shop_id:
+            params["shop_id"] = shop_id
+            rows = self.db.execute(
+                text(
+                    f"""
+                    SELECT DISTINCT i.code, i.channel
+                    FROM sales_report_shop_items i
+                    INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                    WHERE i.shop_id = :shop_id
+                      AND i.code IN ({in_clause})
+                    """
+                ),
+                params,
+            ).fetchall()
+            for code, channel in rows:
+                if channel:
+                    result.setdefault(str(code), set()).add(str(channel))
+            return result
         rows = self.db.execute(
             text(
                 f"""
@@ -861,6 +1065,7 @@ class SalesManagementService:
         sort_by: str = "sold_qty",
         sort_dir: str = "desc",
         top_n: int = 0,
+        shop_id: Optional[str] = None,
     ) -> List[Dict]:
         rows: List[Dict] = []
         page = 1
@@ -880,6 +1085,7 @@ class SalesManagementService:
                 page_size=page_size,
                 sort_by=sort_by,
                 sort_dir=sort_dir,
+                shop_id=shop_id,
             )
             if total is None:
                 total = result.get("total", 0)
@@ -994,9 +1200,11 @@ class SalesManagementService:
         sort_by: str = "sold_qty",
         sort_dir: str = "desc",
         top_n: int = 0,
+        shop_id: Optional[str] = None,
     ) -> List[Dict]:
         if run_id is None and (time_start is None or time_end is None):
             raise ValueError("Cần run_id hoặc khoảng thời gian hợp lệ để xuất Excel")
+        shop_filter = normalize_shop_id(shop_id)
 
         runs = self._fetch_runs_with_payload(
             run_id=run_id,
@@ -1018,6 +1226,8 @@ class SalesManagementService:
 
             product_report = parsed.get("data", {}).get("product_report", {})
             for row in aggregate_sales_report_by_shop(product_report):
+                if shop_filter and str(row.get("shop_id") or "").strip() != shop_filter:
+                    continue
                 code = row["code"]
                 key = (code, row["channel"], row["shop_id"])
                 bucket = shop_aggregate.setdefault(

@@ -168,6 +168,7 @@ def get_sales_report(
     sort_by: str = Query("sold_qty"),
     sort_dir: str = Query("desc"),
     top_n: int = Query(0),
+    shop_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
@@ -186,8 +187,23 @@ def get_sales_report(
             sort_by=sort_by,
             sort_dir=sort_dir,
             top_n=top_n,
+            shop_id=shop_id,
         )
         return {"status": "success", "data": result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=humanize_error(exc))
+
+
+@router.get("/sales-management/shops")
+def get_sales_shops(
+    brand_key: str = Query("unbee"),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("sales-management")),
+):
+    """Shop options for the shop filter (shop_id + display label)."""
+    try:
+        service = SalesManagementService(db, brand_key=brand_key)
+        return {"status": "success", "data": service.get_shop_options()}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=humanize_error(exc))
 
@@ -349,6 +365,7 @@ def export_sales_report(
     sort_by: str = Query("sold_qty"),
     sort_dir: str = Query("desc"),
     top_n: int = Query(0),
+    shop_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user: dict = Depends(require_module_access("sales-management")),
 ):
@@ -365,6 +382,7 @@ def export_sales_report(
             sort_by=sort_by,
             sort_dir=sort_dir,
             top_n=top_n,
+            shop_id=shop_id,
         )
 
         wb = Workbook()
@@ -399,6 +417,8 @@ def export_sales_report(
         filename = "sales_report.xlsx"
         if time_start and time_end:
             filename = f"sales_report_{time_start}_{time_end}.xlsx"
+        if shop_id:
+            filename = filename.replace(".xlsx", f"_shop_{str(shop_id).strip()}.xlsx")
 
         return StreamingResponse(
             output,

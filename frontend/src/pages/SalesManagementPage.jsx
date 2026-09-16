@@ -49,7 +49,9 @@ const SalesManagementPage = () => {
         min_qty: 0,
         min_revenue: 0,
         only_priority_codes: false,
+        shop_id: null,
     });
+    const [shopOptions, setShopOptions] = useState([]);
     const actionLockRef = useRef(false);
 
     const runExclusive = async (fn) => {
@@ -83,6 +85,16 @@ const SalesManagementPage = () => {
         }
     };
 
+    const fetchShopOptions = async () => {
+        if (!selectedBrand) return;
+        try {
+            const res = await salesManagementApi.getShops({ brand_key: selectedBrand });
+            setShopOptions(res?.data?.data || []);
+        } catch (error) {
+            setShopOptions([]);
+        }
+    };
+
     const fetchSalesReport = async ({
         page = salesPagination.current,
         pageSize = salesPagination.pageSize,
@@ -101,6 +113,7 @@ const SalesManagementPage = () => {
                 min_revenue: filters.min_revenue || 0,
                 only_priority_codes: filters.only_priority_codes || false,
                 top_n: topN || 0,
+                shop_id: filters.shop_id || undefined,
             };
             const res = await salesManagementApi.getReport(params);
             const payload = res?.data?.data || {};
@@ -125,9 +138,11 @@ const SalesManagementPage = () => {
 
     useEffect(() => {
         if (!selectedBrand || selectedBrand === HOUSEHOLD_MODE_KEY) return;
+        setSalesFilters((s) => ({ ...s, shop_id: null }));
+        fetchShopOptions();
         fetchPriorityCodes();
         fetchSyncStatus();
-        fetchSalesReport({ page: 1 });
+        fetchSalesReport({ page: 1, filters: { ...salesFilters, shop_id: null } });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedBrand]);
 
@@ -249,6 +264,7 @@ const SalesManagementPage = () => {
                 min_revenue: salesFilters.min_revenue || 0,
                 only_priority_codes: salesFilters.only_priority_codes || false,
                 top_n: topN || 0,
+                shop_id: salesFilters.shop_id || undefined,
             };
             const res = await salesManagementApi.exportReport(params);
             const blob = new Blob([res.data], {
@@ -257,7 +273,8 @@ const SalesManagementPage = () => {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `sales_report_${selectedBrand}_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`;
+            const shopSuffix = salesFilters.shop_id ? `_shop_${salesFilters.shop_id}` : '';
+            a.download = `sales_report_${selectedBrand}${shopSuffix}_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`;
             document.body.appendChild(a);
             a.click();
             a.remove();
@@ -426,7 +443,7 @@ const SalesManagementPage = () => {
                 </div>
             }
         >
-            <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.8fr 0.8fr 0.9fr 1.4fr', gap: 12, marginBottom: 12 }}>
                 <div>
                     <div style={{ marginBottom: 6, fontWeight: 600 }}>Khoảng thời gian</div>
                     <DatePicker.RangePicker
@@ -478,6 +495,23 @@ const SalesManagementPage = () => {
                         <Select.Option value={50}>Top 50</Select.Option>
                     </Select>
                 </div>
+                <div>
+                    <div style={{ marginBottom: 6, fontWeight: 600 }}>Lọc shop</div>
+                    <Select
+                        allowClear
+                        showSearch
+                        placeholder="Tất cả shop"
+                        value={salesFilters.shop_id || undefined}
+                        onChange={(value) => setSalesFilters((s) => ({ ...s, shop_id: value || null }))}
+                        style={{ width: '100%' }}
+                        optionFilterProp="label"
+                        options={shopOptions.map((shop) => ({
+                            value: shop.shop_id,
+                            label: shop.label,
+                        }))}
+                        notFoundContent="Nhãn này chưa cấu hình shop"
+                    />
+                </div>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -494,6 +528,11 @@ const SalesManagementPage = () => {
                     />
                     <span>Chỉ hiện mã ưu tiên</span>
                 </div>
+                {salesFilters.shop_id ? (
+                    <Tag color="gold">
+                        Shop: {shopOptions.find((s) => s.shop_id === salesFilters.shop_id)?.label || salesFilters.shop_id}
+                    </Tag>
+                ) : null}
                 {syncStatus?.latest_run_id ? (
                     <Tag color="blue">
                         Latest run: #{syncStatus.latest_run_id}

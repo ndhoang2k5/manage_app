@@ -122,3 +122,31 @@ class FilterNestedRunsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SalesShopOptionsTests(unittest.TestCase):
+    def test_unbee_shop_options_contain_all_six_shops_with_labels(self):
+        from services.salesManagementShops import get_shop_options, normalize_shop_id
+
+        options = get_shop_options("unbee")
+        ids = {o["shop_id"] for o in options}
+        self.assertEqual(
+            ids,
+            {
+                "1299057191",
+                "1404479884",
+                "943867691",
+                "585510534",
+                "7494799271700827004",
+                "7495100035829696886",
+            },
+        )
+        by_id = {o["shop_id"]: o for o in options}
+        self.assertEqual(by_id["943867691"]["channel"], "Shopee")
+        self.assertEqual(by_id["7495100035829696886"]["channel"], "Tiktok")
+        self.assertIn("C Hằng", by_id["943867691"]["label"])
+        self.assertIn("(585510534)", by_id["585510534"]["label"])
+        self.assertEqual(get_shop_options("himomi"), [])
+        self.assertEqual(get_shop_options("unknown"), [])
+        self.assertEqual(normalize_shop_id("  1299057191 "), "1299057191")
+        self.assertEqual(normalize_shop_id(None), "")

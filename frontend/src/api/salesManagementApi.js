@@ -3,6 +3,7 @@ import axiosClient from './axiosClient';
 const salesManagementApi = {
     fetchSales: (data) => axiosClient.post('/sales-management/fetch', data),
     getReport: (params) => axiosClient.get('/sales-management/report', { params }),
+    getShops: (params) => axiosClient.get('/sales-management/shops', { params }),
     searchProductCodes: (params) => axiosClient.get('/sales-management/product-codes/search', { params }),
     searchProductCodesForPlanning: (params) => axiosClient.get('/sales-management/product-planning/product-codes/search', { params }),
     getProductPlanning4w: (data) => axiosClient.post('/sales-management/product-planning/4w', data),
