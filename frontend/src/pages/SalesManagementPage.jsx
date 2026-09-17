@@ -26,6 +26,9 @@ const SALES_BRANDS = [
 ];
 
 const HOUSEHOLD_MODE_KEY = 'household';
+const SALES_PAGE_SIZE_OPTIONS = ['20', '50', '100', '200'];
+const DEFAULT_SALES_SORT = { sort_by: 'sold_qty', sort_dir: 'desc' };
+const SORTABLE_FIELDS = new Set(['code', 'sold_qty', 'sold_revenue', 'current_stock', 'shops_count']);
 
 const HOUSEHOLDS = [
     { key: 'le_doan_bac', label: 'Hộ kinh doanh Lê Doãn Bắc', color: '#08979c' },
@@ -43,7 +46,8 @@ const SalesManagementPage = () => {
     const [syncStatus, setSyncStatus] = useState(null);
     const [priorityInput, setPriorityInput] = useState('');
     const [topN, setTopN] = useState(0);
-    const [salesPagination, setSalesPagination] = useState({ current: 1, pageSize: 20 });
+    const [salesPagination, setSalesPagination] = useState({ current: 1, pageSize: 50 });
+    const [salesSort, setSalesSort] = useState(DEFAULT_SALES_SORT);
     const [salesFilters, setSalesFilters] = useState({
         keyword: '',
         min_qty: 0,
@@ -99,6 +103,7 @@ const SalesManagementPage = () => {
         page = salesPagination.current,
         pageSize = salesPagination.pageSize,
         filters = salesFilters,
+        sort = salesSort,
     } = {}) => {
         if (!selectedBrand) return;
         try {
@@ -114,6 +119,8 @@ const SalesManagementPage = () => {
                 only_priority_codes: filters.only_priority_codes || false,
                 top_n: topN || 0,
                 shop_id: filters.shop_id || undefined,
+                sort_by: sort.sort_by,
+                sort_dir: sort.sort_dir,
             };
             const res = await salesManagementApi.getReport(params);
             const payload = res?.data?.data || {};
@@ -139,10 +146,11 @@ const SalesManagementPage = () => {
     useEffect(() => {
         if (!selectedBrand || selectedBrand === HOUSEHOLD_MODE_KEY) return;
         setSalesFilters((s) => ({ ...s, shop_id: null }));
+        setSalesSort(DEFAULT_SALES_SORT);
         fetchShopOptions();
         fetchPriorityCodes();
         fetchSyncStatus();
-        fetchSalesReport({ page: 1, filters: { ...salesFilters, shop_id: null } });
+        fetchSalesReport({ page: 1, filters: { ...salesFilters, shop_id: null }, sort: DEFAULT_SALES_SORT });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedBrand]);
 
@@ -237,12 +245,21 @@ const SalesManagementPage = () => {
         return false;
     };
 
-    const handleSalesTableChange = (pagination) => {
+    const handleSalesTableChange = (pagination, _filters, sorter) => {
         runExclusive(async () => {
-            setSalesPagination({ current: pagination.current, pageSize: pagination.pageSize });
+            const single = Array.isArray(sorter) ? sorter[0] : sorter;
+            let nextSort = DEFAULT_SALES_SORT;
+            if (single?.order && SORTABLE_FIELDS.has(single.field)) {
+                nextSort = { sort_by: single.field, sort_dir: single.order === 'ascend' ? 'asc' : 'desc' };
+            }
+            const sortChanged = nextSort.sort_by !== salesSort.sort_by || nextSort.sort_dir !== salesSort.sort_dir;
+            const page = sortChanged ? 1 : pagination.current;
+            setSalesSort(nextSort);
+            setSalesPagination({ current: page, pageSize: pagination.pageSize });
             await fetchSalesReport({
-                page: pagination.current,
+                page,
                 pageSize: pagination.pageSize,
+                sort: nextSort,
             });
         });
     };
@@ -265,6 +282,8 @@ const SalesManagementPage = () => {
                 only_priority_codes: salesFilters.only_priority_codes || false,
                 top_n: topN || 0,
                 shop_id: salesFilters.shop_id || undefined,
+                sort_by: salesSort.sort_by,
+                sort_dir: salesSort.sort_dir,
             };
             const res = await salesManagementApi.exportReport(params);
             const blob = new Blob([res.data], {
@@ -283,11 +302,17 @@ const SalesManagementPage = () => {
         });
     };
 
+    const sortOrderFor = (field) => (
+        salesSort.sort_by === field ? (salesSort.sort_dir === 'asc' ? 'ascend' : 'descend') : null
+    );
+
     const salesColumns = [
         {
             title: 'Mã SP',
             dataIndex: 'code',
-            width: 150,
+            width: 170,
+            sorter: true,
+            sortOrder: sortOrderFor('code'),
             render: (code, row) => (
                 <div>
                     <b>{code}</b>
@@ -295,27 +320,57 @@ const SalesManagementPage = () => {
                 </div>
             ),
         },
-        { title: 'Tên sản phẩm', dataIndex: 'name' },
+        { title: 'Tên sản phẩm', dataIndex: 'name', ellipsis: true },
         {
             title: 'SL bán',
             dataIndex: 'sold_qty',
             width: 120,
             align: 'right',
-            render: (v) => Number(v || 0).toLocaleString('vi-VN'),
+            sorter: true,
+            sortOrder: sortOrderFor('sold_qty'),
+            render: (v) => {
+                const n = Number(v || 0);
+                return <span style={n > 0 ? undefined : { color: '#bfbfbf' }}>{n.toLocaleString('vi-VN')}</span>;
+            },
         },
         {
             title: 'Doanh số',
             dataIndex: 'sold_revenue',
             width: 160,
             align: 'right',
-            render: (v) => Number(v || 0).toLocaleString('vi-VN'),
+            sorter: true,
+            sortOrder: sortOrderFor('sold_revenue'),
+            render: (v) => {
+                const n = Number(v || 0);
+                return <span style={n > 0 ? undefined : { color: '#bfbfbf' }}>{n.toLocaleString('vi-VN')}</span>;
+            },
         },
         {
             title: 'Tồn kho SW',
             dataIndex: 'current_stock',
             width: 130,
             align: 'right',
-            render: (v) => Number(v || 0).toLocaleString('vi-VN'),
+            sorter: true,
+            sortOrder: sortOrderFor('current_stock'),
+            render: (v) => {
+                const n = Number(v || 0);
+                return <span style={n > 0 ? undefined : { color: '#cf1322' }}>{n.toLocaleString('vi-VN')}</span>;
+            },
+        },
+        {
+            title: 'Trạng thái',
+            key: 'status',
+            width: 150,
+            render: (_, row) => {
+                const sold = Number(row.sold_qty || 0) > 0;
+                const inStock = Number(row.current_stock || 0) > 0;
+                return (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {!sold ? <Tag color="default">Chưa bán trong kỳ</Tag> : null}
+                        {!inStock ? <Tag color="volcano">Hết tồn</Tag> : null}
+                    </div>
+                );
+            },
         },
         {
             title: 'Kênh',
@@ -328,7 +383,14 @@ const SalesManagementPage = () => {
                 </div>
             ),
         },
-        { title: 'Số shop', dataIndex: 'shops_count', width: 100, align: 'right' },
+        {
+            title: 'Số shop',
+            dataIndex: 'shops_count',
+            width: 100,
+            align: 'right',
+            sorter: true,
+            sortOrder: sortOrderFor('shops_count'),
+        },
     ];
 
     const currentBrand = SALES_BRANDS.find((brand) => brand.key === selectedBrand);
@@ -570,18 +632,28 @@ const SalesManagementPage = () => {
                 </div>
             )}
 
+            <div style={{ marginBottom: 8, color: '#666', fontSize: 12 }}>
+                Hiển thị tất cả mã của nhãn (kể cả chưa bán trong kỳ hoặc đã hết tồn Salework).
+                Mã không có số bán luôn được xếp cuối khi sắp xếp theo SL bán / doanh số.
+            </div>
             <Table
                 rowKey={(row) => row.code}
+                size="small"
                 columns={salesColumns}
                 dataSource={salesData}
                 loading={salesLoading}
                 onChange={handleSalesTableChange}
+                scroll={{ x: 1100 }}
                 pagination={{
                     current: salesPagination.current,
                     pageSize: salesPagination.pageSize,
                     total: salesTotal,
                     showSizeChanger: true,
-                    showTotal: (total) => `Tổng ${Number(total || 0).toLocaleString('vi-VN')} sản phẩm`,
+                    showQuickJumper: true,
+                    pageSizeOptions: SALES_PAGE_SIZE_OPTIONS,
+                    showTotal: (total, range) => (
+                        `${range[0]}-${range[1]} / ${Number(total || 0).toLocaleString('vi-VN')} sản phẩm`
+                    ),
                 }}
                 onRow={(record) => (record.is_priority ? { style: { background: '#f6ffed' } } : {})}
             />

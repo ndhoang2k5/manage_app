@@ -144,8 +144,104 @@ class SalesManagementService:
                 """
             )
         )
+        self._ensure_catalog_table()
         self._ensure_shop_tables()
         self.db.commit()
+
+    def _ensure_catalog_table(self) -> None:
+        """Every code ever seen (sales runs or stock snapshot) per brand.
+
+        The report lists this table and LEFT JOINs period sales + stock onto it so
+        codes with stock but no sales in the period (and vice versa) still show.
+        """
+        self.db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS sales_product_catalog (
+                    brand_key VARCHAR(32) NOT NULL DEFAULT 'unbee',
+                    code VARCHAR(128) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (brand_key, code)
+                )
+                """
+            )
+        )
+
+    def _upsert_catalog_codes(self, rows: List[Dict], prefer_new_name: bool = False) -> int:
+        """Register codes in sales_product_catalog. Does not commit; caller owns the transaction."""
+        seen: Dict[str, Optional[str]] = {}
+        for row in rows or []:
+            code = str(row.get("code") or "").strip().upper()
+            if not code:
+                continue
+            name = str(row.get("name") or "").strip() or None
+            if code not in seen or (name and not seen[code]):
+                seen[code] = name
+        if not seen:
+            return 0
+        if prefer_new_name:
+            name_update = "name = COALESCE(NULLIF(VALUES(name), ''), name)"
+        else:
+            name_update = "name = COALESCE(name, NULLIF(VALUES(name), ''))"
+        payload = [{"brand_key": self.brand_key, "code": code, "name": name} for code, name in seen.items()]
+        batch_size = 1000
+        for start in range(0, len(payload), batch_size):
+            self.db.execute(
+                text(
+                    f"""
+                    INSERT INTO sales_product_catalog (brand_key, code, name)
+                    VALUES (:brand_key, :code, :name)
+                    ON DUPLICATE KEY UPDATE {name_update}
+                    """
+                ),
+                payload[start:start + batch_size],
+            )
+        return len(payload)
+
+    def _ensure_catalog_seeded(self) -> None:
+        """One-time seed of the catalog for brands synced before the table existed.
+
+        Commits, so it must run before any temporary table is created.
+        """
+        row = self.db.execute(
+            text("SELECT 1 FROM sales_product_catalog WHERE brand_key = :brand_key LIMIT 1"),
+            {"brand_key": self.brand_key},
+        ).fetchone()
+        if row:
+            return
+        try:
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO sales_product_catalog (brand_key, code, name)
+                    SELECT st.brand_key, st.code, st.name
+                    FROM sales_product_stock_current st
+                    WHERE st.brand_key = :brand_key
+                    ON DUPLICATE KEY UPDATE name = COALESCE(NULLIF(VALUES(name), ''), sales_product_catalog.name)
+                    """
+                ),
+                {"brand_key": self.brand_key},
+            )
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO sales_product_catalog (brand_key, code, name)
+                    SELECT r.brand_key, i.code, MAX(i.name)
+                    FROM sales_report_items i
+                    INNER JOIN sales_report_runs r ON r.id = i.run_id
+                    WHERE r.brand_key = :brand_key
+                    GROUP BY r.brand_key, i.code
+                    ON DUPLICATE KEY UPDATE name = COALESCE(sales_product_catalog.name, VALUES(name))
+                    """
+                ),
+                {"brand_key": self.brand_key},
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def _ensure_shop_tables(self) -> None:
         """Per-shop split of the sales report (needed for the shop filter)."""
@@ -365,6 +461,7 @@ class SalesManagementService:
                 )
 
             self._insert_shop_items(run_id, product_report)
+            self._upsert_catalog_codes(items)
             self.db.commit()
             return {"run_id": run_id, "reused": False, "items_count": len(items)}
         except Exception:
@@ -487,6 +584,7 @@ class SalesManagementService:
                         "synced_at_ms": synced_at_ms,
                     },
                 )
+            self._upsert_catalog_codes(rows, prefer_new_name=True)
             self.db.commit()
             return {"synced_count": len(rows), "synced_at_ms": synced_at_ms}
         except Exception:
@@ -696,6 +794,74 @@ class SalesManagementService:
             raise
         return built
 
+    SORT_COLUMNS = {
+        "code": "agg.code",
+        "name": "agg.name",
+        "sold_qty": "agg.sold_qty",
+        "sold_revenue": "agg.sold_revenue",
+        "shops_count": "agg.shops_count",
+        "current_stock": "agg.current_stock",
+    }
+
+    def _build_report_base_sql(
+        self,
+        params: Dict,
+        keyword: Optional[str],
+        only_priority_codes: bool,
+        min_qty: float,
+        min_revenue: float,
+    ) -> str:
+        """Every catalog code LEFT JOINed with period sales, current stock and priority flag.
+
+        tmp_period_sales must already be materialized (it is referenced exactly once
+        so MySQL never has to reopen a temporary table).
+        """
+        params["brand_key"] = self.brand_key
+        params["min_qty"] = float(min_qty or 0)
+        params["min_revenue"] = float(min_revenue or 0)
+        where = ["c.brand_key = :brand_key"]
+        kw = str(keyword or "").strip()
+        if kw:
+            params["keyword"] = f"%{kw}%"
+            where.append("(c.code LIKE :keyword OR c.name LIKE :keyword OR ps.name LIKE :keyword OR st.name LIKE :keyword)")
+        if only_priority_codes:
+            where.append("sp.code IS NOT NULL")
+        if float(min_qty or 0) > 0:
+            where.append("COALESCE(ps.sold_qty, 0) >= :min_qty")
+        if float(min_revenue or 0) > 0:
+            where.append("COALESCE(ps.sold_revenue, 0) >= :min_revenue")
+        return f"""
+            SELECT
+                c.code AS code,
+                COALESCE(NULLIF(st.name, ''), NULLIF(ps.name, ''), NULLIF(c.name, ''), c.code) AS name,
+                COALESCE(ps.sold_qty, 0) AS sold_qty,
+                COALESCE(ps.sold_revenue, 0) AS sold_revenue,
+                COALESCE(ps.shops_count, 0) AS shops_count,
+                COALESCE(st.total_stock, 0) AS current_stock,
+                CASE WHEN sp.code IS NULL THEN 0 ELSE 1 END AS is_priority
+            FROM sales_product_catalog c
+            LEFT JOIN tmp_period_sales ps ON ps.code = c.code
+            LEFT JOIN sales_product_stock_current st
+                ON st.brand_key = :brand_key AND st.code = c.code
+            LEFT JOIN sales_priority_codes sp
+                ON sp.brand_key = :brand_key AND sp.code = c.code AND sp.is_active = 1
+            WHERE {" AND ".join(where)}
+        """
+
+    def _build_report_order_sql(self, sort_by: str, sort_dir: str) -> str:
+        sort_column = self.SORT_COLUMNS.get(str(sort_by or ""), "agg.sold_qty")
+        direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+        order_parts = []
+        # Codes without any sales in the period always sink to the bottom when
+        # ranking by sales, whatever the direction.
+        if sort_column in ("agg.sold_qty", "agg.sold_revenue"):
+            order_parts.append("(agg.sold_qty > 0 OR agg.sold_revenue > 0) DESC")
+        order_parts.append(f"{sort_column} {direction}")
+        if sort_column != "agg.sold_qty":
+            order_parts.append("agg.sold_qty DESC")
+        order_parts.append("agg.code ASC")
+        return ", ".join(order_parts)
+
     def get_report(
         self,
         run_id: Optional[int] = None,
@@ -724,150 +890,51 @@ class SalesManagementService:
                 text("SELECT id FROM sales_report_runs WHERE brand_key = :brand_key ORDER BY id DESC LIMIT 1"),
                 {"brand_key": self.brand_key},
             ).fetchone()
-            if not latest:
-                return {"run_id": None, "items": [], "total": 0, "page": page, "page_size": page_size}
-            run_id = latest[0]
-
-        sort_map = {
-            "code": "agg.code",
-            "name": "agg.name",
-            "sold_qty": "agg.sold_qty",
-            "sold_revenue": "agg.sold_revenue",
-            "shops_count": "agg.shops_count",
-            "current_stock": "agg.current_stock",
-        }
-        sort_column = sort_map.get(sort_by, "agg.sold_qty")
-        # current_stock is enriched after pagination; sort by it using sold_qty fallback in SQL phase
-        if sort_by == "current_stock":
-            sort_column = "agg.sold_qty"
-        direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+            run_id = latest[0] if latest else None
 
         if run_id is not None:
             run_ids = [int(run_id)]
-        else:
+        elif time_start is not None and time_end is not None:
             run_ids = self._get_filtered_run_ids_for_period(int(time_start), int(time_end))
+        else:
+            run_ids = []
 
         shop_filter = normalize_shop_id(shop_id)
-        params: Dict = {
-            "brand_key": self.brand_key,
-            "min_qty": float(min_qty or 0),
-            "min_revenue": float(min_revenue or 0),
-        }
-        if shop_filter:
-            params["shop_id"] = shop_filter
-        keyword_where = ""
-        stock_keyword_where = ""
-        kw = str(keyword or "").strip()
-        if kw:
-            params["keyword"] = f"%{kw}%"
-            keyword_where = "AND (i.code LIKE :keyword OR i.name LIKE :keyword)"
-            stock_keyword_where = "AND (st.code LIKE :keyword OR st.name LIKE :keyword)"
 
-        # Không có run trong kỳ: vẫn cho tìm mã từ tồn kho nếu có keyword.
-        if not run_ids and not kw:
-            return {"run_id": None, "items": [], "total": 0, "page": page, "page_size": page_size}
-
-        if shop_filter:
+        # Both helpers may commit, so they run before any temporary table exists.
+        self._ensure_catalog_seeded()
+        if shop_filter and run_ids:
             # Old runs may predate the per-shop table; split them from raw_payload first.
             self._ensure_shop_items_for_runs(run_ids)
+
         self._prepare_tmp_run_ids(run_ids)
-        # Materialize period codes so stock UNION does not reopen tmp_sales_run_ids (MySQL 1137).
-        self._prepare_tmp_period_sold_codes(shop_filter)
+        self._prepare_tmp_period_sales(shop_filter)
 
-        priority_join = ""
-        stock_priority_join = ""
-        if only_priority_codes:
-            priority_join = """
-                INNER JOIN sales_priority_codes sp
-                    ON sp.brand_key = :brand_key
-                   AND sp.code = i.code
-                   AND sp.is_active = 1
-            """
-            stock_priority_join = """
-                INNER JOIN sales_priority_codes sp
-                    ON sp.brand_key = :brand_key
-                   AND sp.code = st.code
-                   AND sp.is_active = 1
-            """
-
-        # Số bán trong kỳ được chọn.
-        if shop_filter:
-            # Lọc theo shop: dùng bảng tách theo shop, chỉ lấy đúng shop_id.
-            sales_aggregate_sql = f"""
-                SELECT
-                    i.code AS code,
-                    MAX(i.name) AS name,
-                    SUM(i.sold_qty) AS sold_qty,
-                    SUM(i.sold_revenue) AS sold_revenue,
-                    COUNT(DISTINCT i.shop_id) AS shops_count
-                FROM sales_report_shop_items i
-                INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
-                {priority_join}
-                WHERE i.shop_id = :shop_id
-                  {keyword_where}
-                GROUP BY i.code
-                HAVING SUM(i.sold_qty) >= :min_qty
-                   AND SUM(i.sold_revenue) >= :min_revenue
-            """
-        else:
-            sales_aggregate_sql = f"""
-                SELECT
-                    i.code AS code,
-                    MAX(i.name) AS name,
-                    SUM(i.sold_qty) AS sold_qty,
-                    SUM(i.sold_revenue) AS sold_revenue,
-                    SUM(i.shops_count) AS shops_count
-                FROM sales_report_items i
-                INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
-                {priority_join}
-                WHERE 1=1
-                  {keyword_where}
-                GROUP BY i.code
-                HAVING SUM(i.sold_qty) >= :min_qty
-                   AND SUM(i.sold_revenue) >= :min_revenue
-            """
-
-        # Khi có keyword: bổ sung mã khớp từ tồn kho (kể cả SL bán = 0 trong kỳ).
-        if kw:
-            base_aggregate_sql = f"""
-                SELECT code, name, sold_qty, sold_revenue, shops_count
-                FROM (
-                    {sales_aggregate_sql}
-                    UNION ALL
-                    SELECT
-                        st.code AS code,
-                        COALESCE(st.name, st.code) AS name,
-                        0 AS sold_qty,
-                        0 AS sold_revenue,
-                        0 AS shops_count
-                    FROM sales_product_stock_current st
-                    {stock_priority_join}
-                    WHERE st.brand_key = :brand_key
-                      {stock_keyword_where}
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM tmp_period_sold_codes p
-                          WHERE p.code = st.code
-                      )
-                ) combined
-            """
-        else:
-            base_aggregate_sql = sales_aggregate_sql
+        params: Dict = {}
+        base_sql = self._build_report_base_sql(params, keyword, only_priority_codes, min_qty, min_revenue)
 
         count_row = self.db.execute(
-            text(f"SELECT COUNT(1) FROM ({base_aggregate_sql}) agg"),
+            text(f"SELECT COUNT(1) FROM ({base_sql}) agg"),
             params,
         ).fetchone()
         total = int(count_row[0]) if count_row and count_row[0] is not None else 0
         if top_n > 0:
             total = min(total, top_n)
 
+        empty = {
+            "run_id": run_id,
+            "items": [],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "shop_id": shop_filter or None,
+        }
         if total == 0:
-            return {"run_id": run_id, "items": [], "total": 0, "page": page, "page_size": page_size}
+            return empty
 
         offset = (page - 1) * page_size
         if top_n > 0 and offset >= top_n:
-            return {"run_id": run_id, "items": [], "total": total, "page": page, "page_size": page_size}
+            return empty
         effective_limit = page_size
         if top_n > 0:
             effective_limit = min(page_size, top_n - offset)
@@ -878,9 +945,10 @@ class SalesManagementService:
         page_rows = self.db.execute(
             text(
                 f"""
-                SELECT agg.code, agg.name, agg.sold_qty, agg.sold_revenue, agg.shops_count
-                FROM ({base_aggregate_sql}) agg
-                ORDER BY {sort_column} {direction}, agg.code ASC
+                SELECT agg.code, agg.name, agg.sold_qty, agg.sold_revenue, agg.shops_count,
+                       agg.current_stock, agg.is_priority
+                FROM ({base_sql}) agg
+                ORDER BY {self._build_report_order_sql(sort_by, sort_dir)}
                 LIMIT :limit OFFSET :offset
                 """
             ),
@@ -889,8 +957,6 @@ class SalesManagementService:
 
         page_codes = [str(r[0]) for r in page_rows if r and r[0]]
         channels_map = self._load_channels_for_codes(page_codes, shop_filter)
-        stock_map = self._load_stock_for_codes(page_codes)
-        priority_set = self._load_priority_codes_set(page_codes)
 
         items = []
         for row in page_rows:
@@ -901,16 +967,12 @@ class SalesManagementService:
                     "name": row[1],
                     "sold_qty": float(row[2] or 0),
                     "sold_revenue": float(row[3] or 0),
-                    "channels": sorted(list(channels_map.get(code, set()))),
+                    "channels": sorted(channels_map.get(code, set())),
                     "shops_count": int(row[4] or 0),
-                    "is_priority": code in priority_set,
-                    "current_stock": float(stock_map.get(code, 0)),
+                    "current_stock": float(row[5] or 0),
+                    "is_priority": bool(row[6]),
                 }
             )
-
-        if sort_by == "current_stock":
-            reverse = str(sort_dir).lower() != "asc"
-            items.sort(key=lambda x: (float(x.get("current_stock") or 0), x.get("code") or ""), reverse=reverse)
 
         return {
             "run_id": run_id,
@@ -931,26 +993,39 @@ class SalesManagementService:
             values_sql = ", ".join(f"({rid})" for rid in batch)
             self.db.execute(text(f"INSERT INTO tmp_sales_run_ids (id) VALUES {values_sql}"))
 
-    def _prepare_tmp_period_sold_codes(self, shop_id: str = "") -> None:
-        self.db.execute(text("DROP TEMPORARY TABLE IF EXISTS tmp_period_sold_codes"))
+    def _prepare_tmp_period_sales(self, shop_id: str = "") -> None:
+        """Materialize per-code sales of the selected period (optionally one shop)."""
+        self.db.execute(text("DROP TEMPORARY TABLE IF EXISTS tmp_period_sales"))
         self.db.execute(
             text(
                 """
-                CREATE TEMPORARY TABLE tmp_period_sold_codes (
-                    code VARCHAR(128) PRIMARY KEY
+                CREATE TEMPORARY TABLE tmp_period_sales (
+                    code VARCHAR(128) PRIMARY KEY,
+                    name VARCHAR(255) NULL,
+                    sold_qty DECIMAL(18, 4) NOT NULL DEFAULT 0,
+                    sold_revenue DECIMAL(18, 2) NOT NULL DEFAULT 0,
+                    shops_count INT NOT NULL DEFAULT 0
                 )
                 """
             )
         )
+        # Channels are not aggregated here: GROUP_CONCAT(DISTINCT ...) over the
+        # period rows costs ~6x the sums, so they are loaded per page instead.
         if shop_id:
             self.db.execute(
                 text(
                     """
-                    INSERT IGNORE INTO tmp_period_sold_codes (code)
-                    SELECT DISTINCT i.code
+                    INSERT INTO tmp_period_sales (code, name, sold_qty, sold_revenue, shops_count)
+                    SELECT
+                        i.code,
+                        MAX(NULLIF(i.name, '')),
+                        SUM(i.sold_qty),
+                        SUM(i.sold_revenue),
+                        COUNT(DISTINCT i.shop_id)
                     FROM sales_report_shop_items i
                     INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
                     WHERE i.shop_id = :shop_id
+                    GROUP BY i.code
                     """
                 ),
                 {"shop_id": shop_id},
@@ -959,15 +1034,22 @@ class SalesManagementService:
             self.db.execute(
                 text(
                     """
-                    INSERT IGNORE INTO tmp_period_sold_codes (code)
-                    SELECT DISTINCT i.code
+                    INSERT INTO tmp_period_sales (code, name, sold_qty, sold_revenue, shops_count)
+                    SELECT
+                        i.code,
+                        MAX(NULLIF(i.name, '')),
+                        SUM(i.sold_qty),
+                        SUM(i.sold_revenue),
+                        SUM(i.shops_count)
                     FROM sales_report_items i
                     INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
+                    GROUP BY i.code
                     """
                 )
             )
 
     def _load_channels_for_codes(self, codes: List[str], shop_id: str = "") -> Dict[str, set]:
+        """Distinct sales channels of the page's codes inside the selected period."""
         result: Dict[str, set] = {code: set() for code in codes}
         if not codes:
             return result
@@ -991,10 +1073,12 @@ class SalesManagementService:
                 if channel:
                     result.setdefault(str(code), set()).add(str(channel))
             return result
+        # DISTINCT on the (short) JSON list keeps the transfer tiny even for
+        # top sellers that appear in thousands of realtime runs.
         rows = self.db.execute(
             text(
                 f"""
-                SELECT i.code, i.channels_json
+                SELECT DISTINCT i.code, LEFT(i.channels_json, 512)
                 FROM sales_report_items i
                 INNER JOIN tmp_sales_run_ids t ON t.id = i.run_id
                 WHERE i.code IN ({in_clause})
@@ -1003,7 +1087,6 @@ class SalesManagementService:
             params,
         ).fetchall()
         for code, raw_blob in rows:
-            key = str(code)
             if not raw_blob:
                 continue
             try:
@@ -1013,45 +1096,8 @@ class SalesManagementService:
             if isinstance(parsed, list):
                 for channel in parsed:
                     if channel:
-                        result.setdefault(key, set()).add(str(channel))
+                        result.setdefault(str(code), set()).add(str(channel))
         return result
-
-    def _load_stock_for_codes(self, codes: List[str]) -> Dict[str, float]:
-        if not codes:
-            return {}
-        params: Dict = {"brand_key": self.brand_key}
-        in_clause = self._build_in_clause("code", codes, params)
-        rows = self.db.execute(
-            text(
-                f"""
-                SELECT code, total_stock
-                FROM sales_product_stock_current
-                WHERE brand_key = :brand_key
-                  AND code IN ({in_clause})
-                """
-            ),
-            params,
-        ).fetchall()
-        return {str(r[0]): float(r[1] or 0) for r in rows}
-
-    def _load_priority_codes_set(self, codes: List[str]) -> set:
-        if not codes:
-            return set()
-        params: Dict = {"brand_key": self.brand_key}
-        in_clause = self._build_in_clause("code", codes, params)
-        rows = self.db.execute(
-            text(
-                f"""
-                SELECT code
-                FROM sales_priority_codes
-                WHERE brand_key = :brand_key
-                  AND is_active = 1
-                  AND code IN ({in_clause})
-                """
-            ),
-            params,
-        ).fetchall()
-        return {str(r[0]) for r in rows}
 
     def get_report_for_export(
         self,
@@ -1255,14 +1301,44 @@ class SalesManagementService:
                 product_bucket["sold_qty"] += float(row.get("sold_qty") or 0)
                 product_bucket["sold_revenue"] += float(row.get("sold_revenue") or 0)
 
-        if not shop_aggregate:
-            return []
-
         priority_rows = self.db.execute(
             text("SELECT code FROM sales_priority_codes WHERE brand_key = :brand_key AND is_active = 1"),
             {"brand_key": self.brand_key},
         ).fetchall()
         priority_codes = {str(r[0]).strip().upper() for r in priority_rows if r and r[0]}
+
+        # Same universe as the on-screen report: every known code of the brand,
+        # including ones with no sales in the period (exported with empty shop).
+        self._ensure_catalog_seeded()
+        catalog_rows = self.db.execute(
+            text("SELECT code, name FROM sales_product_catalog WHERE brand_key = :brand_key"),
+            {"brand_key": self.brand_key},
+        ).fetchall()
+        for code_raw, name_raw in catalog_rows:
+            code = str(code_raw or "").strip().upper()
+            if not code:
+                continue
+            if code not in product_totals:
+                product_totals[code] = {
+                    "code": code,
+                    "name": str(name_raw or ""),
+                    "sold_qty": 0.0,
+                    "sold_revenue": 0.0,
+                }
+                shop_aggregate.setdefault(
+                    (code, "", ""),
+                    {
+                        "code": code,
+                        "name": str(name_raw or ""),
+                        "channel": "",
+                        "shop_id": "",
+                        "sold_qty": 0.0,
+                        "sold_revenue": 0.0,
+                    },
+                )
+
+        if not shop_aggregate:
+            return []
 
         keyword_value = str(keyword or "").strip().lower()
         qualifying_codes = set()
@@ -1343,6 +1419,13 @@ class SalesManagementService:
             ),
             reverse=reverse,
         )
+        if sort_column in ("sold_qty", "sold_revenue"):
+            export_rows.sort(
+                key=lambda r: 0 if (
+                    float(product_totals.get(r["code"], {}).get("sold_qty") or 0) > 0
+                    or float(product_totals.get(r["code"], {}).get("sold_revenue") or 0) > 0
+                ) else 1
+            )
 
         if top_n and top_n > 0:
             ordered_codes: List[str] = []

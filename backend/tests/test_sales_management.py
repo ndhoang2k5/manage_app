@@ -150,3 +150,41 @@ class SalesShopOptionsTests(unittest.TestCase):
         self.assertEqual(get_shop_options("unknown"), [])
         self.assertEqual(normalize_shop_id("  1299057191 "), "1299057191")
         self.assertEqual(normalize_shop_id(None), "")
+
+
+class ReportOrderingTests(unittest.TestCase):
+    def _service(self):
+        from services.salesManagementService import SalesManagementService
+
+        return SalesManagementService(db=None, brand_key="unbee")
+
+    def test_sales_sorts_push_codes_without_sales_to_the_end(self):
+        svc = self._service()
+        order = svc._build_report_order_sql("sold_qty", "desc")
+        self.assertTrue(order.startswith("(agg.sold_qty > 0 OR agg.sold_revenue > 0) DESC"))
+        self.assertIn("agg.sold_qty DESC", order)
+        self.assertTrue(order.endswith("agg.code ASC"))
+
+        order_asc = svc._build_report_order_sql("sold_revenue", "asc")
+        self.assertTrue(order_asc.startswith("(agg.sold_qty > 0 OR agg.sold_revenue > 0) DESC"))
+        self.assertIn("agg.sold_revenue ASC", order_asc)
+
+    def test_other_sorts_do_not_force_sales_first(self):
+        svc = self._service()
+        order = svc._build_report_order_sql("current_stock", "desc")
+        self.assertFalse(order.startswith("(agg.sold_qty > 0"))
+        self.assertTrue(order.startswith("agg.current_stock DESC"))
+        self.assertEqual(svc._build_report_order_sql("unknown", "desc").split(",")[1].strip(), "agg.sold_qty DESC")
+
+    def test_base_sql_lists_catalog_and_applies_filters(self):
+        svc = self._service()
+        params = {}
+        sql = svc._build_report_base_sql(params, keyword="pn", only_priority_codes=True, min_qty=5, min_revenue=0)
+        self.assertIn("FROM sales_product_catalog c", sql)
+        self.assertIn("LEFT JOIN tmp_period_sales ps", sql)
+        self.assertIn("LEFT JOIN sales_product_stock_current st", sql)
+        self.assertIn("sp.code IS NOT NULL", sql)
+        self.assertIn("COALESCE(ps.sold_qty, 0) >= :min_qty", sql)
+        self.assertNotIn("COALESCE(ps.sold_revenue, 0) >= :min_revenue", sql)
+        self.assertEqual(params["keyword"], "%pn%")
+        self.assertEqual(params["brand_key"], "unbee")
