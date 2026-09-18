@@ -340,6 +340,7 @@ Repo có test tập trung tại `backend/tests/test_sales_management.py`. Cần 
 | `SALEWORK_MAX_REPORT_WINDOW_MS` | Cửa sổ report tối đa |
 | `SALEWORK_SYNC_START_MS`, `SALEWORK_MIN_SYNC_WINDOW_MS` | Mốc bắt đầu/cửa sổ sync nhỏ nhất |
 | `SALEWORK_AUTO_SYNC_ENABLED`, `SALEWORK_AUTO_SYNC_INTERVAL_SECONDS` | Worker tự động |
+| `SALEWORK_CATALOG_REFRESH_ENABLED` (mặc định true), `SALEWORK_CATALOG_REFRESH_HOUR` (mặc định 5), `SALEWORK_CATALOG_REFRESH_MINUTE` | Job `jobs/sales_catalog_daily_refresh.py`: mỗi ngày 1 lần kéo product list Salework cho 3 brand, rebuild `sales_product_catalog` (thêm mã mới, xóa mã đã xóa trên Salework), log số thêm/xóa. Chạy độc lập với worker số bán nên catalog vẫn được cập nhật kể cả khi sync số bán lỗi. |
 | `SALEWORK_AUTO_BOOTSTRAP_SCHEMA` | Cho service tự tạo bảng sales (chỉ hợp dev) |
 | `INVENTORY_CHECK_ENABLED` | Mount API kiểm tồn backend |
 | `VITE_INVENTORY_CHECK_ENABLED` | Hiện route/menu kiểm tồn frontend tại build time |

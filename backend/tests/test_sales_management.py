@@ -216,3 +216,16 @@ class CatalogMirrorsSaleworkTests(unittest.TestCase):
 
         src = inspect.getsource(SalesManagementService.get_report_by_shop_for_export)
         self.assertIn("if code not in catalog_names:", src)
+
+
+class CatalogDailyRefreshTests(unittest.TestCase):
+    def test_next_run_is_today_or_tomorrow(self):
+        from datetime import datetime
+        from jobs.sales_catalog_daily_refresh import seconds_until_next_run
+
+        now = datetime(2026, 9, 18, 4, 30)
+        self.assertEqual(seconds_until_next_run(now, 5), 30 * 60)
+        now = datetime(2026, 9, 18, 5, 0)
+        self.assertEqual(seconds_until_next_run(now, 5), 24 * 3600)
+        now = datetime(2026, 9, 18, 23, 59)
+        self.assertEqual(seconds_until_next_run(now, 0, 0), 60)

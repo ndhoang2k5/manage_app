@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api import products, warehouses, purchases, production, reports, auth, drafts, sales_management, accounts
 from jobs.sales_realtime_sync import start_sales_realtime_sync_worker
+from jobs.sales_catalog_daily_refresh import start_sales_catalog_daily_refresh_worker
 
 app = FastAPI(title="Fashion WMS API")
 
@@ -51,6 +52,7 @@ if os.getenv("INVENTORY_CHECK_ENABLED", "false").lower() == "true":
 @app.on_event("startup")
 def on_startup():
     start_sales_realtime_sync_worker()
+    start_sales_catalog_daily_refresh_worker()
 
 
 @app.get("/")
