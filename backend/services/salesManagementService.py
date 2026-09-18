@@ -149,10 +149,12 @@ class SalesManagementService:
         self.db.commit()
 
     def _ensure_catalog_table(self) -> None:
-        """Every code ever seen (sales runs or stock snapshot) per brand.
+        """Mirror of the product codes currently present on Salework, per brand.
 
-        The report lists this table and LEFT JOINs period sales + stock onto it so
-        codes with stock but no sales in the period (and vice versa) still show.
+        Rebuilt from the stock snapshot on every stock sync. The report lists this
+        table and LEFT JOINs period sales + stock onto it, so codes that exist on
+        Salework show even with no sales in the period, while codes that only
+        appear in old orders (deleted/ad-hoc products) are never shown.
         """
         self.db.execute(
             text(
@@ -169,41 +171,40 @@ class SalesManagementService:
             )
         )
 
-    def _upsert_catalog_codes(self, rows: List[Dict], prefer_new_name: bool = False) -> int:
-        """Register codes in sales_product_catalog. Does not commit; caller owns the transaction."""
-        seen: Dict[str, Optional[str]] = {}
-        for row in rows or []:
-            code = str(row.get("code") or "").strip().upper()
-            if not code:
-                continue
-            name = str(row.get("name") or "").strip() or None
-            if code not in seen or (name and not seen[code]):
-                seen[code] = name
-        if not seen:
-            return 0
-        if prefer_new_name:
-            name_update = "name = COALESCE(NULLIF(VALUES(name), ''), name)"
-        else:
-            name_update = "name = COALESCE(name, NULLIF(VALUES(name), ''))"
-        payload = [{"brand_key": self.brand_key, "code": code, "name": name} for code, name in seen.items()]
-        batch_size = 1000
-        for start in range(0, len(payload), batch_size):
-            self.db.execute(
-                text(
-                    f"""
-                    INSERT INTO sales_product_catalog (brand_key, code, name)
-                    VALUES (:brand_key, :code, :name)
-                    ON DUPLICATE KEY UPDATE {name_update}
-                    """
-                ),
-                payload[start:start + batch_size],
-            )
-        return len(payload)
+    def _rebuild_catalog_from_stock(self) -> int:
+        """Make the catalog exactly the set of codes in the stock snapshot.
+
+        Does not commit; caller owns the transaction.
+        """
+        self.db.execute(
+            text(
+                """
+                INSERT INTO sales_product_catalog (brand_key, code, name)
+                SELECT st.brand_key, st.code, st.name
+                FROM sales_product_stock_current st
+                WHERE st.brand_key = :brand_key
+                ON DUPLICATE KEY UPDATE name = COALESCE(NULLIF(VALUES(name), ''), sales_product_catalog.name)
+                """
+            ),
+            {"brand_key": self.brand_key},
+        )
+        removed = self.db.execute(
+            text(
+                """
+                DELETE c FROM sales_product_catalog c
+                LEFT JOIN sales_product_stock_current st
+                    ON st.brand_key = c.brand_key AND st.code = c.code
+                WHERE c.brand_key = :brand_key AND st.code IS NULL
+                """
+            ),
+            {"brand_key": self.brand_key},
+        )
+        return int(removed.rowcount or 0)
 
     def _ensure_catalog_seeded(self) -> None:
-        """One-time seed of the catalog for brands synced before the table existed.
-
-        Commits, so it must run before any temporary table is created.
+        """One-time seed of the catalog from the stock snapshot for brands synced
+        before the table existed. Commits, so it must run before any temporary
+        table is created.
         """
         row = self.db.execute(
             text("SELECT 1 FROM sales_product_catalog WHERE brand_key = :brand_key LIMIT 1"),
@@ -212,32 +213,7 @@ class SalesManagementService:
         if row:
             return
         try:
-            self.db.execute(
-                text(
-                    """
-                    INSERT INTO sales_product_catalog (brand_key, code, name)
-                    SELECT st.brand_key, st.code, st.name
-                    FROM sales_product_stock_current st
-                    WHERE st.brand_key = :brand_key
-                    ON DUPLICATE KEY UPDATE name = COALESCE(NULLIF(VALUES(name), ''), sales_product_catalog.name)
-                    """
-                ),
-                {"brand_key": self.brand_key},
-            )
-            self.db.execute(
-                text(
-                    """
-                    INSERT INTO sales_product_catalog (brand_key, code, name)
-                    SELECT r.brand_key, i.code, MAX(i.name)
-                    FROM sales_report_items i
-                    INNER JOIN sales_report_runs r ON r.id = i.run_id
-                    WHERE r.brand_key = :brand_key
-                    GROUP BY r.brand_key, i.code
-                    ON DUPLICATE KEY UPDATE name = COALESCE(sales_product_catalog.name, VALUES(name))
-                    """
-                ),
-                {"brand_key": self.brand_key},
-            )
+            self._rebuild_catalog_from_stock()
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -461,7 +437,6 @@ class SalesManagementService:
                 )
 
             self._insert_shop_items(run_id, product_report)
-            self._upsert_catalog_codes(items)
             self.db.commit()
             return {"run_id": run_id, "reused": False, "items_count": len(items)}
         except Exception:
@@ -584,9 +559,30 @@ class SalesManagementService:
                         "synced_at_ms": synced_at_ms,
                     },
                 )
-            self._upsert_catalog_codes(rows, prefer_new_name=True)
+            removed_stock = 0
+            if rows:
+                # Codes absent from this Salework product list were deleted there:
+                # drop them so the stock snapshot (and the catalog) mirror Salework.
+                removed_stock = int(
+                    self.db.execute(
+                        text(
+                            """
+                            DELETE FROM sales_product_stock_current
+                            WHERE brand_key = :brand_key AND synced_at_ms < :synced_at_ms
+                            """
+                        ),
+                        {"brand_key": self.brand_key, "synced_at_ms": synced_at_ms},
+                    ).rowcount
+                    or 0
+                )
+            removed_catalog = self._rebuild_catalog_from_stock() if rows else 0
             self.db.commit()
-            return {"synced_count": len(rows), "synced_at_ms": synced_at_ms}
+            return {
+                "synced_count": len(rows),
+                "synced_at_ms": synced_at_ms,
+                "removed_count": removed_stock,
+                "removed_catalog_count": removed_catalog,
+            }
         except Exception:
             self.db.rollback()
             raise
@@ -1258,6 +1254,18 @@ class SalesManagementService:
             time_end=time_end,
         )
 
+        # Same universe as the on-screen report: only codes currently on Salework.
+        self._ensure_catalog_seeded()
+        catalog_rows = self.db.execute(
+            text("SELECT code, name FROM sales_product_catalog WHERE brand_key = :brand_key"),
+            {"brand_key": self.brand_key},
+        ).fetchall()
+        catalog_names: Dict[str, str] = {}
+        for code_raw, name_raw in catalog_rows:
+            code = str(code_raw or "").strip().upper()
+            if code:
+                catalog_names[code] = str(name_raw or "")
+
         shop_aggregate: Dict[tuple, Dict] = {}
         product_totals: Dict[str, Dict] = {}
 
@@ -1274,7 +1282,9 @@ class SalesManagementService:
             for row in aggregate_sales_report_by_shop(product_report):
                 if shop_filter and str(row.get("shop_id") or "").strip() != shop_filter:
                     continue
-                code = row["code"]
+                code = str(row["code"] or "").strip().upper()
+                if code not in catalog_names:
+                    continue
                 key = (code, row["channel"], row["shop_id"])
                 bucket = shop_aggregate.setdefault(
                     key,
@@ -1307,17 +1317,8 @@ class SalesManagementService:
         ).fetchall()
         priority_codes = {str(r[0]).strip().upper() for r in priority_rows if r and r[0]}
 
-        # Same universe as the on-screen report: every known code of the brand,
-        # including ones with no sales in the period (exported with empty shop).
-        self._ensure_catalog_seeded()
-        catalog_rows = self.db.execute(
-            text("SELECT code, name FROM sales_product_catalog WHERE brand_key = :brand_key"),
-            {"brand_key": self.brand_key},
-        ).fetchall()
-        for code_raw, name_raw in catalog_rows:
-            code = str(code_raw or "").strip().upper()
-            if not code:
-                continue
+        # Catalog codes with no sales in the period are exported with an empty shop.
+        for code, name_raw in catalog_names.items():
             if code not in product_totals:
                 product_totals[code] = {
                     "code": code,

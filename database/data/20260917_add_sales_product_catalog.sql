@@ -2,10 +2,10 @@
 -- Date: 2026-09-17
 -- Purpose: the sales report only listed codes that had a sales row inside the
 --          selected period, so codes with Salework stock but no sales (or sales
---          in other periods but no stock now) disappeared. This table holds the
---          union of every code ever seen in sales runs or in the stock snapshot;
---          the report LEFT JOINs period sales and stock onto it so all codes show.
---          The service keeps it up to date on every sales/stock sync.
+--          in other periods but no stock now) disappeared. This table mirrors the
+--          Salework product list (sales_product_stock_current); the report LEFT
+--          JOINs period sales and stock onto it so all Salework codes show.
+--          The service rebuilds it on every stock sync (see 20260918 migration).
 -- Safe to run multiple times (idempotent).
 
 CREATE TABLE IF NOT EXISTS sales_product_catalog (
@@ -22,11 +22,3 @@ INSERT INTO sales_product_catalog (brand_key, code, name)
 SELECT st.brand_key, st.code, st.name
 FROM sales_product_stock_current st
 ON DUPLICATE KEY UPDATE name = COALESCE(NULLIF(VALUES(name), ''), sales_product_catalog.name);
-
--- Seed from every sales run ever stored.
-INSERT INTO sales_product_catalog (brand_key, code, name)
-SELECT r.brand_key, i.code, MAX(i.name)
-FROM sales_report_items i
-INNER JOIN sales_report_runs r ON r.id = i.run_id
-GROUP BY r.brand_key, i.code
-ON DUPLICATE KEY UPDATE name = COALESCE(sales_product_catalog.name, VALUES(name));

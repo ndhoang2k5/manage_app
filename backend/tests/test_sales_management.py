@@ -188,3 +188,31 @@ class ReportOrderingTests(unittest.TestCase):
         self.assertNotIn("COALESCE(ps.sold_revenue, 0) >= :min_revenue", sql)
         self.assertEqual(params["keyword"], "%pn%")
         self.assertEqual(params["brand_key"], "unbee")
+
+
+class CatalogMirrorsSaleworkTests(unittest.TestCase):
+    def test_sales_runs_never_feed_the_catalog(self):
+        import inspect
+        from services.salesManagementService import SalesManagementService
+
+        self.assertFalse(hasattr(SalesManagementService, "_upsert_catalog_codes"))
+        self.assertNotIn("sales_product_catalog", inspect.getsource(SalesManagementService.fetch_and_store))
+        self.assertIn("_rebuild_catalog_from_stock", inspect.getsource(SalesManagementService.sync_product_stock))
+        self.assertIn("DELETE FROM sales_product_stock_current", inspect.getsource(SalesManagementService.sync_product_stock))
+
+    def test_rebuild_removes_codes_absent_from_stock(self):
+        import inspect
+        from services.salesManagementService import SalesManagementService
+
+        src = inspect.getsource(SalesManagementService._rebuild_catalog_from_stock)
+        self.assertIn("DELETE c FROM sales_product_catalog c", src)
+        self.assertIn("st.code IS NULL", src)
+        seed = inspect.getsource(SalesManagementService._ensure_catalog_seeded)
+        self.assertNotIn("sales_report_items", seed)
+
+    def test_export_by_shop_skips_codes_outside_catalog(self):
+        import inspect
+        from services.salesManagementService import SalesManagementService
+
+        src = inspect.getsource(SalesManagementService.get_report_by_shop_for_export)
+        self.assertIn("if code not in catalog_names:", src)

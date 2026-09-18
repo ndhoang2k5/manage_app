@@ -251,7 +251,7 @@ Lưu ý: worker nằm trong process web. Nếu chạy nhiều Uvicorn worker/con
 ### 6.4 Mã ưu tiên và báo cáo
 
 - Danh sách mã có thể `replace` hoặc `append` theo brand.
-- `sales_product_catalog`: danh mục mọi mã từng xuất hiện ở số bán hoặc tồn Salework theo brand; được upsert ở mỗi lần sync số bán/tồn và tự seed lần đầu từ dữ liệu cũ. Báo cáo liệt kê toàn bộ catalog rồi LEFT JOIN số bán trong kỳ (bảng tạm `tmp_period_sales`) và tồn hiện tại, nên mã chưa bán trong kỳ hoặc đã hết tồn vẫn hiển thị.
+- `sales_product_catalog`: danh mục các mã **hiện có trên Salework** theo brand (bản sao của `sales_product_stock_current`); được rebuild ở mỗi lần sync tồn (mã không còn trong product list Salework bị xóa khỏi cả bảng tồn lẫn catalog) và tự seed lần đầu từ bảng tồn. Báo cáo và xuất Excel chỉ liệt kê catalog rồi LEFT JOIN số bán trong kỳ (bảng tạm `tmp_period_sales`) và tồn hiện tại, nên mã chưa bán trong kỳ hoặc đã hết tồn vẫn hiển thị, còn mã chỉ có trong đơn cũ (SP đã xóa/nhập tay, tên rỗng hoặc tên ghép) không hiển thị nữa.
 - Báo cáo hỗ trợ keyword, chỉ mã ưu tiên, ngưỡng số lượng/doanh thu, sort (phía server, kể cả tồn kho), top N và phân trang. Khi sort theo SL bán/doanh số, mã không có số bán luôn nằm cuối dù chiều sort là gì.
 - Export Excel chi tiết theo shop gồm mã, tên, số bán, doanh thu, tồn, kênh, shop và cờ ưu tiên.
 - UI dùng cờ ưu tiên để đánh dấu các mã nằm trong danh sách đã tải/chọn.
