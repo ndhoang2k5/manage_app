@@ -19,7 +19,7 @@ class ProductionService:
         self.db = db
         self.MAX_ORDER_CODE_LEN = 70
         self.SKU_SP_NAME_SEPARATOR = "||TEN:"
-        self.NPL_META_PREFIX = "__NPLMETA:"
+        self.NPL_META_PREFIX = "__NPLMETA__:"
         self.material_qty_quant = MATERIAL_QTY_QUANT
 
     @staticmethod
@@ -52,7 +52,16 @@ class ProductionService:
 
     def _strip_npl_note_meta(self, note: Optional[str]) -> str:
         raw = str(note or "")
-        marker_idx = raw.find(self.NPL_META_PREFIX)
+        marker_candidates = [
+            self.NPL_META_PREFIX,
+            "__NPLMETA__:",
+            "__NPLMETA:",
+        ]
+        marker_idx = -1
+        for marker in marker_candidates:
+            idx = raw.find(marker)
+            if idx >= 0 and (marker_idx < 0 or idx < marker_idx):
+                marker_idx = idx
         if marker_idx < 0:
             return raw.strip()
         return raw[:marker_idx].strip()
@@ -516,9 +525,11 @@ class ProductionService:
             source_central_wid = owner_central_id if owner_central_id and owner_central_id != workshop_wid else None
             auto_transfer_tag = f"[TRF:AUTO:{order_id}:{int(time.time())}]"
             bom_items = self.db.execute(text("""
-                SELECT bm.material_variant_id, bm.quantity_needed 
+                SELECT bm.material_variant_id, bm.quantity_needed,
+                       pv.sku, pv.variant_name
                 FROM bom_materials bm
                 JOIN bom b ON bm.bom_id = b.id
+                LEFT JOIN product_variants pv ON pv.id = bm.material_variant_id
                 WHERE b.product_variant_id = :pid
             """), {"pid": product_variant_id}).fetchall()
 
@@ -527,7 +538,17 @@ class ProductionService:
             # Duyệt qua từng nguyên liệu để TRỪ KHO
             for item in bom_items:
                 mat_id = item[0]
-                qty_needed_per_unit = float(item[1]) 
+                qty_needed_per_unit = float(item[1])
+                mat_sku = str(item[2] or "").strip()
+                mat_name = str(item[3] or "").strip()
+                if mat_sku and mat_name:
+                    mat_label = f"{mat_sku} - {mat_name}"
+                elif mat_sku:
+                    mat_label = mat_sku
+                elif mat_name:
+                    mat_label = mat_name
+                else:
+                    mat_label = f"ID {mat_id}"
                 order_qty = float(quantity_planned)
                 raw_total = qty_needed_per_unit * order_qty
                
@@ -544,7 +565,10 @@ class ProductionService:
                 # Chỉ điều chuyển phần thiếu từ kho tổng -> xưởng (nếu có kho tổng liên kết).
                 if shortage > 0:
                     if not source_central_wid:
-                        raise Exception(f"Xưởng thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {workshop_stock}")
+                        raise Exception(
+                            f"Xưởng thiếu nguyên liệu {mat_label}. "
+                            f"Cần {total_qty_needed}, chỉ còn {workshop_stock}"
+                        )
 
                     central_stock_row = self.db.execute(text("""
                         SELECT quantity_on_hand
@@ -553,7 +577,10 @@ class ProductionService:
                     """), {"wid": source_central_wid, "mid": mat_id}).fetchone()
                     central_stock = float(central_stock_row[0]) if central_stock_row else 0.0
                     if central_stock < shortage:
-                        raise Exception(f"Kho tổng thiếu nguyên liệu ID {mat_id}. Cần thêm {self._material_qty_float(shortage)}, chỉ còn {central_stock}")
+                        raise Exception(
+                            f"Kho tổng thiếu nguyên liệu {mat_label}. "
+                            f"Cần thêm {self._material_qty_float(shortage)}, chỉ còn {central_stock}"
+                        )
 
                     self.db.execute(text("""
                         UPDATE inventory_stocks
@@ -578,7 +605,10 @@ class ProductionService:
                     workshop_stock += shortage
 
                 if workshop_stock < total_qty_needed:
-                    raise Exception(f"Xưởng thiếu nguyên liệu ID {mat_id}. Cần {total_qty_needed}, chỉ còn {workshop_stock}")
+                    raise Exception(
+                        f"Xưởng thiếu nguyên liệu {mat_label}. "
+                        f"Cần {total_qty_needed}, chỉ còn {workshop_stock}"
+                    )
 
                 self.db.execute(text("""
                     UPDATE inventory_stocks
@@ -1704,6 +1734,7 @@ class ProductionService:
                     {"wid": new_wid, "id": order_id},
                 )
                 workshop_wid = new_wid
+
             source_central_wid = owner_central_id if owner_central_id and owner_central_id != workshop_wid else None
             consume_wid = workshop_wid
             auto_transfer_tag = f"[TRF:AUTO:{order_id}:{int(time.time())}]"
@@ -1762,12 +1793,27 @@ class ProductionService:
             current_qty_planned = total_qty_planned if (data.sizes is not None and total_qty_planned > 0) else old_qty_planned
 
             # 3. XỬ LÝ NGUYÊN VẬT LIỆU
+            kept_bom_ids = set()
+            draft_bom_id = None
+            if data.materials is not None and status == 'draft':
+                draft_bom_id = self.db.execute(
+                    text("SELECT id FROM bom WHERE product_variant_id=:pid"),
+                    {"pid": pid},
+                ).scalar()
+
             if data.materials is not None:
                 print(f"Materials count: {len(data.materials)}")
                 for item in data.materials:
                     req_qty = Decimal(str(item.quantity))
                     if status in ['in_progress', 'completed']:
                         print("-> Branch: IN_PROGRESS")
+
+                        if item.id and not item.material_variant_id:
+                            self.db.execute(
+                                text("DELETE FROM production_material_reservations WHERE id = :id AND production_order_id = :oid"),
+                                {"id": item.id, "oid": order_id},
+                            )
+                            continue
                         
                         if item.id:
                             old_res = self.db.execute(text("SELECT quantity_reserved, material_variant_id FROM production_material_reservations WHERE id=:id"), {"id": item.id}).fetchone()
@@ -1917,26 +1963,51 @@ class ProductionService:
                     # === TRƯỜNG HỢP B: ĐƠN NHÁP (DRAFT) -> Sửa bảng BOM ===
                     else:
                         print("-> Branch: DRAFT (BOM)")
-                        bom_id = self.db.execute(text("SELECT id FROM bom WHERE product_variant_id=:pid"), {"pid": pid}).scalar()
-                        if bom_id:
-                            print(f"   Calculating: RequestQty={req_qty} / PlannedQty={current_qty_planned}")
+                        bom_id = draft_bom_id or self.db.execute(text("SELECT id FROM bom WHERE product_variant_id=:pid"), {"pid": pid}).scalar()
+                        if not bom_id:
+                            continue
 
-                            # Tính định mức bằng Decimal
-                            per_unit_qty = req_qty / current_qty_planned if current_qty_planned > 0 else Decimal("0")
+                        if item.id and not item.material_variant_id:
+                            print(f"   Deleting BOM Material ID={item.id}")
+                            self.db.execute(
+                                text("DELETE FROM bom_materials WHERE id = :id AND bom_id = :bid"),
+                                {"id": item.id, "bid": bom_id},
+                            )
+                            continue
 
-                            if item.id:
-                                print(f"   Updating BOM Material ID={item.id}")
+                        print(f"   Calculating: RequestQty={req_qty} / PlannedQty={current_qty_planned}")
+
+                        # Tính định mức bằng Decimal
+                        per_unit_qty = req_qty / current_qty_planned if current_qty_planned > 0 else Decimal("0")
+
+                        if item.id:
+                            print(f"   Updating BOM Material ID={item.id}")
+                            self.db.execute(
+                                text("UPDATE bom_materials SET quantity_needed = :q, note = :n, material_variant_id = :mid WHERE id = :id"),
+                                {"q": per_unit_qty, "n": item.note, "mid": item.material_variant_id, "id": item.id},
+                            )
+                            kept_bom_ids.add(int(item.id))
+                        else:
+                            if item.material_variant_id:
+                                # Cho phép thêm dòng định mức = 0 (NPL đi kèm / placeholder) và vẫn lưu lại.
                                 self.db.execute(
-                                    text("UPDATE bom_materials SET quantity_needed = :q, note = :n WHERE id = :id"),
-                                    {"q": per_unit_qty, "n": item.note, "id": item.id},
+                                    text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
+                                    {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note},
                                 )
-                            else:
-                                if item.material_variant_id:
-                                    # Cho phép thêm dòng định mức = 0 (NPL đi kèm / placeholder) và vẫn lưu lại.
-                                    self.db.execute(
-                                        text("INSERT INTO bom_materials (bom_id, material_variant_id, quantity_needed, note) VALUES (:bid, :mid, :q, :n)"),
-                                        {"bid": bom_id, "mid": item.material_variant_id, "q": per_unit_qty, "n": item.note},
-                                    )
+                                new_bm_id = self.db.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+                                kept_bom_ids.add(int(new_bm_id))
+
+            if data.materials is not None and status == 'draft' and draft_bom_id:
+                existing_bom_rows = self.db.execute(
+                    text("SELECT id FROM bom_materials WHERE bom_id = :bid"),
+                    {"bid": draft_bom_id},
+                ).fetchall()
+                for (orphan_id,) in existing_bom_rows:
+                    if int(orphan_id) not in kept_bom_ids:
+                        self.db.execute(
+                            text("DELETE FROM bom_materials WHERE id = :id AND bom_id = :bid"),
+                            {"id": orphan_id, "bid": draft_bom_id},
+                        )
 
             # 4. Cập nhật SKU
             if (hasattr(data, 'new_sku') and data.new_sku) or (hasattr(data, 'new_product_name') and data.new_product_name):

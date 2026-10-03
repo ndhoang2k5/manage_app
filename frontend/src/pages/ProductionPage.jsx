@@ -29,6 +29,8 @@ const roundMaterialQty = (value) => {
     if (!Number.isFinite(num)) return 0;
     return Number(num.toFixed(MATERIAL_QTY_DECIMALS));
 };
+const AUTO_OTHER_FEE_RATE = 0.05;
+const REGULAR_FEE_FIELDS = ['shipping_fee', 'labor_fee', 'packaging_fee', 'print_fee', 'marketing_fee'];
 
 const PRODUCTION_BRAND_TABS = [
     { key: 'unbee', label: 'Unbee', keywords: ['unbee'] },
@@ -80,6 +82,7 @@ const ProductionPage = () => {
     // 4. Detail States
     const [currentOrder, setCurrentOrder] = useState(null);
     const [isEditNewOrder, setIsEditNewOrder] = useState(false);
+    const [isEditOtherFeeAuto, setIsEditOtherFeeAuto] = useState(false);
     const [editExistingMaterials, setEditExistingMaterials] = useState([]);
     const [editSizeRows, setEditSizeRows] = useState([]);
     const [orderSizes, setOrderSizes] = useState([]); 
@@ -324,6 +327,18 @@ const ProductionPage = () => {
         }
     };
 
+    const stripNplNoteMeta = (rawNote) => {
+        const raw = String(rawNote || '');
+        const markers = [NPL_META_PREFIX, '__NPLMETA__:', '__NPLMETA:'];
+        const markerIdx = markers.reduce((best, marker) => {
+            const idx = raw.indexOf(marker);
+            if (idx < 0) return best;
+            return best < 0 ? idx : Math.min(best, idx);
+        }, -1);
+        if (markerIdx < 0) return raw.trim();
+        return raw.slice(0, markerIdx).trim();
+    };
+
     const hasNplRowContent = (materialRow, parsedMeta = null) => {
         const parsed = parsedMeta || parseNplNoteMeta(materialRow?.note || '');
         const qty = Number(materialRow?.quantity || 0);
@@ -439,10 +454,66 @@ const ProductionPage = () => {
         return roundMaterialQty(rate * qty);
     };
 
-    const getMaterialById = (materialId) => {
+    const calculateConsumptionRate = (requiredQuantity, productQuantity) => {
+        const total = Number(requiredQuantity || 0);
+        const qty = Number(productQuantity || 0);
+        if (!qty) return 0;
+        return roundMaterialQty(total / qty);
+    };
+
+    const parseMoneyValue = (val) => {
+        if (val === null || val === undefined || val === '') return 0;
+        if (typeof val === 'string') {
+            val = val.replace(/,/g, '');
+        }
+        const num = Number(val || 0);
+        return Number.isFinite(num) ? num : 0;
+    };
+
+    const getMaterialById = (materialId, materialCatalog = warehouseMaterials) => {
         const id = Number(materialId);
         if (!id) return null;
-        return warehouseMaterials.find((p) => Number(p.id) === id) || products.find((p) => Number(p.id) === id) || null;
+        return (materialCatalog || []).find((p) => Number(p.id) === id) || products.find((p) => Number(p.id) === id) || null;
+    };
+
+    const calculateMaterialCostFromRows = (materialRows = [], quantityField = 'required_quantity', materialCatalog = warehouseMaterials) => {
+        if (!Array.isArray(materialRows)) return 0;
+        return materialRows.reduce((sum, item) => {
+            const materialId = item?.material_variant_id;
+            if (!materialId) return sum;
+            const qty = parseMoneyValue(item?.[quantityField]);
+            if (!qty) return sum;
+            const mat = getMaterialById(materialId, materialCatalog);
+            return sum + (qty * parseMoneyValue(mat?.cost_price));
+        }, 0);
+    };
+
+    const calculateRegularFees = (values = {}) => (
+        REGULAR_FEE_FIELDS.reduce((sum, field) => sum + parseMoneyValue(values[field]), 0)
+    );
+
+    const calculateAutoOtherFee = (
+        values = {},
+        materialRows = values.materials || [],
+        quantityField = 'required_quantity',
+        materialCatalog = warehouseMaterials
+    ) => {
+        const baseTotal = calculateMaterialCostFromRows(materialRows, quantityField, materialCatalog) + calculateRegularFees(values);
+        return Math.round(baseTotal * AUTO_OTHER_FEE_RATE);
+    };
+
+    const syncAutoOtherFee = (
+        form,
+        materialFieldName = 'materials',
+        quantityField = 'required_quantity',
+        materialCatalog = warehouseMaterials
+    ) => {
+        const values = form.getFieldsValue();
+        const otherFee = calculateAutoOtherFee(values, values[materialFieldName] || [], quantityField, materialCatalog);
+        if (parseMoneyValue(values.other_fee) !== otherFee) {
+            form.setFieldsValue({ other_fee: otherFee });
+        }
+        return otherFee;
     };
 
     // --- LOGIC KHO & NVL ---
@@ -473,26 +544,10 @@ const ProductionPage = () => {
         const materials = values.materials || [];
         const totalQty = getOrderQuantityFromMaterials(materials);
 
-        let totalMatCost = 0;
-        if (Array.isArray(materials)) {
-            materials.forEach(item => {
-                if (item && item.material_variant_id) {
-                    const requiredQty = calculateRequiredQuantity(item.consumption_rate, item.product_quantity);
-                    if (!requiredQty) return;
-                    const mat = getMaterialById(item.material_variant_id);
-                    const price = mat ? (mat.cost_price || 0) : 0;
-                    totalMatCost += requiredQty * Number(price || 0);
-                }
-            });
-        }
+        const totalMatCost = calculateMaterialCostFromRows(materials, 'required_quantity');
+        const otherFee = syncAutoOtherFee(orderForm, 'materials', 'required_quantity');
 
-        const totalFees =
-            Number(values.shipping_fee || 0) +
-            Number(values.labor_fee || 0) +
-            Number(values.packaging_fee || 0) +
-            Number(values.print_fee || 0) +
-            Number(values.marketing_fee || 0) +
-            Number(values.other_fee || 0);
+        const totalFees = calculateRegularFees(values) + otherFee;
 
         if (totalQty > 0) {
             setEstimatedCost((totalMatCost + totalFees) / totalQty);
@@ -501,6 +556,24 @@ const ProductionPage = () => {
         }
     };
     const onFormValuesChange = () => calculateCost();
+
+    const onEditFormValuesChange = (changedValues) => {
+        if (changedValues && 'warehouse_id' in changedValues) {
+            const centralId = Number(currentOrder?.owner_central_id || 0);
+            const workshopId = Number(changedValues.warehouse_id || 0);
+            if (centralId && workshopId) {
+                productApi.getByWarehouse(centralId, workshopId)
+                    .then((res) => setWarehouseMaterials(Array.isArray(res.data) ? res.data : []))
+                    .catch((error) => console.error("Lỗi tải NVL tại kho:", error));
+            }
+        }
+        if (!isEditOtherFeeAuto) return;
+        if (isEditNewOrder) {
+            syncAutoOtherFee(editForm, 'edit_material_rows', 'required_quantity');
+        } else {
+            syncAutoOtherFee(editForm, 'materials', 'quantity');
+        }
+    };
 
     const reloadOrders = () => {
         fetchData(pagination.current, pagination.pageSize);
@@ -556,14 +629,15 @@ const ProductionPage = () => {
                 .map((row, idx) => {
                     const materialId = Number(row?.material_variant_id || 0);
                     const lineQty = Number(row?.product_quantity || 0);
-                    const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
+                    const requiredQty = roundMaterialQty(row?.required_quantity || 0);
+                    const consumptionRate = calculateConsumptionRate(requiredQty, lineQty);
                     const hasSku = normalizeSkuSp(row?.sku_sp).length > 0;
                     return {
                         material_variant_id: materialId,
                         quantity_needed: Number(requiredQty || 0),
                         note: buildNplNoteWithMeta({
                             note: row?.npl_note || '',
-                            consumptionRate: row?.consumption_rate,
+                            consumptionRate,
                             productQuantity: row?.product_quantity,
                             includeMeta: true,
                             rowIndex: idx,
@@ -579,6 +653,7 @@ const ProductionPage = () => {
             }
 
             const imageUrls = fileList.filter(f => f.status === 'done' && f.originFileObj.url).map(f => f.originFileObj.url);
+            const autoOtherFee = calculateAutoOtherFee(values, values.materials || [], 'required_quantity');
             const payload = {
                 new_product_name: values.new_product_name,
                 new_product_sku: values.new_product_sku,
@@ -599,7 +674,7 @@ const ProductionPage = () => {
                 labor_fee: Number(values.labor_fee || 0),
                 packaging_fee: Number(values.packaging_fee || 0),
                 print_fee: Number(values.print_fee || 0),
-                other_fee: Number(values.other_fee || 0),
+                other_fee: autoOtherFee,
                 marketing_fee: Number(values.marketing_fee || 0),
                 note: values.note || ""
             };
@@ -616,20 +691,9 @@ const ProductionPage = () => {
         setLoading(false);
     };
 
-    const onEditFormValuesChange = (changedValues) => {
-        if (changedValues && 'warehouse_id' in changedValues) {
-            const centralId = Number(currentOrder?.owner_central_id || 0);
-            const workshopId = Number(changedValues.warehouse_id || 0);
-            if (centralId && workshopId) {
-                productApi.getByWarehouse(centralId, workshopId)
-                    .then((res) => setWarehouseMaterials(Array.isArray(res.data) ? res.data : []))
-                    .catch((error) => console.error("Lỗi tải NVL tại kho:", error));
-            }
-        }
-    };
-
     const openEditModal = async (record) => {
         setCurrentOrder(record);
+        let loadedMaterialCatalog = warehouseMaterials;
 
         // 1. Lấy danh sách NVL của kho để nạp vào Dropdown
         const sourceCentralId = Number(record?.owner_central_id || 0);
@@ -640,9 +704,11 @@ const ProductionPage = () => {
                     sourceCentralId || workshopId,
                     sourceCentralId ? workshopId : undefined
                 );
-                setWarehouseMaterials(Array.isArray(res.data) ? res.data : []);
+                loadedMaterialCatalog = Array.isArray(res.data) ? res.data : [];
+                setWarehouseMaterials(loadedMaterialCatalog);
             } catch (error) {
                 console.error("Lỗi tải NVL tại kho:", error);
+                loadedMaterialCatalog = [];
                 setWarehouseMaterials([]);
             }
         }
@@ -659,7 +725,9 @@ const ProductionPage = () => {
             const materials = matRes.data || [];
             const sizes = sizeRes.data || []; // Dữ liệu size trả về từ API
             const isNewOrderMode = !!(data?.use_sku_sp_mode || data?.is_new_sku_order);
+            const shouldAutoOtherFeeOnEdit = parseMoneyValue(data?.other_fee) <= 0;
             setIsEditNewOrder(isNewOrderMode);
+            setIsEditOtherFeeAuto(shouldAutoOtherFeeOnEdit);
             setEditExistingMaterials((materials || []).map((m) => ({
                 id: m.id,
                 material_variant_id: m.material_variant_id,
@@ -687,8 +755,53 @@ const ProductionPage = () => {
             }));
             setFileList(existingImages);
 
-            // 4. Đổ dữ liệu vào Form
-            editForm.setFieldsValue({
+            const editMaterialRows = isNewOrderMode
+                ? (() => {
+                    const dedupedMaterials = dedupeMaterialsByRowIndex(materials);
+                    const rowCount = getEditMaterialRowCount(normalizedSizes, materials);
+                    return Array.from({ length: rowCount }, (_, idx) => {
+                        const packed = dedupedMaterials[idx] || {};
+                        const m = packed.row || {};
+                        const parsedNpl = packed.parsed || parseNplNoteMeta(m.note || '');
+                        const sizeByIndex = normalizedSizes[idx] || { sku_sp: '', sku_sp_name: '', quantity: 0, note: '' };
+                        const rowSku = normalizeSkuSp(sizeByIndex.sku_sp);
+                        const totalNeeded = Number(m.quantity || 0);
+                        const baseQty = rowSku
+                            ? Number(sizeByIndex.quantity || 0)
+                            : (parsedNpl.hasProductQuantity
+                                ? Number(parsedNpl.productQuantity || 0)
+                                : 0);
+                        const consumption = parsedNpl.hasConsumptionRate
+                            ? Number(parsedNpl.consumptionRate || 0)
+                            : (baseQty > 0 && totalNeeded > 0
+                                ? roundMaterialQty(totalNeeded / baseQty)
+                                : 0);
+                        return {
+                            id: m.id || null,
+                            material_variant_id: m.material_variant_id || null,
+                            sku_sp: rowSku,
+                            sku_sp_name: rowSku ? String(sizeByIndex.sku_sp_name || '').trim() : '',
+                            sku_sp_note: rowSku ? String(sizeByIndex.note || '').trim() : '',
+                            npl_note: parsedNpl.note || '',
+                            consumption_rate: Number(consumption || 0),
+                            product_quantity: Number(baseQty || 0),
+                            required_quantity: roundMaterialQty(totalNeeded),
+                        };
+                    });
+                })()
+                : [];
+            const legacyMaterials = (materials || []).map(m => {
+                const cleanQty = roundMaterialQty(m.quantity);
+                return {
+                    id: m.id,
+                    material_variant_id: m.material_variant_id,
+                    sku: m.sku,
+                    name: m.name,
+                    quantity: cleanQty,
+                    note: m.note
+                };
+            });
+            const editValues = {
                 code: data.code,
                 warehouse_id: record.warehouse_id ? Number(record.warehouse_id) : undefined,
                 new_sku: data.sku,
@@ -709,57 +822,21 @@ const ProductionPage = () => {
                     quantity: s.planned, // <--- LƯU Ý: API trả về 'planned', Form dùng 'quantity'
                     note: s.note
                 })),
-                edit_material_rows: isNewOrderMode
-                    ? (() => {
-                        const dedupedMaterials = dedupeMaterialsByRowIndex(materials);
-                        const rowCount = getEditMaterialRowCount(normalizedSizes, materials);
-                        return Array.from({ length: rowCount }, (_, idx) => {
-                            const packed = dedupedMaterials[idx] || {};
-                            const m = packed.row || {};
-                            const parsedNpl = packed.parsed || parseNplNoteMeta(m.note || '');
-                            const sizeByIndex = normalizedSizes[idx] || { sku_sp: '', sku_sp_name: '', quantity: 0, note: '' };
-                            const rowSku = normalizeSkuSp(sizeByIndex.sku_sp);
-                            const totalNeeded = Number(m.quantity || 0);
-                            const baseQty = rowSku
-                                ? Number(sizeByIndex.quantity || 0)
-                                : (parsedNpl.hasProductQuantity
-                                    ? Number(parsedNpl.productQuantity || 0)
-                                    : 0);
-                            const consumption = parsedNpl.hasConsumptionRate
-                                ? Number(parsedNpl.consumptionRate || 0)
-                                : (baseQty > 0 && totalNeeded > 0
-                                    ? roundMaterialQty(totalNeeded / baseQty)
-                                    : 0);
-                            return {
-                                id: m.id || null,
-                                material_variant_id: m.material_variant_id || null,
-                                sku_sp: rowSku,
-                                sku_sp_name: rowSku ? String(sizeByIndex.sku_sp_name || '').trim() : '',
-                                sku_sp_note: rowSku ? String(sizeByIndex.note || '').trim() : '',
-                                npl_note: parsedNpl.note || '',
-                                consumption_rate: Number(consumption || 0),
-                                product_quantity: Number(baseQty || 0),
-                            };
-                        });
-                    })()
-                    : [],
+                edit_material_rows: editMaterialRows,
                 
                 // Đổ dữ liệu NVL
-                materials: (materials || []).map(m => {
-                    const cleanQty = roundMaterialQty(m.quantity);
-                    return {
-                        id: m.id,
-                        material_variant_id: m.material_variant_id,
-                        sku: m.sku, 
-                        name: m.name, 
-                        
-                        // Gán giá trị đã làm sạch vào Form
-                        quantity: cleanQty, 
-                        
-                        note: m.note
-                    }
-                })
-            });
+                materials: legacyMaterials
+            };
+            if (shouldAutoOtherFeeOnEdit) {
+                editValues.other_fee = calculateAutoOtherFee(
+                    editValues,
+                    isNewOrderMode ? editMaterialRows : legacyMaterials,
+                    isNewOrderMode ? 'required_quantity' : 'quantity',
+                    loadedMaterialCatalog
+                );
+            }
+            // 4. Đổ dữ liệu vào Form
+            editForm.setFieldsValue(editValues);
             
             setIsEditModalOpen(true);
         } catch (err) {
@@ -819,7 +896,8 @@ const ProductionPage = () => {
                         const materialId = Number(row?.material_variant_id || 0);
                         if (!materialId) return null;
                         const lineQty = Number(row?.product_quantity || 0);
-                        const requiredQty = calculateRequiredQuantity(row?.consumption_rate, lineQty);
+                        const requiredQty = roundMaterialQty(row?.required_quantity || 0);
+                        const consumptionRate = calculateConsumptionRate(requiredQty, lineQty);
                         const hasSku = normalizeSkuSp(row?.sku_sp).length > 0;
                         const rowId = row?.id ? parseInt(row.id) : null;
                         const original = rowId
@@ -833,7 +911,7 @@ const ProductionPage = () => {
                         const materialChanged = !!(original && Number(original.material_variant_id) !== materialId);
                         const hasAnyContent = hasSku
                             || materialId > 0
-                            || Number(row?.consumption_rate || 0) > 0
+                            || requiredQty > 0
                             || Number(row?.product_quantity || 0) > 0
                             || String(row?.npl_note || '').trim()
                             || String(row?.sku_sp_name || '').trim()
@@ -861,7 +939,7 @@ const ProductionPage = () => {
                             quantity: parseNum(requiredQty),
                             note: buildNplNoteWithMeta({
                                 note: row?.npl_note || '',
-                                consumptionRate: row?.consumption_rate,
+                                consumptionRate,
                                 productQuantity: row?.product_quantity,
                                 includeMeta: true,
                                 rowIndex: idx,
@@ -918,6 +996,14 @@ const ProductionPage = () => {
                 return null;
             }).filter(url => url !== null);
 
+            const autoOtherFee = isEditOtherFeeAuto
+                ? calculateAutoOtherFee(
+                    values,
+                    isEditNewOrder ? (values.edit_material_rows || []) : (values.materials || []),
+                    isEditNewOrder ? 'required_quantity' : 'quantity'
+                )
+                : parseNum(values.other_fee);
+
             // 4. Tạo Payload
             const payload = {
                 start_date: values.start_date ? values.start_date.format('YYYY-MM-DD') : null,
@@ -925,7 +1011,7 @@ const ProductionPage = () => {
                 new_sku: values.new_sku,
                 new_product_name: values.new_product_name,
                 shipping_fee: parseNum(values.shipping_fee),
-                other_fee: parseNum(values.other_fee),
+                other_fee: autoOtherFee,
                 labor_fee: parseNum(values.labor_fee),
                 marketing_fee: parseNum(values.marketing_fee),
                 packaging_fee: parseNum(values.packaging_fee),
@@ -1547,12 +1633,13 @@ const ProductionPage = () => {
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ padding: '8px 8px' }}>
-                                                                <Form.Item
-                                                                    {...restField}
-                                                                    name={[name, 'consumption_rate']}
-                                                                    style={{ marginBottom: 0 }}
-                                                                >
-                                                                    <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                                <Form.Item shouldUpdate noStyle>
+                                                                    {({ getFieldValue }) => {
+                                                                        const requiredQty = getFieldValue(['materials', name, 'required_quantity']);
+                                                                        const productQuantity = getFieldValue(['materials', name, 'product_quantity']);
+                                                                        const consumptionRate = calculateConsumptionRate(requiredQty, productQuantity);
+                                                                        return <InputNumber value={consumptionRate} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
+                                                                    }}
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ padding: '8px 8px' }}>
@@ -1565,13 +1652,12 @@ const ProductionPage = () => {
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ padding: '8px 8px' }}>
-                                                                <Form.Item shouldUpdate noStyle>
-                                                                    {({ getFieldValue }) => {
-                                                                        const consumptionRate = getFieldValue(['materials', name, 'consumption_rate']);
-                                                                        const productQuantity = getFieldValue(['materials', name, 'product_quantity']);
-                                                                        const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
-                                                                        return <InputNumber value={requiredQty} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
-                                                                    }}
+                                                                <Form.Item
+                                                                    {...restField}
+                                                                    name={[name, 'required_quantity']}
+                                                                    style={{ marginBottom: 0 }}
+                                                                >
+                                                                    <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 29" />
                                                                 </Form.Item>
                                                             </td>
                                                             <td style={{ textAlign: 'center', padding: '8px 4px' }}>
@@ -1595,7 +1681,11 @@ const ProductionPage = () => {
                                     <Col span={8}><Form.Item label="Vận chuyển" name="shipping_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
                                     <Col span={8}><Form.Item label="Đóng gói" name="packaging_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
                                     <Col span={8}><Form.Item label="Marketing" name="marketing_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
-                                    <Col span={8}><Form.Item label="Phụ phí khác" name="other_fee" initialValue={0}><Input type="number" suffix="₫" /></Form.Item></Col>
+                                    <Col span={8}>
+                                        <Form.Item label="Phụ phí khác (tự tính 5%)" name="other_fee" initialValue={0}>
+                                            <Input type="number" suffix="₫" disabled />
+                                        </Form.Item>
+                                    </Col>
                                 </Row>
                                 
                                 <div style={{ background: '#fff', padding: 10, borderRadius: 6, border: '1px solid #d9d9d9', textAlign: 'center' }}>
@@ -1695,7 +1785,7 @@ const ProductionPage = () => {
                                                                             || String(row?.sku_sp_name || '').trim()
                                                                             || String(row?.sku_sp_note || '').trim()
                                                                             || String(row?.npl_note || '').trim()
-                                                                            || Number(row?.consumption_rate || 0) > 0
+                                                                            || Number(row?.required_quantity || 0) > 0
                                                                             || Number(row?.product_quantity || 0) > 0;
                                                                         if (hasOther && !value) {
                                                                             return Promise.reject(new Error('Chọn NVL'));
@@ -1747,8 +1837,13 @@ const ProductionPage = () => {
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
-                                                            <Form.Item {...restField} name={[name, 'consumption_rate']} style={{ marginBottom: 0 }}>
-                                                                <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 1.2" />
+                                                            <Form.Item shouldUpdate noStyle>
+                                                                {({ getFieldValue }) => {
+                                                                    const requiredQty = getFieldValue(['edit_material_rows', name, 'required_quantity']);
+                                                                    const productQuantity = getFieldValue(['edit_material_rows', name, 'product_quantity']);
+                                                                    const consumptionRate = calculateConsumptionRate(requiredQty, productQuantity);
+                                                                    return <InputNumber value={consumptionRate} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
+                                                                }}
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
@@ -1757,13 +1852,8 @@ const ProductionPage = () => {
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ padding: '8px 8px' }}>
-                                                            <Form.Item shouldUpdate noStyle>
-                                                                {({ getFieldValue }) => {
-                                                                    const consumptionRate = getFieldValue(['edit_material_rows', name, 'consumption_rate']);
-                                                                    const productQuantity = getFieldValue(['edit_material_rows', name, 'product_quantity']);
-                                                                    const requiredQty = calculateRequiredQuantity(consumptionRate, productQuantity);
-                                                                    return <InputNumber value={requiredQty} disabled precision={MATERIAL_QTY_DECIMALS} style={{ width: '100%' }} />;
-                                                                }}
+                                                            <Form.Item {...restField} name={[name, 'required_quantity']} style={{ marginBottom: 0 }}>
+                                                                <InputNumber min={0} step={0.00001} stringMode style={{ width: '100%' }} placeholder="VD: 29" />
                                                             </Form.Item>
                                                         </td>
                                                         <td style={{ textAlign: 'center', padding: '8px 4px' }}>
@@ -1978,7 +2068,11 @@ const ProductionPage = () => {
                         <Col span={8}><Form.Item label="Vận Chuyển" name="shipping_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                         <Col span={8}><Form.Item label="Marketing" name="marketing_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
                         <Col span={8}><Form.Item label="Đóng Gói" name="packaging_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
-                        <Col span={8}><Form.Item label="Phụ phí" name="other_fee"><Input type="number" suffix="₫" /></Form.Item></Col>
+                        <Col span={8}>
+                            <Form.Item label={isEditOtherFeeAuto ? "Phụ phí (tự tính 5%)" : "Phụ phí"} name="other_fee">
+                                <Input type="number" suffix="₫" disabled={isEditOtherFeeAuto} />
+                            </Form.Item>
+                        </Col>
                     </Row>
                     <Row>
                         <Col span={24}>
@@ -2167,7 +2261,7 @@ const ProductionPage = () => {
                                         <td style={{ border: '1px solid #333', padding: '8px', textAlign: 'center', fontWeight: 'bold', fontSize: '15px' }}>
                                             {new Intl.NumberFormat('vi-VN').format(m.total_needed)}
                                         </td>
-                                        <td style={{ border: '1px solid #333', padding: '8px' }}>{m.note || ''}</td>
+                                        <td style={{ border: '1px solid #333', padding: '8px' }}>{stripNplNoteMeta(m.note) || ''}</td>
                                     </tr>
                                 ))}
                             </tbody>
