@@ -95,6 +95,19 @@ const ProductionPage = () => {
     const sizeStandards = ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m", "2-3y", "3-4y", "4-5y", "X", "S", "M", "L", "XL", "XXL", "XXXL"];
     const sizeStandardOptions = sizeStandards.map((s) => ({ value: s, label: s }));
     const centralOptions = warehouses.filter(w => w.type_name === 'Kho Tổng');
+    // Xưởng được phép đổi khi sửa đơn: chỉ các xưởng thuộc cùng kho tổng quản lý đơn
+    const editOwnerCentralId = Number(currentOrder?.owner_central_id || 0);
+    const editWorkshopOptions = warehouses.filter((w) => {
+        if (w.type_name === 'Kho Tổng') return false;
+        if (Number(w.id) === Number(currentOrder?.warehouse_id)) return true;
+        return !!editOwnerCentralId
+            && (w.managed_by_central_ids || []).map(Number).includes(editOwnerCentralId);
+    });
+    const editWorkshopLockReason = !editOwnerCentralId
+        ? 'Đơn chưa gắn kho tổng, không thể đổi xưởng'
+        : (Number(currentOrder?.quantity_finished || 0) > 0
+            ? 'Đơn đã nhập thành phẩm, không thể đổi xưởng'
+            : '');
     const selectedOwnerCentral = centralOptions.find((w) => Number(w.id) === Number(selectedOwnerCentralId));
     const canViewCreateCost = selectedOwnerCentral
         ? canViewMaterialCostForBrand(user, selectedOwnerCentral.brand_id)
@@ -603,6 +616,18 @@ const ProductionPage = () => {
         setLoading(false);
     };
 
+    const onEditFormValuesChange = (changedValues) => {
+        if (changedValues && 'warehouse_id' in changedValues) {
+            const centralId = Number(currentOrder?.owner_central_id || 0);
+            const workshopId = Number(changedValues.warehouse_id || 0);
+            if (centralId && workshopId) {
+                productApi.getByWarehouse(centralId, workshopId)
+                    .then((res) => setWarehouseMaterials(Array.isArray(res.data) ? res.data : []))
+                    .catch((error) => console.error("Lỗi tải NVL tại kho:", error));
+            }
+        }
+    };
+
     const openEditModal = async (record) => {
         setCurrentOrder(record);
 
@@ -665,6 +690,7 @@ const ProductionPage = () => {
             // 4. Đổ dữ liệu vào Form
             editForm.setFieldsValue({
                 code: data.code,
+                warehouse_id: record.warehouse_id ? Number(record.warehouse_id) : undefined,
                 new_sku: data.sku,
                 new_product_name: data.product, 
                 start_date: dayjs(data.start_date),
@@ -909,6 +935,9 @@ const ProductionPage = () => {
                 materials: cleanMaterials,
                 sizes: cleanSizes
             };
+            if (values.warehouse_id && Number(values.warehouse_id) !== Number(currentOrder.warehouse_id)) {
+                payload.warehouse_id = Number(values.warehouse_id);
+            }
             
             console.log("Payload gửi đi:", payload); // Kiểm tra F12 xem số có đúng không
 
@@ -1586,11 +1615,18 @@ const ProductionPage = () => {
 
             {/* Modal Sửa (Edit) */}
             <Modal title="Cập nhật Thông tin, Chi phí & NVL" open={isEditModalOpen} onCancel={() => setIsEditModalOpen(false)} width={isEditNewOrder ? 1680 : 1000} footer={null} style={{top: 20}}>
-                <Form layout="vertical" form={editForm} onFinish={handleUpdateOrder}>
+                <Form layout="vertical" form={editForm} onFinish={handleUpdateOrder} onValuesChange={onEditFormValuesChange}>
                     
                     {/* --- 1. THÔNG TIN CHUNG --- */}
                     <Row gutter={16}>
                         <Col span={8}><Form.Item label="Mã Lệnh" name="code"><Input disabled /></Form.Item></Col>
+                        <Col span={8}>
+                            <Form.Item label="Xưởng May" name="warehouse_id" tooltip={editWorkshopLockReason || 'Chỉ chọn được xưởng thuộc cùng kho tổng của đơn'}>
+                                <Select placeholder="Chọn xưởng" disabled={!!editWorkshopLockReason}>
+                                    {editWorkshopOptions.map(w => <Select.Option key={w.id} value={Number(w.id)}>{w.name}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                        </Col>
                         <Col span={8}><Form.Item label="Mã SKU Sản phẩm" name="new_sku" rules={[{ required: true }]}><Input /></Form.Item></Col>
                         <Col span={6}><Form.Item label="Tên Sản Phẩm" name="new_product_name" rules={[{ required: true }]}><Input /></Form.Item></Col>
                         <Col span={8}>

@@ -120,3 +120,5 @@ class ProductionUpdateRequest(BaseModel):
     sizes: Optional[List[ProductionSizeUpdateItem]] = None
     new_product_name: Optional[str] = None
     note: Optional[str] = ""
+    # Đổi xưởng may (chỉ trong cùng kho tổng quản lý đơn)
+    warehouse_id: Optional[int] = None

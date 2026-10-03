@@ -1656,17 +1656,54 @@ class ProductionService:
             "images": list_imgs
         }
     
+    def _assert_workshop_change_allowed(self, owner_central_id, new_wid: int, status: str, qty_finished: Decimal):
+        if status == 'cancelled':
+            raise Exception("Đơn đã hủy, không thể đổi xưởng")
+        if not owner_central_id:
+            raise Exception("Đơn chưa gắn kho tổng quản lý, không thể đổi xưởng")
+        if qty_finished > 0:
+            # Thành phẩm đã nhập vào kho xưởng cũ -> đổi xưởng sẽ lệch tồn khi hoàn tác/hủy
+            raise Exception("Đơn đã nhập thành phẩm, không thể đổi xưởng")
+        target = self.db.execute(
+            text("SELECT id, is_central FROM warehouses WHERE id = :id"),
+            {"id": new_wid},
+        ).fetchone()
+        if not target:
+            raise Exception("Xưởng may không tồn tại")
+        if target[1]:
+            raise Exception("Phải chọn xưởng may, không được chọn kho tổng")
+        linked = self.db.execute(
+            text("""
+                SELECT 1 FROM central_workshop_links
+                WHERE central_warehouse_id = :cid AND workshop_warehouse_id = :wid
+            """),
+            {"cid": owner_central_id, "wid": new_wid},
+        ).fetchone()
+        if not linked:
+            raise Exception("Chỉ được đổi sang xưởng thuộc cùng kho tổng quản lý đơn này")
+
     def update_production_order(self, order_id: int, data: ProductionUpdateRequest, actor_user_id: Optional[int] = None):
         try:
             print(f"--- DEBUG UPDATE ORDER {order_id} ---")
             self._write_order_snapshot(order_id, "update_before", actor_user_id=actor_user_id, note="Snapshot trước khi cập nhật đơn")
-            order = self.db.execute(text("SELECT warehouse_id, owner_central_id, status, product_variant_id, quantity_planned FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
+            order = self.db.execute(text("SELECT warehouse_id, owner_central_id, status, product_variant_id, quantity_planned, quantity_finished FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
             if not order: raise Exception("Không tìm thấy đơn hàng")
             workshop_wid = order[0]
             owner_central_id = order[1]
             status = order[2]
             pid = order[3]
             old_qty_planned = Decimal(str(order[4])) # Chuyển sang Decimal ngay
+            qty_finished = Decimal(str(order[5] or 0))
+
+            # 1. Đổi xưởng may (chỉ cho phép xưởng thuộc cùng kho tổng quản lý đơn)
+            new_wid = int(data.warehouse_id) if data.warehouse_id else None
+            if new_wid and new_wid != int(workshop_wid):
+                self._assert_workshop_change_allowed(owner_central_id, new_wid, status, qty_finished)
+                self.db.execute(
+                    text("UPDATE production_orders SET warehouse_id = :wid WHERE id = :id"),
+                    {"wid": new_wid, "id": order_id},
+                )
+                workshop_wid = new_wid
             source_central_wid = owner_central_id if owner_central_id and owner_central_id != workshop_wid else None
             consume_wid = workshop_wid
             auto_transfer_tag = f"[TRF:AUTO:{order_id}:{int(time.time())}]"
@@ -1949,6 +1986,7 @@ class ProductionService:
 
             status = order[0] 
             warehouse_id = order[1]
+            owner_central_id = order[2]
             product_variant_id = order[3] 
             qty_finished = float(order[4]) if order[4] else 0.0
             order_code = order[5]
@@ -1958,7 +1996,10 @@ class ProductionService:
 
             # B. Hoàn trả NVL & Thành phẩm (Chỉ áp dụng nếu đơn đã chạy)
             if status in ['in_progress', 'completed']:
-                # 1. Hoàn trả NVL đang giữ chỗ
+                # 1. Hoàn trả NVL đang giữ chỗ: luôn đưa về kho tổng quản lý đơn
+                #    (không trả về xưởng con). Đơn cũ chưa gắn kho tổng thì trả về xưởng.
+                return_wid = owner_central_id or warehouse_id
+                return_note = 'Hoàn trả NVL về kho tổng do Hủy đơn' if owner_central_id else 'Hoàn trả NVL do Hủy đơn'
                 reservations = self.db.execute(text("""
                     SELECT material_variant_id, quantity_reserved 
                     FROM production_material_reservations 
@@ -1970,18 +2011,18 @@ class ProductionService:
                     qty_return = float(res[1]) if res[1] else 0.0
                     
                     if qty_return > 0:
-                        # Cộng lại tồn kho
+                        # Cộng lại tồn kho (kho tổng có thể chưa có dòng tồn cho NVL này)
                         self.db.execute(text("""
-                            UPDATE inventory_stocks 
-                            SET quantity_on_hand = quantity_on_hand + :qty
-                            WHERE warehouse_id = :wid AND product_variant_id = :mid
-                        """), {"qty": qty_return, "wid": warehouse_id, "mid": mat_id})
+                            INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
+                            VALUES (:wid, :mid, :qty)
+                            ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :qty
+                        """), {"qty": qty_return, "wid": return_wid, "mid": mat_id})
 
                         # Ghi log hoàn trả
                         self.db.execute(text("""
                             INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                            VALUES (:wid, :mid, 'production_in', :qty, :ref, 'Hoàn trả NVL do Hủy đơn')
-                        """), {"wid": warehouse_id, "mid": mat_id, "qty": qty_return, "ref": order_id})
+                            VALUES (:wid, :mid, 'production_in', :qty, :ref, :note)
+                        """), {"wid": return_wid, "mid": mat_id, "qty": qty_return, "ref": order_id, "note": return_note})
 
                 # 2. Hoàn trả (Trừ đi) Thành phẩm đã nhập kho (nếu có)
                 if qty_finished > 0:

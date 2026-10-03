@@ -343,6 +343,8 @@ def update_order(
     service = ProductionService(db)
     try:
         assert_production_order_scope(user, db, order_id)
+        if request.warehouse_id:
+            assert_warehouse_scope(user, db, request.warehouse_id)
         return service.update_production_order(order_id, request, actor_user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
