@@ -1,5 +1,6 @@
 """
-Dữ liệu chỉ đọc cho tích hợp bên ngoài (Google Sheets của Unbee): BOM, giá vốn, danh mục NPL.
+Dữ liệu chỉ đọc cho tích hợp bên ngoài (Google Sheets của Unbee): BOM, giá vốn, danh mục NPL,
+lệnh sản xuất theo SKU, nhập/cấp/trả vật tư.
 
 Web lưu BOM theo từng lệnh sản xuất, không theo mã sản phẩm. Mã sản phẩm (VD QA388) được
 suy ra từ các dòng SKU của lệnh (production_order_items.size_label = "SKU:QA38801||TEN:...").
@@ -27,6 +28,32 @@ RESERVATION_STATUSES = ("in_progress", "completed")
 SIZE_ALL = "Tất cả"
 STATUS_COMPLETE = "đủ dữ liệu"
 STATUS_ESTIMATE = "tạm tính"
+
+# Lệnh SX
+ORDER_NOT_CUT = "chưa cắt"
+ORDER_SEWING = "đang may"
+ORDER_RECEIVED = "đã về"
+ORDER_CLOSED = "đóng"
+ORDER_CANCELLED = "đã hủy"
+# Hủy lệnh đổi mã thành "<mã cũ>_C_<unix time>" để giải phóng mã.
+CANCELLED_CODE_RE = re.compile(r"^(.*)_C_(\d{9,11})$")
+SIZE_SUFFIX_RE = re.compile(
+    r"^(?P<mau>.*?)[\s,;/\-]*(?:\b(?:sz|size)\s*)?\b(?P<size>"
+    r"\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*(?:m|y|t)?"
+    r"|\d+\s*(?:m|y|t)"
+    r"|free\s*size"
+    r"|x{0,3}[sml]|\d?xl"
+    r")$",
+    re.IGNORECASE,
+)
+
+# Nhập/xuất vật tư
+MOVE_PURCHASE = "nhập từ NCC"
+MOVE_ISSUE = "cấp cho xưởng"
+MOVE_RETURN = "xưởng trả lại"
+MOVE_TRANSFER = "chuyển kho"
+MOVE_CONSUME = "xưởng dùng cho lệnh"
+TRANSFER_TAG_RE = re.compile(r"\[TRF:([^\]]+)\]\s*")
 
 
 def classify_material(base_unit: Optional[str]) -> str:
@@ -115,6 +142,80 @@ def _f(value, digits: int = 2) -> Optional[float]:
 
 def _ids_csv(ids) -> str:
     return ",".join(str(int(x)) for x in ids)
+
+
+def _iso_date(value) -> Optional[str]:
+    if value is None:
+        return None
+    return (value.date() if isinstance(value, datetime) else value).isoformat()
+
+
+def split_size_color(name: Optional[str]):
+    """Tên SKU web gộp màu/mẫu và size ("be 6-9m", "cappy sz 0-3m") -> (size, màu)."""
+    raw = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not raw:
+        return None, None
+    match = SIZE_SUFFIX_RE.match(raw)
+    if not match:
+        return None, raw
+    return match.group("size").strip(), match.group("mau").strip() or None
+
+
+def parse_cancelled_code(code: Optional[str]):
+    """Mã lệnh đã hủy "HĐ26ub59_C_1759650000" -> ("HĐ26ub59", thời điểm hủy theo giờ VN)."""
+    raw = (code or "").strip()
+    match = CANCELLED_CODE_RE.match(raw)
+    if not match:
+        return raw, None
+    cancelled_at = datetime.fromtimestamp(int(match.group(2)), VN_TZ).replace(tzinfo=None)
+    return match.group(1).strip(), cancelled_at
+
+
+def order_line_status(order_status: str, qty_planned: float, qty_finished: float) -> str:
+    if order_status == "cancelled":
+        return ORDER_CANCELLED
+    if order_status == "completed":
+        return ORDER_CLOSED
+    if order_status == "in_progress":
+        return ORDER_RECEIVED if qty_planned > 0 and qty_finished >= qty_planned else ORDER_SEWING
+    return ORDER_NOT_CUT
+
+
+def classify_transfer(from_central: Optional[bool], to_central: Optional[bool]) -> str:
+    if from_central and to_central is False:
+        return MOVE_ISSUE
+    if from_central is False and to_central:
+        return MOVE_RETURN
+    return MOVE_TRANSFER
+
+
+def pair_transfers(rows: List[Dict]) -> List[tuple]:
+    """
+    Phiếu điều chuyển ghi 2 dòng sổ kho liền nhau (transfer_out ở kho đi rồi transfer_in ở kho đến),
+    cùng thẻ [TRF:...], cùng vật tư, lượng đối nhau. Ghép mỗi dòng đi với dòng đến khớp gần nhất
+    phía sau; dòng không ghép được trả về với vế còn lại là None.
+    """
+    def key(r):
+        return (r["tag"] or "", r["material_id"], round(abs(r["qty"]), 6))
+
+    pending_in: Dict[tuple, List[Dict]] = {}
+    for r in sorted(rows, key=lambda x: x["id"]):
+        if r["type"] == "transfer_in":
+            pending_in.setdefault(key(r), []).append(r)
+    pairs = []
+    for r in sorted(rows, key=lambda x: x["id"]):
+        if r["type"] != "transfer_out":
+            continue
+        bucket = pending_in.get(key(r), [])
+        idx = next((i for i, x in enumerate(bucket) if x["id"] > r["id"]), None)
+        pairs.append((r, bucket.pop(idx) if idx is not None else None))
+    pairs.extend((None, r) for bucket in pending_in.values() for r in bucket)
+    return pairs
+
+
+def transfer_tag(note: Optional[str]) -> Optional[str]:
+    match = TRANSFER_TAG_RE.search(note or "")
+    return match.group(1) if match else None
 
 
 class IntegrationService:
@@ -441,6 +542,284 @@ class IntegrationService:
                 "lo_toi_thieu": None,
                 "cap_nhat_luc": to_iso(m["price_changed_at"]),
             })
+        return rows
+
+    def get_production_orders(self, updated_since: Optional[datetime] = None) -> List[Dict]:
+        """
+        Mỗi dòng = 1 dòng SKU của 1 lệnh. Web không có ô "số cắt thực tế" riêng: lệnh được tạo sau khi
+        cắt và NVL được trừ theo SL của lệnh lúc bắt đầu SX, nên số cắt = SL dòng SKU khi lệnh đã chạy.
+        """
+        brand_filter = ""
+        if self.brand_ids is not None:
+            if not self.brand_ids:
+                return []
+            brand_filter = f"WHERE COALESCE(ow.brand_id, w.brand_id) IN ({_ids_csv(self.brand_ids)})"
+        orders: Dict[int, Dict] = {}
+        for r in self.db.execute(text(f"""
+            SELECT po.id, po.code, po.status, po.start_date, po.due_date,
+                   w.name, b.name, u.full_name, pv.sku
+            FROM production_orders po
+            LEFT JOIN product_variants pv ON pv.id = po.product_variant_id
+            LEFT JOIN warehouses w ON w.id = po.warehouse_id
+            LEFT JOIN warehouses ow ON ow.id = po.owner_central_id
+            LEFT JOIN brands b ON b.id = COALESCE(ow.brand_id, w.brand_id)
+            LEFT JOIN users u ON u.id = po.created_by
+            {brand_filter}
+        """)).fetchall():
+            code, cancelled_at = parse_cancelled_code(r[1])
+            orders[int(r[0])] = {
+                "code": code,
+                "status": r[2],
+                "start_date": r[3],
+                "due_date": r[4],
+                "workshop": r[5],
+                "brand": r[6],
+                "lead": r[7],
+                "fallback_code": parse_cancelled_code(r[8])[0] or None,
+                "created_at": None,
+                "changed_at": cancelled_at,
+                "items": [],
+            }
+        if not orders:
+            return []
+
+        def _touch(o, at):
+            if at and (o["changed_at"] is None or at > o["changed_at"]):
+                o["changed_at"] = at
+
+        # Lệnh không có cột created_at: lấy từ snapshot tạo lệnh; mọi sửa/bắt đầu/nhập hàng đều ghi snapshot.
+        for oid, created_quick, first_at, last_at in self.db.execute(text("""
+            SELECT production_order_id,
+                   MIN(CASE WHEN event_type = 'create_quick' THEN created_at END),
+                   MIN(created_at), MAX(created_at)
+            FROM production_order_snapshots
+            GROUP BY production_order_id
+        """)).fetchall():
+            o = orders.get(int(oid))
+            if o:
+                o["created_at"] = created_quick or first_at
+                _touch(o, last_at)
+        for oid, last_at in self.db.execute(text("""
+            SELECT production_order_id, MAX(received_at)
+            FROM production_receive_logs
+            GROUP BY production_order_id
+        """)).fetchall():
+            o = orders.get(int(oid)) if oid is not None else None
+            if o:
+                _touch(o, last_at)
+
+        for r in self.db.execute(text("""
+            SELECT id, production_order_id, size_label, quantity_planned, quantity_finished, note
+            FROM production_order_items
+            ORDER BY production_order_id, id
+        """)).fetchall():
+            o = orders.get(int(r[1])) if r[1] is not None else None
+            if o:
+                o["items"].append(r)
+
+        rows = []
+        for oid in sorted(orders):
+            o = orders[oid]
+            if updated_since and (o["changed_at"] is None or o["changed_at"] < updated_since):
+                continue
+            order_code = next(
+                (c for c in (model_code_from_label(i[2]) for i in o["items"]) if c), o["fallback_code"]
+            )
+            started = o["status"] in RESERVATION_STATUSES
+            for item_id, _, label, planned, finished, note in o["items"]:
+                raw = str(label or "").strip()
+                if raw.upper().startswith("SKU:"):
+                    sku, _, sku_name = raw[4:].partition(SKU_SP_NAME_SEPARATOR)
+                    sku, sku_name = sku.strip() or None, sku_name.strip() or str(note or "").strip()
+                else:
+                    sku, sku_name = None, raw
+                size, color = split_size_color(sku_name)
+                planned, finished = int(planned or 0), int(finished or 0)
+                if started:
+                    cut_qty = planned
+                elif o["status"] == "cancelled":
+                    cut_qty = 0
+                else:
+                    cut_qty = None
+                rows.append({
+                    "ma_sx": o["code"],
+                    "ma_sp": model_code_from_label(label) or order_code,
+                    "sku": sku,
+                    "ten_sku": sku_name or None,
+                    "size": size,
+                    "mau": color,
+                    "so_luong_ke_hoach": planned,
+                    "so_luong_cat_thuc_te": cut_qty,
+                    "so_luong_da_ve": finished,
+                    "xuong": o["workshop"],
+                    "ngay_tao": _iso_date(o["created_at"]),
+                    "ngay_cat": _iso_date(o["start_date"]) if started else None,
+                    "ngay_du_kien_ve": _iso_date(o["due_date"]),
+                    "trang_thai": order_line_status(o["status"], planned, finished),
+                    "trang_thai_web": o["status"],
+                    "nhan_hang": o["brand"],
+                    "lead_sx": o["lead"],
+                    "id_dong": int(item_id),
+                    "cap_nhat_luc": to_iso(o["changed_at"]),
+                })
+        return rows
+
+    def get_material_movements(self, updated_since: Optional[datetime] = None, include_consumption: bool = False) -> List[Dict]:
+        """
+        Nhập từ NCC: mỗi dòng = 1 dòng phiếu nhập theo số hiện tại trên web (phiếu đã xóa không trả về).
+        Cấp/trả/chuyển kho: lấy từ sổ kho (inventory_transactions), mỗi phiếu điều chuyển ghép 1 dòng.
+        """
+        warehouses = {
+            int(r[0]): {"name": r[1], "central": bool(r[2]), "brand_id": r[3]}
+            for r in self.db.execute(text("SELECT id, name, is_central, brand_id FROM warehouses")).fetchall()
+        }
+        brands = {int(r[0]): r[1] for r in self.db.execute(text("SELECT id, name FROM brands")).fetchall()}
+
+        def _allowed(*wids):
+            return self.brand_ids is None or any(
+                wid in warehouses and warehouses[wid]["brand_id"] in self.brand_ids for wid in wids if wid
+            )
+
+        since_filter = "AND t.created_at >= :since" if updated_since else ""
+        ledger = [
+            {
+                "id": int(r[0]),
+                "type": r[1],
+                "warehouse_id": int(r[2]) if r[2] is not None else None,
+                "material_id": int(r[3]),
+                "qty": float(r[4] or 0),
+                "ref": int(r[5]) if r[5] is not None else None,
+                "tag": transfer_tag(r[6]),
+                "note": TRANSFER_TAG_RE.sub("", r[6] or "").strip() or None,
+                "created_at": r[7],
+            }
+            for r in self.db.execute(text(f"""
+                SELECT t.id, t.transaction_type, t.warehouse_id, t.product_variant_id,
+                       t.quantity, t.reference_id, t.note, t.created_at
+                FROM inventory_transactions t
+                JOIN product_variants v ON v.id = t.product_variant_id
+                JOIN products p ON p.id = v.product_id
+                WHERE p.type = 'material'
+                  AND t.quantity <> 0
+                  AND t.transaction_type IN ('transfer_out', 'transfer_in', 'production_out', 'production_in')
+                  {since_filter}
+                ORDER BY t.id
+            """), {"since": updated_since}).fetchall()
+        ]
+        # Phiếu nhập không có cột cập nhật: lấy lần cuối dòng phiếu làm đổi tồn (tạo/sửa), không có thì ngày phiếu.
+        purchase_lines = []
+        for r in self.db.execute(text("""
+            SELECT poi.id, poi.product_variant_id, poi.quantity, po.po_code, po.order_date,
+                   po.warehouse_id, s.name, lt.last_at
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON po.id = poi.purchase_order_id
+            JOIN product_variants v ON v.id = poi.product_variant_id
+            JOIN products p ON p.id = v.product_id
+            LEFT JOIN suppliers s ON s.id = po.supplier_id
+            LEFT JOIN (
+                SELECT reference_id, product_variant_id, MAX(created_at) AS last_at
+                FROM inventory_transactions
+                WHERE transaction_type = 'purchase_in'
+                GROUP BY reference_id, product_variant_id
+            ) lt ON lt.reference_id = po.id AND lt.product_variant_id = poi.product_variant_id
+            WHERE p.type = 'material'
+              AND po.status <> 'cancelled'
+              AND poi.quantity <> 0
+            ORDER BY poi.id
+        """)).fetchall():
+            changed_at = r[7] or (datetime.combine(r[4], datetime.min.time()) if r[4] else None)
+            if updated_since and (changed_at is None or changed_at < updated_since):
+                continue
+            purchase_lines.append({
+                "id": int(r[0]),
+                "material_id": int(r[1]),
+                "qty": float(r[2] or 0),
+                "code": r[3],
+                "date": r[4],
+                "warehouse_id": int(r[5]) if r[5] is not None else None,
+                "supplier": r[6],
+                "created_at": changed_at,
+            })
+        if not ledger and not purchase_lines:
+            return []
+
+        orders = {
+            int(r[0]): {"code": parse_cancelled_code(r[1])[0], "warehouse_id": r[2]}
+            for r in self.db.execute(text("SELECT id, code, warehouse_id FROM production_orders")).fetchall()
+        }
+        materials = self._load_materials({r["material_id"] for r in ledger + purchase_lines})
+
+        def _wh(wid):
+            return warehouses.get(wid, {}).get("name") if wid else None
+
+        def _entry(r, move_type, qty, place_wid, from_wid=None, to_wid=None, doc=None, ma_sx=None,
+                   supplier=None, day=None, note=None, id_prefix="SK"):
+            m = materials.get(r["material_id"], {})
+            row_id = f"{id_prefix}-{r['id']}"
+            return {
+                "id": row_id,
+                "ngay": _iso_date(day or r["created_at"]),
+                "loai_phieu": move_type,
+                "so_phieu": doc,
+                "ma_vat_tu": m.get("sku"),
+                "ten_vat_tu": m.get("name"),
+                "loai_vat_tu": classify_material(m.get("unit")),
+                "dvt": m.get("unit"),
+                "so_luong": _f(qty, 6),
+                "ma_sx": ma_sx,
+                "kho_hoac_xuong": _wh(place_wid),
+                "tu_kho": _wh(from_wid),
+                "den_kho": _wh(to_wid),
+                "ncc": supplier,
+                "nhan_hang": brands.get(warehouses.get(place_wid, {}).get("brand_id")),
+                "ghi_chu": note,
+                "cap_nhat_luc": to_iso(r["created_at"]),
+                "_sort": (r["created_at"] or datetime.min, row_id),
+            }
+
+        rows = [
+            _entry(r, MOVE_PURCHASE, r["qty"], r["warehouse_id"], to_wid=r["warehouse_id"], doc=r["code"],
+                   supplier=r["supplier"], day=r["date"], id_prefix="PN")
+            for r in purchase_lines
+            if _allowed(r["warehouse_id"])
+        ]
+        for r in ledger:
+            wid = r["warehouse_id"]
+            if r["type"] in ("production_out", "production_in"):
+                order = orders.get(r["ref"], {})
+                if warehouses.get(wid, {}).get("central"):
+                    # NVL đi thẳng từ kho tổng cho lệnh / trả về kho tổng khi hủy hoặc sửa lệnh.
+                    if not _allowed(wid):
+                        continue
+                    workshop = order.get("warehouse_id") if order.get("warehouse_id") != wid else None
+                    if r["type"] == "production_out":
+                        rows.append(_entry(r, MOVE_ISSUE, -r["qty"], workshop or wid, from_wid=wid, to_wid=workshop,
+                                           ma_sx=order.get("code"), note=r["note"]))
+                    else:
+                        rows.append(_entry(r, MOVE_RETURN, r["qty"], workshop or wid, from_wid=workshop, to_wid=wid,
+                                           ma_sx=order.get("code"), note=r["note"]))
+                elif include_consumption and _allowed(wid):
+                    # Xuất ra dương (xưởng dùng), hoàn lại do sửa lệnh âm.
+                    rows.append(_entry(r, MOVE_CONSUME, -r["qty"], wid, from_wid=wid,
+                                       ma_sx=order.get("code"), note=r["note"]))
+
+        for out_row, in_row in pair_transfers([r for r in ledger if r["type"] in ("transfer_out", "transfer_in")]):
+            base = out_row or in_row
+            from_wid = out_row["warehouse_id"] if out_row else None
+            to_wid = in_row["warehouse_id"] if in_row else None
+            if not _allowed(from_wid, to_wid):
+                continue
+            from_central = warehouses[from_wid]["central"] if from_wid in warehouses else None
+            to_central = warehouses[to_wid]["central"] if to_wid in warehouses else None
+            move_type = classify_transfer(from_central, to_central)
+            place = from_wid if move_type == MOVE_RETURN else (to_wid or from_wid)
+            ma_sx = orders.get(base["ref"], {}).get("code") if (base["tag"] or "").startswith("AUTO:") else None
+            rows.append(_entry(
+                base, move_type, abs(base["qty"]), place, from_wid=from_wid, to_wid=to_wid,
+                doc=base["tag"] or f"DC-{base['id']}", ma_sx=ma_sx, note=base["note"],
+            ))
+
+        rows.sort(key=lambda x: x.pop("_sort"))
         return rows
 
     def _material_ids_for_brands(self) -> set:

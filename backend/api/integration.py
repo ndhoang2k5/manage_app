@@ -78,6 +78,27 @@ def integration_npl(
     return paginate(rows, params["page"], params["page_size"])
 
 
+@router.get("/lenh-sx")
+def integration_production_orders(
+    params: dict = Depends(_list_params),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_production_orders(params["updated_since"])
+    return paginate(rows, params["page"], params["page_size"])
+
+
+@router.get("/nhap-xuat-vat-tu")
+def integration_material_movements(
+    params: dict = Depends(_list_params),
+    tieu_hao: bool = Query(False, description="true: thêm dòng 'xưởng dùng cho lệnh' (NVL xưởng xuất cho từng lệnh)"),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_material_movements(params["updated_since"], tieu_hao)
+    return paginate(rows, params["page"], params["page_size"])
+
+
 # --- Quản lý khóa API (admin) ---
 class ApiKeyCreateRequest(BaseModel):
     name: str
