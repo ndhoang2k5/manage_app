@@ -119,6 +119,17 @@ def integration_finished_receipts(
     return paginate(rows, params["page"], params["page_size"])
 
 
+@router.get("/ton-vai")
+def integration_fabric_stock(
+    params: dict = Depends(_list_params),
+    loai: str = Query("vai", pattern="^(vai|tat-ca)$", description="vai: chỉ vải (suy theo ĐVT); tat-ca: mọi vật tư"),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_fabric_stock(params["updated_since"], loai == "vai")
+    return paginate(rows, params["page"], params["page_size"])
+
+
 # --- Quản lý khóa API (admin) ---
 class ApiKeyCreateRequest(BaseModel):
     name: str

@@ -960,6 +960,63 @@ class IntegrationService:
         rows.sort(key=lambda x: x.pop("_sort"))
         return rows
 
+    def get_fabric_stock(self, updated_since: Optional[datetime] = None, fabric_only: bool = True) -> List[Dict]:
+        """
+        Tồn vải hiện tại theo từng kho tổng / xưởng (inventory_stocks). Vải = vật tư có ĐVT kg/m/yard;
+        web hay ghi tên/mã nhóm vào ô ĐVT nên có vải bị xếp NPL -> fabric_only=False trả mọi vật tư.
+        Bảng tồn không lưu thời điểm đổi: cap_nhat_luc = lần cuối sổ kho ghi nhận vải đó tại kho đó.
+        Lấy toàn bộ thì bỏ dòng tồn 0; lấy dần (updated_since) thì trả cả dòng vừa về 0 để Sheets cập nhật.
+        """
+        brand_filter = ""
+        if self.brand_ids is not None:
+            if not self.brand_ids:
+                return []
+            brand_filter = f"AND w.brand_id IN ({_ids_csv(self.brand_ids)})"
+        stock_rows = self.db.execute(text(f"""
+            SELECT s.product_variant_id, s.quantity_on_hand, w.name, w.is_central, b.name, lt.last_at
+            FROM inventory_stocks s
+            JOIN warehouses w ON w.id = s.warehouse_id
+            LEFT JOIN brands b ON b.id = w.brand_id
+            JOIN product_variants v ON v.id = s.product_variant_id
+            JOIN products p ON p.id = v.product_id
+            LEFT JOIN (
+                SELECT warehouse_id, product_variant_id, MAX(created_at) AS last_at
+                FROM inventory_transactions
+                GROUP BY warehouse_id, product_variant_id
+            ) lt ON lt.warehouse_id = s.warehouse_id AND lt.product_variant_id = s.product_variant_id
+            WHERE p.type = 'material' {brand_filter}
+        """)).fetchall()
+        materials = self._load_materials({int(r[0]) for r in stock_rows})
+        rows = []
+        for vid, qty, warehouse, is_central, brand, last_at in stock_rows:
+            m = materials.get(int(vid), {})
+            kind = classify_material(m.get("unit"))
+            if fabric_only and kind != "Vải":
+                continue
+            qty = float(qty or 0)
+            if updated_since:
+                if last_at is None or last_at < updated_since:
+                    continue
+            elif abs(qty) < 1e-9:
+                continue
+            price = m.get("price")
+            rows.append({
+                "ma_vai": m.get("sku"),
+                "ten_vai": m.get("name"),
+                "loai_vat_tu": kind,
+                "dvt": m.get("unit"),
+                "kho": warehouse,
+                "loai_kho": "kho tổng" if is_central else "xưởng",
+                "so_luong_ton": _f(qty, 4),
+                "don_gia": _f(price),
+                "gia_tri_ton": _f(qty * price) if price is not None else None,
+                "ncc": m.get("supplier"),
+                "nhan_hang": brand,
+                "cap_nhat_luc": to_iso(last_at),
+            })
+        rows.sort(key=lambda x: ((x["ma_vai"] or "").upper(), x["kho"] or ""))
+        return rows
+
     def _material_ids_for_brands(self) -> set:
         """Vật tư dùng chung giữa các nhãn: chỉ trả vật tư từng dùng/nhập/tồn ở nhãn được phép."""
         if not self.brand_ids:
