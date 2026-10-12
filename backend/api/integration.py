@@ -99,6 +99,26 @@ def integration_material_movements(
     return paginate(rows, params["page"], params["page_size"])
 
 
+@router.get("/nhap-hang")
+def integration_purchases(
+    params: dict = Depends(_list_params),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_purchases(params["updated_since"])
+    return paginate(rows, params["page"], params["page_size"])
+
+
+@router.get("/nhap-kho-thanh-pham")
+def integration_finished_receipts(
+    params: dict = Depends(_list_params),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_finished_receipts(params["updated_since"])
+    return paginate(rows, params["page"], params["page_size"])
+
+
 # --- Quản lý khóa API (admin) ---
 class ApiKeyCreateRequest(BaseModel):
     name: str

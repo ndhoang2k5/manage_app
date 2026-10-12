@@ -1,6 +1,6 @@
 """
 Dữ liệu chỉ đọc cho tích hợp bên ngoài (Google Sheets của Unbee): BOM, giá vốn, danh mục NPL,
-lệnh sản xuất theo SKU, nhập/cấp/trả vật tư.
+lệnh sản xuất theo SKU, nhập/cấp/trả vật tư, phiếu nhập NCC, nhập kho thành phẩm theo đợt.
 
 Web lưu BOM theo từng lệnh sản xuất, không theo mã sản phẩm. Mã sản phẩm (VD QA388) được
 suy ra từ các dòng SKU của lệnh (production_order_items.size_label = "SKU:QA38801||TEN:...").
@@ -54,6 +54,10 @@ MOVE_RETURN = "xưởng trả lại"
 MOVE_TRANSFER = "chuyển kho"
 MOVE_CONSUME = "xưởng dùng cho lệnh"
 TRANSFER_TAG_RE = re.compile(r"\[TRF:([^\]]+)\]\s*")
+
+FINISHED_GOOD = "Thành phẩm"
+RECEIVE_BATCH = "trả hàng"
+RECEIVE_ADJUST = "sửa số đã trả"
 
 
 def classify_material(base_unit: Optional[str]) -> str:
@@ -148,6 +152,15 @@ def _iso_date(value) -> Optional[str]:
     if value is None:
         return None
     return (value.date() if isinstance(value, datetime) else value).isoformat()
+
+
+def parse_item_label(label: Optional[str], note: Optional[str] = None):
+    """size_label dòng lệnh "SKU:QA38801||TEN:be 6-9m" -> (sku, tên SKU); dòng size thường -> (None, size)."""
+    raw = str(label or "").strip()
+    if raw.upper().startswith("SKU:"):
+        sku, _, sku_name = raw[4:].partition(SKU_SP_NAME_SEPARATOR)
+        return sku.strip() or None, sku_name.strip() or str(note or "").strip()
+    return None, raw
 
 
 def split_size_color(name: Optional[str]):
@@ -627,12 +640,7 @@ class IntegrationService:
             )
             started = o["status"] in RESERVATION_STATUSES
             for item_id, _, label, planned, finished, note in o["items"]:
-                raw = str(label or "").strip()
-                if raw.upper().startswith("SKU:"):
-                    sku, _, sku_name = raw[4:].partition(SKU_SP_NAME_SEPARATOR)
-                    sku, sku_name = sku.strip() or None, sku_name.strip() or str(note or "").strip()
-                else:
-                    sku, sku_name = None, raw
+                sku, sku_name = parse_item_label(label, note)
                 size, color = split_size_color(sku_name)
                 planned, finished = int(planned or 0), int(finished or 0)
                 if started:
@@ -819,6 +827,136 @@ class IntegrationService:
                 doc=base["tag"] or f"DC-{base['id']}", ma_sx=ma_sx, note=base["note"],
             ))
 
+        rows.sort(key=lambda x: x.pop("_sort"))
+        return rows
+
+    def get_purchases(self, updated_since: Optional[datetime] = None) -> List[Dict]:
+        """
+        Mỗi dòng = 1 dòng hàng của 1 phiếu nhập NCC (màn "Nhập Hàng"), kèm đơn giá và thành tiền.
+        Phiếu/dòng bị xóa trên web không còn trả về. Web không lưu thời điểm sửa phiếu:
+        cap_nhat_luc = lần cuối dòng làm đổi tồn kho (tạo, sửa số lượng), không có thì ngày phiếu.
+        """
+        brand_filter = ""
+        if self.brand_ids is not None:
+            if not self.brand_ids:
+                return []
+            brand_filter = f"AND w.brand_id IN ({_ids_csv(self.brand_ids)})"
+        rows = []
+        for r in self.db.execute(text(f"""
+            SELECT poi.id, po.po_code, po.order_date, po.status, s.name, w.name, b.name,
+                   v.sku, v.variant_name, p.type, p.base_unit,
+                   poi.quantity, poi.unit_price, poi.subtotal, po.total_amount, lt.last_at
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON po.id = poi.purchase_order_id
+            JOIN product_variants v ON v.id = poi.product_variant_id
+            JOIN products p ON p.id = v.product_id
+            LEFT JOIN suppliers s ON s.id = po.supplier_id
+            LEFT JOIN warehouses w ON w.id = po.warehouse_id
+            LEFT JOIN brands b ON b.id = w.brand_id
+            LEFT JOIN (
+                SELECT reference_id, product_variant_id, MAX(created_at) AS last_at
+                FROM inventory_transactions
+                WHERE transaction_type = 'purchase_in'
+                GROUP BY reference_id, product_variant_id
+            ) lt ON lt.reference_id = po.id AND lt.product_variant_id = poi.product_variant_id
+            WHERE 1 = 1 {brand_filter}
+            ORDER BY poi.id
+        """)).fetchall():
+            changed_at = r[15] or (datetime.combine(r[2], datetime.min.time()) if r[2] else None)
+            if updated_since and (changed_at is None or changed_at < updated_since):
+                continue
+            unit = (r[10] or "").strip() or None
+            rows.append({
+                "id": f"PN-{r[0]}",
+                "so_phieu": r[1],
+                "ngay": _iso_date(r[2]),
+                "trang_thai": r[3],
+                "ncc": r[4],
+                "kho": r[5],
+                "nhan_hang": r[6],
+                "ma_hang": (r[7] or "").strip() or None,
+                "ten_hang": (r[8] or "").strip() or None,
+                "loai_hang": FINISHED_GOOD if r[9] == "finished_good" else classify_material(unit),
+                "dvt": unit,
+                "so_luong": _f(r[11], 4),
+                "don_gia": _f(r[12]),
+                "thanh_tien": _f(r[13]),
+                "tong_tien_phieu": _f(r[14]),
+                "cap_nhat_luc": to_iso(changed_at),
+            })
+        return rows
+
+    def get_finished_receipts(self, updated_since: Optional[datetime] = None) -> List[Dict]:
+        """
+        Nhập kho thành phẩm theo đợt: mỗi dòng = 1 đợt xưởng trả hàng của 1 dòng SKU/size,
+        cộng các lần sửa tay số "Đã trả" (so_luong = chênh lệch, có thể âm).
+        Tổng so_luong theo id_dong = so_luong_da_ve của /lenh-sx (trừ đợt bị hoàn tác: web xóa hẳn đợt đó).
+        """
+        brand_filter = ""
+        if self.brand_ids is not None:
+            if not self.brand_ids:
+                return []
+            brand_filter = f"AND COALESCE(ow.brand_id, w.brand_id) IN ({_ids_csv(self.brand_ids)})"
+        order_join = f"""
+            JOIN production_order_items i ON i.id = l.production_order_item_id
+            JOIN production_orders po ON po.id = i.production_order_id
+            LEFT JOIN product_variants pv ON pv.id = po.product_variant_id
+            LEFT JOIN warehouses w ON w.id = po.warehouse_id
+            LEFT JOIN warehouses ow ON ow.id = po.owner_central_id
+            LEFT JOIN brands b ON b.id = COALESCE(ow.brand_id, w.brand_id)
+        """
+        since_filter = "AND {col} >= :since" if updated_since else ""
+        common_cols = "i.id, i.size_label, i.note, po.code, pv.sku, w.name, b.name"
+
+        events = [
+            (r[0], RECEIVE_BATCH, r[1], float(r[2] or 0), None, None, None, r[3:])
+            for r in self.db.execute(text(f"""
+                SELECT l.id, l.received_at, l.quantity, {common_cols}
+                FROM production_receive_logs l
+                {order_join}
+                WHERE 1 = 1 {brand_filter} {since_filter.format(col="l.received_at")}
+            """), {"since": updated_since}).fetchall()
+        ]
+        has_adjust_table = self.db.execute(text("""
+            SELECT COUNT(1) FROM information_schema.tables
+            WHERE table_schema = DATABASE() AND table_name = 'production_finished_adjust_logs'
+        """)).scalar()
+        if has_adjust_table:
+            events += [
+                (r[0], RECEIVE_ADJUST, r[1], float(r[2] or 0), float(r[3] or 0), float(r[4] or 0), r[5], r[6:])
+                for r in self.db.execute(text(f"""
+                    SELECT l.id, l.created_at, l.delta, l.old_quantity, l.new_quantity, l.reason, {common_cols}
+                    FROM production_finished_adjust_logs l
+                    {order_join}
+                    WHERE 1 = 1 {brand_filter} {since_filter.format(col="l.created_at")}
+                """), {"since": updated_since}).fetchall()
+            ]
+
+        rows = []
+        for log_id, kind, at, qty, old_qty, new_qty, reason, (item_id, label, note, code, product_sku, workshop, brand) in events:
+            sku, sku_name = parse_item_label(label, note)
+            size, color = split_size_color(sku_name)
+            row_id = f"{'NK' if kind == RECEIVE_BATCH else 'SL'}-{log_id}"
+            rows.append({
+                "id": row_id,
+                "thoi_gian": to_iso(at),
+                "loai": kind,
+                "ma_sx": parse_cancelled_code(code)[0],
+                "ma_sp": model_code_from_label(label) or parse_cancelled_code(product_sku)[0] or None,
+                "sku": sku,
+                "ten_sku": sku_name or None,
+                "size": size,
+                "mau": color,
+                "so_luong": _f(qty),
+                "so_cu": old_qty,
+                "so_moi": new_qty,
+                "ly_do": reason,
+                "xuong": workshop,
+                "nhan_hang": brand,
+                "id_dong": int(item_id),
+                "cap_nhat_luc": to_iso(at),
+                "_sort": (at or datetime.min, row_id),
+            })
         rows.sort(key=lambda x: x.pop("_sort"))
         return rows
 

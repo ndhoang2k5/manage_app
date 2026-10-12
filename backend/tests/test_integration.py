@@ -14,9 +14,22 @@ from services.integrationService import (
     order_line_status,
     pair_transfers,
     parse_cancelled_code,
+    parse_item_label,
     split_size_color,
     transfer_tag,
 )
+
+
+class ParseItemLabelTests(unittest.TestCase):
+    def test_sku_label(self):
+        self.assertEqual(parse_item_label("SKU:QA38801||TEN:be 6-9m"), ("QA38801", "be 6-9m"))
+
+    def test_sku_label_without_name_falls_back_to_note(self):
+        self.assertEqual(parse_item_label("SKU:QA38801", "hồng 3-6m"), ("QA38801", "hồng 3-6m"))
+
+    def test_plain_size(self):
+        self.assertEqual(parse_item_label("XL"), (None, "XL"))
+        self.assertEqual(parse_item_label(None), (None, ""))
 
 
 class SplitSizeColorTests(unittest.TestCase):
