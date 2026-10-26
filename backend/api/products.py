@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope
+from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope, get_allowed_warehouse_ids
 from drivers.db_client import get_db
 from drivers.error_messages import humanize_error
 from services.productService import ProductService
@@ -43,6 +43,15 @@ def get_materials(
 def get_material_groups(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = ProductService(db)
     return service.get_all_groups()
+
+# 4b. API xem chi tiết tồn kho 1 NVL (tổng hệ thống + theo từng kho)
+@router.get("/materials/{material_id}/stock")
+def get_material_stock_detail(material_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = ProductService(db)
+    try:
+        return service.get_material_stock_detail(material_id, allowed_ids=get_allowed_warehouse_ids(user, db))
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=humanize_error(e))
 
 # 5. API cập nhật NVL
 @router.put("/materials/{material_id}")

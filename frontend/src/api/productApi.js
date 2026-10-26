@@ -14,6 +14,7 @@ const productApi = {
         return axiosClient.post('/materials/groups/create', data);
     },
     update: (id, data) => axiosClient.put(`/materials/${id}`, data),
+    getStockDetail: (id) => axiosClient.get(`/materials/${id}/stock`),
     getByWarehouse: (id, includeWarehouseId) =>
         axiosClient.get(`/materials/warehouse/${id}`, {
             params: includeWarehouseId ? { include_warehouse_id: includeWarehouseId } : undefined,

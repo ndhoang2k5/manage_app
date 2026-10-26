@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider, Tooltip } from 'antd';
+import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider, Tooltip, Descriptions, Statistic } from 'antd';
 import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined, BgColorsOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
 import dayjs from 'dayjs';
@@ -22,6 +22,10 @@ const InventoryPage = () => {
     
     // Edit State
     const [editingItem, setEditingItem] = useState(null); 
+
+    // Stock Detail State
+    const [stockDetail, setStockDetail] = useState(null);
+    const [stockDetailLoading, setStockDetailLoading] = useState(false);
 
     const [form] = Form.useForm();
     const [groupForm] = Form.useForm();
@@ -86,6 +90,19 @@ const InventoryPage = () => {
         setIsModalOpen(true);
     };
 
+    // --- XEM CHI TIẾT TỒN KHO (tổng hệ thống + theo từng kho) ---
+    const openStockDetail = async (record) => {
+        setStockDetail({ ...record, warehouses: [], total_quantity: record.quantity_on_hand, other_quantity: 0 });
+        setStockDetailLoading(true);
+        try {
+            const res = await productApi.getStockDetail(record.id);
+            setStockDetail(res.data);
+        } catch (error) {
+            message.error("Lỗi: " + (error.response?.data?.detail || "Không tải được tồn kho"));
+        }
+        setStockDetailLoading(false);
+    };
+
     // --- XỬ LÝ LƯU (TẠO HOẶC SỬA) ---
     const handleSaveMaterial = async (values) => {
         try {
@@ -143,7 +160,7 @@ const InventoryPage = () => {
         // Hiển thị Tên + Màu (Nếu có)
         { title: 'Tên Vật Tư', dataIndex: 'variant_name', render: (t, r) => 
             <span>
-                <b>{t}</b> 
+                <a onClick={() => openStockDetail(r)}><b>{t}</b></a> 
                 {r.color && <Tag color="magenta" style={{marginLeft: 8}}>{r.color}</Tag>}
             </span> 
         },
@@ -286,6 +303,49 @@ const InventoryPage = () => {
                 </Form>
             </Modal>
             
+            {/* --- MODAL CHI TIẾT TỒN KHO VẬT TƯ --- */}
+            <Modal title="Thông tin vật tư" open={!!stockDetail} onCancel={() => setStockDetail(null)} footer={null} width={760}>
+                {stockDetail && (
+                    <>
+                        <Descriptions size="small" column={2} bordered>
+                            <Descriptions.Item label="Mã SKU"><Tag color="geekblue">{stockDetail.sku}</Tag></Descriptions.Item>
+                            <Descriptions.Item label="Đơn vị tính">{stockDetail.base_unit || 'Cái'}</Descriptions.Item>
+                            <Descriptions.Item label="Tên vật tư" span={2}>
+                                <b>{stockDetail.variant_name}</b>
+                                {stockDetail.color && <Tag color="magenta" style={{marginLeft: 8}}>{stockDetail.color}</Tag>}
+                            </Descriptions.Item>
+                            {stockDetail.note && <Descriptions.Item label="Ghi chú" span={2}>{stockDetail.note}</Descriptions.Item>}
+                        </Descriptions>
+
+                        <div style={{ display: 'flex', gap: 32, margin: '16px 0' }}>
+                            <Statistic title="Tồn kho toàn hệ thống" value={stockDetail.total_quantity || 0} suffix={stockDetail.base_unit || 'Cái'} valueStyle={{ color: stockDetail.total_quantity > 0 ? '#3f8600' : '#cf1322' }} />
+                            <Statistic title="Số kho đang có tồn" value={(stockDetail.warehouses || []).length} />
+                        </div>
+
+                        <Table
+                            size="small"
+                            rowKey="warehouse_id"
+                            loading={stockDetailLoading}
+                            dataSource={stockDetail.warehouses || []}
+                            pagination={false}
+                            locale={{ emptyText: 'Chưa có tồn ở kho nào' }}
+                            columns={[
+                                { title: 'Kho / Xưởng', dataIndex: 'warehouse_name', render: t => <b>{t}</b> },
+                                { title: 'Loại', dataIndex: 'type_name', width: 110, render: t => <Tag color={t === 'Kho Tổng' ? 'blue' : 'orange'}>{t}</Tag> },
+                                { title: 'Brand', dataIndex: 'brand_name', width: 140 },
+                                { title: 'Tồn hiện tại', dataIndex: 'quantity_on_hand', align: 'right', width: 130, render: q => <Tag color={q > 0 ? 'success' : 'error'}>{q}</Tag> },
+                                { title: 'Cập nhật', dataIndex: 'last_updated', width: 140, render: t => t ? dayjs(t).format('DD/MM/YYYY HH:mm') : '-' },
+                            ]}
+                        />
+                        {stockDetail.other_quantity > 0 && (
+                            <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
+                                * Còn {stockDetail.other_quantity} {stockDetail.base_unit || 'Cái'} nằm ở các kho bạn không có quyền xem.
+                            </div>
+                        )}
+                    </>
+                )}
+            </Modal>
+
             {/* Modal Group (Giữ nguyên) */}
             <Modal title="Tạo Nhóm Vật Tư" open={isGroupModalOpen} onCancel={() => setIsGroupModalOpen(false)} footer={null} width={700}>
                 <Form layout="vertical" onFinish={handleCreateGroup} form={groupForm}>

@@ -167,7 +167,7 @@ class ProductService:
         return [
             {
                 "id": row[0], "sku": row[1], "variant_name": row[2], 
-                "category_name": row[3], "base_unit": row[4] or "Cái", "quantity_on_hand": row[5], 
+                "category_name": row[3], "base_unit": row[4] or "Cái", "quantity_on_hand": round(float(row[5] or 0), 2), 
                 "cost_price": row[6], "note": row[7], "color": row[8],
                 "brand_ids": [int(x) for x in str(row[9]).split(",") if str(x).strip()] if row[9] else [],
                 "material_scope": row[10] or "retail",
@@ -267,6 +267,72 @@ class ProductService:
             if "Duplicate entry" in str(e):
                 raise Exception(f"Mã SKU '{data.sku}' đã tồn tại ở sản phẩm khác!")
             raise e
+
+    # 6b. Chi tiết tồn kho của 1 vật tư: tổng toàn hệ thống + tồn theo từng kho
+    # allowed_ids = None -> xem được tất cả kho; ngược lại chỉ liệt kê các kho được phép,
+    # phần tồn ở kho không có quyền được gộp vào "other_quantity".
+    def get_material_stock_detail(self, material_id: int, allowed_ids: list = None):
+        row = self.db.execute(
+            text("""
+                SELECT v.id, v.sku, v.variant_name, p.name, p.base_unit, v.color, v.note,
+                       CASE
+                           WHEN JSON_VALID(v.attributes)
+                                AND JSON_UNQUOTE(JSON_EXTRACT(v.attributes, '$.material_scope')) = 'accessory'
+                           THEN 'accessory'
+                           ELSE 'retail'
+                       END AS material_scope
+                FROM product_variants v
+                JOIN products p ON p.id = v.product_id
+                WHERE v.id = :id AND p.type = 'material'
+            """),
+            {"id": material_id},
+        ).fetchone()
+        if not row:
+            raise Exception("Vật tư không tồn tại")
+
+        stock_rows = self.db.execute(
+            text("""
+                SELECT w.id, w.name, w.is_central, w.brand_id, b.name, s.quantity_on_hand, s.last_updated
+                FROM inventory_stocks s
+                JOIN warehouses w ON w.id = s.warehouse_id
+                LEFT JOIN brands b ON b.id = w.brand_id
+                WHERE s.product_variant_id = :id
+                ORDER BY w.brand_id, w.is_central DESC, w.name
+            """),
+            {"id": material_id},
+        ).fetchall()
+
+        allowed_set = None if allowed_ids is None else {int(x) for x in allowed_ids}
+        total_quantity = 0.0
+        other_quantity = 0.0
+        warehouses = []
+        for r in stock_rows:
+            qty = round(float(r[5] or 0), 2)
+            total_quantity += qty
+            if allowed_set is not None and int(r[0]) not in allowed_set:
+                other_quantity += qty
+                continue
+            if qty == 0:
+                continue
+            warehouses.append({
+                "warehouse_id": r[0],
+                "warehouse_name": r[1],
+                "type_name": "Kho Tổng" if int(r[2] or 0) == 1 else "Xưởng May",
+                "brand_id": r[3],
+                "brand_name": r[4],
+                "quantity_on_hand": qty,
+                "last_updated": r[6].isoformat() if r[6] else None,
+            })
+
+        return {
+            "id": row[0], "sku": row[1], "variant_name": row[2],
+            "category_name": row[3], "base_unit": row[4] or "Cái",
+            "color": row[5], "note": row[6],
+            "material_scope": row[7] or "retail",
+            "total_quantity": round(total_quantity, 2),
+            "other_quantity": round(other_quantity, 2),
+            "warehouses": warehouses,
+        }
 
     # 7. Lấy danh sách vật tư theo kho (MỚI)
     def get_materials_by_warehouse(self, warehouse_id: int, include_warehouse_id: int = None):
