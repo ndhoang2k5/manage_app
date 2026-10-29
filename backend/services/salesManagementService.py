@@ -910,17 +910,45 @@ class SalesManagementService:
         base_sql = self._build_report_base_sql(params, keyword, only_priority_codes, min_qty, min_revenue)
 
         count_row = self.db.execute(
-            text(f"SELECT COUNT(1) FROM ({base_sql}) agg"),
+            text(
+                f"""
+                SELECT COUNT(1), SUM(agg.sold_qty), SUM(agg.sold_revenue), SUM(agg.current_stock)
+                FROM ({base_sql}) agg
+                """
+            ),
             params,
         ).fetchone()
         total = int(count_row[0]) if count_row and count_row[0] is not None else 0
-        if top_n > 0:
-            total = min(total, top_n)
+        if top_n > 0 and total > top_n:
+            total = top_n
+            # Totals must cover only the Top N rows, in the same ranking order.
+            top_params = dict(params)
+            top_params["top_n"] = int(top_n)
+            count_row = self.db.execute(
+                text(
+                    f"""
+                    SELECT COUNT(1), SUM(top.sold_qty), SUM(top.sold_revenue), SUM(top.current_stock)
+                    FROM (
+                        SELECT agg.sold_qty, agg.sold_revenue, agg.current_stock
+                        FROM ({base_sql}) agg
+                        ORDER BY {self._build_report_order_sql(sort_by, sort_dir)}
+                        LIMIT :top_n
+                    ) top
+                    """
+                ),
+                top_params,
+            ).fetchone()
+        summary = {
+            "sold_qty": float(count_row[1] or 0) if count_row else 0.0,
+            "sold_revenue": float(count_row[2] or 0) if count_row else 0.0,
+            "current_stock": float(count_row[3] or 0) if count_row else 0.0,
+        }
 
         empty = {
             "run_id": run_id,
             "items": [],
             "total": total,
+            "summary": summary,
             "page": page,
             "page_size": page_size,
             "shop_id": shop_filter or None,
@@ -974,6 +1002,7 @@ class SalesManagementService:
             "run_id": run_id,
             "items": items,
             "total": total,
+            "summary": summary,
             "page": page,
             "page_size": page_size,
             "shop_id": shop_filter or None,

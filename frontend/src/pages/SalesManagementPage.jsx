@@ -42,6 +42,7 @@ const SalesManagementPage = () => {
     const [salesRange, setSalesRange] = useState([dayjs().subtract(29, 'day').startOf('day'), dayjs()]);
     const [salesData, setSalesData] = useState([]);
     const [salesTotal, setSalesTotal] = useState(0);
+    const [salesSummary, setSalesSummary] = useState(null);
     const [salesLoading, setSalesLoading] = useState(false);
     const [syncStatus, setSyncStatus] = useState(null);
     const [priorityInput, setPriorityInput] = useState('');
@@ -127,6 +128,7 @@ const SalesManagementPage = () => {
             const items = payload.items || [];
             setSalesData(items);
             setSalesTotal(payload.total || 0);
+            setSalesSummary(payload.summary || null);
             setSalesPagination({ current: payload.page || page, pageSize: payload.page_size || pageSize });
         } catch (error) {
             message.error(error.response?.data?.detail || 'Lỗi tải báo cáo số bán');
@@ -440,6 +442,7 @@ const SalesManagementPage = () => {
                     <Button onClick={() => {
                         setSelectedBrand(null);
                         setSalesData([]);
+                        setSalesSummary(null);
                         setSyncStatus(null);
                         setPriorityInput('');
                     }}>
@@ -486,6 +489,7 @@ const SalesManagementPage = () => {
                     <Button onClick={() => {
                         setSelectedBrand(null);
                         setSalesData([]);
+                        setSalesSummary(null);
                         setSyncStatus(null);
                         setPriorityInput('');
                     }}>
@@ -656,6 +660,25 @@ const SalesManagementPage = () => {
                     ),
                 }}
                 onRow={(record) => (record.is_priority ? { style: { background: '#f6ffed' } } : {})}
+                summary={() => (salesTotal > 0 && salesSummary ? (
+                    <Table.Summary fixed="bottom">
+                        <Table.Summary.Row style={{ background: '#fafafa', fontWeight: 600 }}>
+                            <Table.Summary.Cell index={0} colSpan={2}>
+                                Tổng ({Number(salesTotal).toLocaleString('vi-VN')} mã sau lọc)
+                            </Table.Summary.Cell>
+                            <Table.Summary.Cell index={2} align="right">
+                                {Number(salesSummary.sold_qty || 0).toLocaleString('vi-VN')}
+                            </Table.Summary.Cell>
+                            <Table.Summary.Cell index={3} align="right">
+                                {Number(salesSummary.sold_revenue || 0).toLocaleString('vi-VN')}
+                            </Table.Summary.Cell>
+                            <Table.Summary.Cell index={4} align="right">
+                                {Number(salesSummary.current_stock || 0).toLocaleString('vi-VN')}
+                            </Table.Summary.Cell>
+                            <Table.Summary.Cell index={5} colSpan={3} />
+                        </Table.Summary.Row>
+                    </Table.Summary>
+                ) : null)}
             />
         </Card>
     );
