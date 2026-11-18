@@ -253,8 +253,6 @@ const AccountManagementPage = () => {
     },
   ];
 
-  const visibleAccounts = accounts.filter((a) => a.role !== 'admin');
-
   const renderPermissionTags = (mods = []) => {
     const map = {};
     mods.forEach((m) => {
@@ -281,7 +279,7 @@ const AccountManagementPage = () => {
         </Button>
       }
     >
-      <Table rowKey="id" loading={loading} dataSource={visibleAccounts} columns={columns} />
+      <Table rowKey="id" loading={loading} dataSource={accounts} columns={columns} />
 
       <Modal
         title={editing ? `Cập nhật: ${editing.username}` : 'Tạo tài khoản mới'}

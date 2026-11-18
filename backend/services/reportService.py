@@ -104,6 +104,17 @@ class ReportService:
             } for r in stocks
         ]
 
+        # Giá trị tài sản trên thẻ dashboard chỉ phản ánh tồn thực tế tại
+        # chính kho tổng. `list_stocks` ở trên là tồn của toàn chuỗi nên nếu
+        # cộng lại ở frontend sẽ tính cả tài sản đang nằm tại các xưởng con.
+        central_asset_value = self.db.execute(text("""
+            SELECT COALESCE(SUM(s.quantity_on_hand * pv.cost_price), 0)
+            FROM inventory_stocks s
+            JOIN product_variants pv ON s.product_variant_id = pv.id
+            WHERE s.warehouse_id = :wid
+              AND s.quantity_on_hand > 0
+        """), {"wid": warehouse_id}).scalar()
+
         # 4. Danh sách Đơn nhập hàng (Chỉ của Kho Tổng này)
         query_pos = text("""
             SELECT po.po_code, s.name as supplier_name, po.order_date, po.total_amount, po.status
@@ -152,6 +163,7 @@ class ReportService:
         # Trả về cục dữ liệu tổng hợp
         return {
             "info": {"id": info[0], "name": info[1], "brand_id": info[2], "brand": info[3]},
+            "total_asset_value": float(central_asset_value or 0),
             "workshops": list_children,
             "total_inventory": list_stocks,
             "recent_purchases": list_pos,

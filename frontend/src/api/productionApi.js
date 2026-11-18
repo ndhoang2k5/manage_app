@@ -19,6 +19,8 @@ const productionApi = {
     
     // Hành động
     receiveGoods: (id, data) => axiosClient.post(`/production/orders/${id}/receive`, data),
+    adjustFinished: (id, itemId, data) => axiosClient.put(`/production/orders/${id}/items/${itemId}/finished`, data),
+    getFinishedAdjustLogs: (id) => axiosClient.get(`/production/orders/${id}/finished-adjust-logs`),
     startOrder: (id) => axiosClient.post(`/production/orders/${id}/start`),
     finishOrder: (id) => axiosClient.post(`/production/orders/${id}/complete`),
     forceFinish: (id) => axiosClient.post(`/production/orders/${id}/force-finish`),

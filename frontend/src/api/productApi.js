@@ -14,6 +14,7 @@ const productApi = {
         return axiosClient.post('/materials/groups/create', data);
     },
     update: (id, data) => axiosClient.put(`/materials/${id}`, data),
+    delete: (id) => axiosClient.delete(`/materials/${id}`),
     getStockDetail: (id) => axiosClient.get(`/materials/${id}/stock`),
     getOrders: (id) => axiosClient.get(`/materials/${id}/orders`),
     getByWarehouse: (id, includeWarehouseId) =>

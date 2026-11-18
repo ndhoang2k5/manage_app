@@ -17,6 +17,7 @@ api_key_scheme = HTTPBearer(auto_error=False, description="Khóa API chỉ đọ
 
 DEFAULT_PAGE_SIZE = 500
 MAX_PAGE_SIZE = 2000
+MATERIAL_KIND_PATTERN = "^(vai|npl)$"
 
 
 def require_read_api_key(
@@ -91,11 +92,12 @@ def integration_production_orders(
 @router.get("/nhap-xuat-vat-tu")
 def integration_material_movements(
     params: dict = Depends(_list_params),
-    tieu_hao: bool = Query(False, description="true: thêm dòng 'xưởng dùng cho lệnh' (NVL xưởng xuất cho từng lệnh)"),
+    tieu_hao: bool = Query(False, description="true: thêm dòng 'xưởng dùng cho lệnh' / 'lệnh hoàn lại xưởng'"),
+    loai_vat_tu: Optional[str] = Query(None, pattern=MATERIAL_KIND_PATTERN, description="vai | npl; bỏ trống: mọi vật tư"),
     db: Session = Depends(get_db),
     key: dict = Depends(require_read_api_key),
 ):
-    rows = IntegrationService(db, key["brand_ids"]).get_material_movements(params["updated_since"], tieu_hao)
+    rows = IntegrationService(db, key["brand_ids"]).get_material_movements(params["updated_since"], tieu_hao, loai_vat_tu)
     return paginate(rows, params["page"], params["page_size"])
 
 
@@ -127,6 +129,17 @@ def integration_fabric_stock(
     key: dict = Depends(require_read_api_key),
 ):
     rows = IntegrationService(db, key["brand_ids"]).get_fabric_stock(params["updated_since"], loai == "vai")
+    return paginate(rows, params["page"], params["page_size"])
+
+
+@router.get("/ton-vat-tu")
+def integration_material_stock(
+    params: dict = Depends(_list_params),
+    loai_vat_tu: Optional[str] = Query(None, pattern=MATERIAL_KIND_PATTERN, description="vai | npl; bỏ trống: mọi vật tư"),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    rows = IntegrationService(db, key["brand_ids"]).get_material_stock(params["updated_since"], loai_vat_tu)
     return paginate(rows, params["page"], params["page_size"])
 
 

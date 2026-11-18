@@ -2,15 +2,20 @@ import unittest
 from datetime import datetime
 
 from services.integrationService import (
+    MOVE_ADJUST,
     MOVE_ISSUE,
     MOVE_RETURN,
     MOVE_TRANSFER,
+    MOVE_WORKSHOP_TRANSFER,
     ORDER_CANCELLED,
     ORDER_CLOSED,
     ORDER_NOT_CUT,
     ORDER_RECEIVED,
     ORDER_SEWING,
+    classify_material,
+    classify_material_filter,
     classify_transfer,
+    nearest_actor,
     order_line_status,
     pair_transfers,
     parse_cancelled_code,
@@ -98,8 +103,38 @@ class TransferTests(unittest.TestCase):
     def test_classify_transfer(self):
         self.assertEqual(classify_transfer(True, False), MOVE_ISSUE)
         self.assertEqual(classify_transfer(False, True), MOVE_RETURN)
-        self.assertEqual(classify_transfer(False, False), MOVE_TRANSFER)
-        self.assertEqual(classify_transfer(True, None), MOVE_TRANSFER)
+        self.assertEqual(classify_transfer(True, True), MOVE_TRANSFER)
+        self.assertEqual(classify_transfer(False, False), MOVE_WORKSHOP_TRANSFER)
+        self.assertEqual(classify_transfer(True, None), MOVE_ADJUST)
+        self.assertEqual(classify_transfer(None, False), MOVE_ADJUST)
+
+
+class MaterialHelpersTests(unittest.TestCase):
+    def test_classify_material(self):
+        self.assertEqual(classify_material("kg"), "Vải")
+        self.assertEqual(classify_material("kg ", "Thông hơi HQ"), "Vải")
+        self.assertEqual(classify_material("Vải gió dù nhăn"), "Vải")
+        # Mã vải gõ vào ô ĐVT, trùng tên nhóm vật tư.
+        self.assertEqual(classify_material("H24007", "H24007"), "Vải")
+        self.assertEqual(classify_material("TS- D0361", "TS-  D0361"), "Vải")
+        self.assertEqual(classify_material("Cái", "Khoá nhộng"), "NPL")
+        self.assertEqual(classify_material("H24007"), "NPL")
+        self.assertEqual(classify_material(None, None), "NPL")
+
+    def test_material_filter(self):
+        self.assertEqual(classify_material_filter("vai"), "Vải")
+        self.assertEqual(classify_material_filter("NPL"), "NPL")
+        self.assertIsNone(classify_material_filter(None))
+
+    def test_nearest_actor(self):
+        snaps = [(datetime(2026, 10, 9, 8, 0, 0), "A"), (datetime(2026, 10, 9, 8, 0, 4), "B"),
+                 (datetime(2026, 10, 9, 9, 0, 0), "C")]
+        self.assertEqual(nearest_actor(snaps, datetime(2026, 10, 9, 8, 0, 1)), "A")
+        self.assertEqual(nearest_actor(snaps, datetime(2026, 10, 9, 8, 0, 3)), "B")
+        self.assertEqual(nearest_actor(snaps, datetime(2026, 10, 9, 9, 4, 0)), "C")
+        self.assertIsNone(nearest_actor(snaps, datetime(2026, 10, 9, 8, 30, 0)))
+        self.assertIsNone(nearest_actor([], datetime(2026, 10, 9, 8, 0, 0)))
+        self.assertIsNone(nearest_actor(snaps, None))
 
 
 if __name__ == "__main__":

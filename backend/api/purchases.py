@@ -58,7 +58,7 @@ def create_purchase_order(
         if brand_id is None:
             raise Exception("Không tìm thấy kho nhập hàng")
         assert_material_cost_brand_scope(user, db, int(brand_id))
-        return service.create_purchase_order(request)
+        return service.create_purchase_order(request, user_id=user.get("id"))
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -127,7 +127,7 @@ def update_purchase_order(
         wid, brand_id = int(scope_row[0]), int(scope_row[1])
         assert_warehouse_scope(user, db, wid)
         assert_material_cost_brand_scope(user, db, brand_id)
-        return service.update_po(po_id, request)
+        return service.update_po(po_id, request, user_id=user.get("id"))
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -146,7 +146,7 @@ def delete_purchase_order(
         if wid is None:
             raise Exception("Phiếu nhập không tồn tại")
         assert_warehouse_scope(user, db, int(wid))
-        return service.delete_purchase_order(po_id)
+        return service.delete_purchase_order(po_id, user_id=user.get("id"))
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -178,7 +178,7 @@ def delete_purchase_order_item(
         wid, brand_id = int(scope_row[0]), int(scope_row[1])
         assert_warehouse_scope(user, db, wid)
         assert_material_cost_brand_scope(user, db, brand_id)
-        return service.delete_purchase_order_item(po_id, item_id)
+        return service.delete_purchase_order_item(po_id, item_id, user_id=user.get("id"))
     except HTTPException as e:
         raise e
     except Exception as e:

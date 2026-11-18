@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from drivers.db_client import get_db
 from services.productionService import ProductionService
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, AdjustFinishedRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem
 import shutil
 import uuid
 from typing import Optional
@@ -256,6 +256,39 @@ def receive_goods(
         return service.receive_goods(order_id, request, actor_user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
+
+# 2.1 API Chỉnh tay cột "Đã trả" của 1 dòng size (bắt buộc lý do, luôn ghi log)
+@router.put("/production/orders/{order_id}/items/{item_id}/finished")
+def adjust_finished_quantity(
+    order_id: int,
+    item_id: int,
+    request: AdjustFinishedRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("production", require_manage=True)),
+):
+    service = ProductionService(db)
+    try:
+        assert_production_order_scope(user, db, order_id)
+        return service.adjust_finished_quantity(
+            order_id,
+            item_id,
+            request,
+            actor_user_id=user.get("id"),
+            actor_username=user.get("sub"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
+
+# 2.2 API Lịch sử chỉnh tay cột "Đã trả"
+@router.get("/production/orders/{order_id}/finished-adjust-logs")
+def get_finished_adjust_logs(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_module_access("production")),
+):
+    service = ProductionService(db)
+    assert_production_order_scope(user, db, order_id)
+    return service.get_finished_adjust_logs(order_id)
 
 # 3. API Chốt đơn
 @router.post("/production/orders/{order_id}/force-finish")

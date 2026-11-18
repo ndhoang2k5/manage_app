@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio, Tag } from 'antd';
+import { Table, Card, Button, Modal, Form, Select, Input, InputNumber, DatePicker, message, Divider, Space, Radio, Tag, Popconfirm } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -124,6 +124,34 @@ const PurchasePage = () => {
             } else {
                 message.error("Lỗi tải chi tiết đơn hàng");
             }
+        }
+    };
+
+    // Xóa 1 dòng trong phiếu chỉnh sửa (dòng mới: chỉ bỏ UI; dòng cũ: gọi API + hoàn tác kho)
+    const handleRemoveEditItem = async (fieldName, remove) => {
+        const itemData = editForm.getFieldValue(['items', fieldName]);
+        if (!itemData?.id) {
+            remove(fieldName);
+            return;
+        }
+        if (!currentOrder?.id) {
+            message.error('Không xác định được phiếu nhập');
+            return;
+        }
+        setLoading(true);
+        try {
+            await purchaseApi.deleteItem(currentOrder.id, itemData.id);
+            remove(fieldName);
+            message.success('Đã xóa nguyên liệu khỏi phiếu và hoàn tác kho');
+            fetchInitialData(searchText);
+        } catch (error) {
+            if (error.response?.status === 403) {
+                message.error(error.response?.data?.detail || 'Bạn không có quyền xóa nhập của kho này');
+            } else {
+                message.error(error.response?.data?.detail || 'Không thể xóa dòng nguyên liệu');
+            }
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -322,6 +350,7 @@ const PurchasePage = () => {
 
                     <div style={{background: '#fffbe6', padding: 10, border: '1px solid #ffe58f', borderRadius: 6, marginBottom: 16, fontSize: 13}}>
                         ⚠️ <b>Lưu ý:</b> Thay đổi số lượng sẽ tự động <b>Cộng thêm</b> hoặc <b>Trừ bớt</b> tồn kho hiện tại.
+                        Xóa dòng nguyên liệu đã lưu cũng sẽ <b>trừ tồn kho</b> ngay.
                     </div>
 
                     <Form.List name="items">
@@ -334,7 +363,7 @@ const PurchasePage = () => {
                                             <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 100}}>Số lượng (Sửa)</th>
                                             <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 140}}>Đơn giá (Sửa)</th>
                                             <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', textAlign: 'right'}}>Thành tiền</th>
-                                            <th style={{width: 40}}></th>
+                                            <th style={{padding: 8, borderBottom: '1px solid #f0f0f0', width: 72, textAlign: 'center'}}>Xóa</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -403,9 +432,24 @@ const PurchasePage = () => {
                                                             : '***'}
                                                     </td>
                                                     <td style={{padding: 8, textAlign: 'center'}}>
-                                                        {!isExisting && (
-                                                            <DeleteOutlined onClick={() => remove(name)} style={{color: 'red', cursor: 'pointer'}} />
-                                                        )}
+                                                        {canManagePurchases ? (
+                                                            <Popconfirm
+                                                                title={isExisting ? 'Xóa nguyên liệu khỏi phiếu?' : 'Bỏ dòng này?'}
+                                                                description={isExisting ? 'Số lượng sẽ được trừ khỏi tồn kho hiện tại.' : undefined}
+                                                                okText="Xóa"
+                                                                cancelText="Hủy"
+                                                                okButtonProps={{ danger: true }}
+                                                                onConfirm={() => handleRemoveEditItem(name, remove)}
+                                                            >
+                                                                <Button
+                                                                    type="text"
+                                                                    danger
+                                                                    size="small"
+                                                                    icon={<DeleteOutlined />}
+                                                                    loading={loading && isExisting}
+                                                                />
+                                                            </Popconfirm>
+                                                        ) : null}
                                                     </td>
                                                 </tr>
                                             );

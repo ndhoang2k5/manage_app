@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import json
-from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem, ProductionMaterialUpdateItem, ProductionSizeUpdateItem
+from entities.production import BOMCreateRequest, ProductionOrderCreateRequest, QuickProductionRequest, ReceiveGoodsRequest, AdjustFinishedRequest, ProductionUpdateRequest, UpdateProgressRequest, ProgressItem, ProductionMaterialUpdateItem, ProductionSizeUpdateItem
 from typing import List, Optional, Dict
 from decimal import Decimal
 import time
@@ -2290,6 +2290,175 @@ class ProductionService:
                 "quantity": r[4],
                 "remaining": r[5] - r[6]
             } for r in results
+        ]
+
+    def _ensure_finished_adjust_log_table(self):
+        # Lưu ý: DDL trong MySQL tự commit -> chỉ gọi ở đầu hàm, trước mọi thao tác ghi.
+        self.db.execute(text("""
+            CREATE TABLE IF NOT EXISTS production_finished_adjust_logs (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                production_order_id INT NOT NULL,
+                production_order_item_id INT NOT NULL,
+                size_label VARCHAR(255) NULL,
+                old_quantity DECIMAL(15, 2) NOT NULL,
+                new_quantity DECIMAL(15, 2) NOT NULL,
+                delta DECIMAL(15, 2) NOT NULL,
+                reason TEXT NOT NULL,
+                inventory_code VARCHAR(100) NULL,
+                actor_user_id INT NULL,
+                actor_username VARCHAR(100) NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_pfal_order_created (production_order_id, created_at),
+                INDEX idx_pfal_actor_created (actor_user_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        self.db.commit()
+
+    # CHỈNH SỬA TAY CỘT "ĐÃ TRẢ" (sửa nhập thừa / ấn nhầm) - luôn ghi log ai sửa, sửa gì, vì sao
+    def adjust_finished_quantity(
+        self,
+        order_id: int,
+        item_id: int,
+        data: AdjustFinishedRequest,
+        actor_user_id: Optional[int] = None,
+        actor_username: Optional[str] = None,
+    ):
+        reason = (data.reason or "").strip()
+        if len(reason) < 5:
+            raise Exception("Không thể lưu: bắt buộc nhập lý do chỉnh sửa (ít nhất 5 ký tự)")
+        new_qty = Decimal(int(data.new_quantity))
+        if new_qty < 0:
+            raise Exception("Không thể lưu: số lượng đã trả không được âm")
+        inv_code = (data.inventory_code or "").strip() or None
+
+        self._ensure_finished_adjust_log_table()
+        try:
+            row = self.db.execute(text("""
+                SELECT i.size_label, i.quantity_finished, po.warehouse_id, po.product_variant_id, po.code
+                FROM production_order_items i
+                JOIN production_orders po ON po.id = i.production_order_id
+                WHERE i.id = :item_id AND i.production_order_id = :oid
+                FOR UPDATE
+            """), {"item_id": item_id, "oid": order_id}).fetchone()
+            if not row:
+                raise Exception("Không tìm thấy dòng size hoặc dòng không thuộc lệnh này")
+
+            size_label, old_qty, wid, pid, order_code = row
+            old_qty = Decimal(old_qty or 0)
+            delta = new_qty - old_qty
+            if delta == 0:
+                raise Exception("Không có thay đổi: số lượng mới giống số hiện tại")
+
+            size_display = self._parse_sku_size_label(size_label).get("size", "") or size_label
+            self._write_order_snapshot(
+                order_id, "finished_adjust_before", actor_user_id=actor_user_id,
+                note=f"Trước khi chỉnh tay Đã trả size {size_display}: {old_qty} -> {new_qty}",
+            )
+
+            if delta < 0:
+                current_stock = self.db.execute(
+                    text("SELECT quantity_on_hand FROM inventory_stocks WHERE warehouse_id = :w AND product_variant_id = :p FOR UPDATE"),
+                    {"w": wid, "p": pid},
+                ).scalar() or 0
+                if Decimal(current_stock) < -delta:
+                    raise Exception(f"Không thể giảm! Kho chỉ còn {current_stock} sản phẩm (cần trừ {-delta}).")
+
+            self.db.execute(
+                text("UPDATE production_order_items SET quantity_finished = :qty WHERE id = :id"),
+                {"qty": new_qty, "id": item_id},
+            )
+            self.db.execute(
+                text("UPDATE production_orders SET quantity_finished = quantity_finished + :d WHERE id = :id"),
+                {"d": delta, "id": order_id},
+            )
+            self.db.execute(text("""
+                INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand)
+                VALUES (:wid, :pid, :d)
+                ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :d
+            """), {"wid": wid, "pid": pid, "d": delta})
+
+            tx_note = f"Chỉnh tay Đã trả size {size_display}: {old_qty} -> {new_qty}. Lý do: {reason}"
+            self.db.execute(text("""
+                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note, created_by)
+                VALUES (:wid, :pid, :tt, :qty, :ref, :note, :uid)
+            """), {
+                "wid": wid, "pid": pid,
+                "tt": "production_in" if delta > 0 else "production_out",
+                "qty": delta, "ref": order_id, "note": tx_note, "uid": actor_user_id,
+            })
+
+            if inv_code:
+                try:
+                    period_row = self.db.execute(text("SELECT period_month FROM inventory_check_periods WHERE is_active=1 ORDER BY id DESC LIMIT 1")).fetchone()
+                    period_month = str(period_row[0]) if period_row and period_row[0] else datetime.now().strftime("%Y-%m")
+                except Exception:
+                    period_month = datetime.now().strftime("%Y-%m")
+                self.db.execute(text("""
+                    INSERT INTO accounting_stock_movements
+                        (period_month, product_code, movement_date, movement_type, direction, quantity, reason, document_ref, source_file)
+                    VALUES
+                        (:period, :code, CURDATE(), 'Điều chỉnh nhập gia công', :dir, :qty, :reason, :doc, 'production_finished_adjust')
+                """), {
+                    "period": period_month,
+                    "code": inv_code,
+                    "dir": "inc" if delta > 0 else "dec",
+                    "qty": float(abs(delta)),
+                    "reason": f"Chỉnh tay Đã trả lệnh {order_code} size {size_display}: {reason}",
+                    "doc": f"PROD_ADJUST:{order_id}",
+                })
+
+            self.db.execute(text("""
+                INSERT INTO production_finished_adjust_logs
+                    (production_order_id, production_order_item_id, size_label, old_quantity, new_quantity, delta,
+                     reason, inventory_code, actor_user_id, actor_username)
+                VALUES
+                    (:oid, :item_id, :size, :old, :new, :delta, :reason, :code, :uid, :uname)
+            """), {
+                "oid": order_id, "item_id": item_id, "size": size_display,
+                "old": old_qty, "new": new_qty, "delta": delta,
+                "reason": reason, "code": inv_code,
+                "uid": actor_user_id, "uname": actor_username,
+            })
+
+            self._write_order_snapshot(
+                order_id, "finished_adjust_after", actor_user_id=actor_user_id,
+                note=f"Sau khi chỉnh tay Đã trả size {size_display}: {old_qty} -> {new_qty}",
+            )
+            self.db.commit()
+            return {
+                "status": "success",
+                "message": f"Đã chỉnh Đã trả size {size_display}: {old_qty} -> {new_qty}",
+                "item_id": item_id,
+                "finished": float(new_qty),
+            }
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def get_finished_adjust_logs(self, order_id: int):
+        self._ensure_finished_adjust_log_table()
+        rows = self.db.execute(text("""
+            SELECT l.id, l.created_at, l.size_label, l.old_quantity, l.new_quantity, l.delta,
+                   l.reason, l.inventory_code, l.actor_user_id, l.actor_username, u.full_name
+            FROM production_finished_adjust_logs l
+            LEFT JOIN users u ON u.id = l.actor_user_id
+            WHERE l.production_order_id = :oid
+            ORDER BY l.id DESC
+        """), {"oid": order_id}).fetchall()
+        return [
+            {
+                "id": r[0],
+                "date": r[1].strftime("%Y-%m-%d %H:%M") if r[1] else "",
+                "size": r[2] or "",
+                "old_quantity": float(r[3] or 0),
+                "new_quantity": float(r[4] or 0),
+                "delta": float(r[5] or 0),
+                "reason": r[6] or "",
+                "inventory_code": r[7] or "",
+                "actor_user_id": r[8],
+                "actor": r[10] or r[9] or (f"user #{r[8]}" if r[8] else "Không rõ"),
+            }
+            for r in rows
         ]
 
     def get_order_reservations(self, order_id: int):

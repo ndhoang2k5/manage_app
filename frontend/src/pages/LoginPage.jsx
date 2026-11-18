@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, message, Typography } from 'antd';
-import { UserOutlined, LockOutlined, SkinOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import dayjs from 'dayjs';
 
@@ -36,24 +36,12 @@ const LoginPage = () => {
         setLoading(false);
     };
     return (
-        <div style={{
-            height: '100vh', 
-            display: 'flex', 
-            justifyContent: 'center', 
-            alignItems: 'center', 
-            background: 'linear-gradient(135deg, #001529 0%, #003eb3 100%)'
-        }}>
-            <Card style={{ width: 400, borderRadius: 12, boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}>
+        <div className="wms-login">
+            <Card className="wms-login-card" style={{ width: 400 }}>
                 <div style={{ textAlign: 'center', marginBottom: 30 }}>
-                    <div style={{
-                        background: '#001529', width: 64, height: 64, 
-                        borderRadius: '50%', display: 'flex', alignItems: 'center', 
-                        justifyContent: 'center', margin: '0 auto 15px'
-                    }}>
-                        <SkinOutlined style={{ fontSize: 32, color: '#fff' }} />
-                    </div>
-                    <Title level={3} style={{color: '#001529', margin: 0}}>FASHION WMS</Title>
-                    <span style={{color: '#888'}}>Hệ thống Quản lý Nội bộ</span>
+                    <div className="wms-login-mark" aria-label="GENMEC" />
+                    <Title level={3} style={{ color: '#3f2e27', margin: 0 }}>GENMEC WMS</Title>
+                    <span style={{ color: '#7b6d63' }}>Hệ thống Quản lý Nội bộ</span>
                 </div>
 
                 <Form
@@ -77,14 +65,14 @@ const LoginPage = () => {
                     </Form.Item>
 
                     <Form.Item>
-                        <Button type="primary" htmlType="submit" block loading={loading} 
-                            style={{background: '#001529', borderColor: '#001529', fontWeight: 'bold', height: 45}}>
+                        <Button type="primary" htmlType="submit" block loading={loading}
+                            style={{ fontWeight: 'bold', height: 45 }}>
                             ĐĂNG NHẬP
                         </Button>
                     </Form.Item>
                 </Form>
                 
-                <div style={{textAlign: 'center', marginTop: 20, fontSize: 12, color: '#aaa'}}>
+                <div style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: '#a09185' }}>
                     ©2025 Fashion WMS System
                 </div>
             </Card>

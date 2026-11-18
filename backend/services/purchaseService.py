@@ -24,7 +24,7 @@ class PurchaseService:
         return [{"id": r[0], "name": r[1], "phone": r[2]} for r in results]
 
     # 2. Tạo Phiếu Nhập & Tăng kho
-    def create_purchase_order(self, data: PurchaseOrderCreateRequest):
+    def create_purchase_order(self, data: PurchaseOrderCreateRequest, user_id: int = None):
         try:
             # A. Xử lý NCC
             final_supplier_id = data.supplier_id
@@ -67,8 +67,8 @@ class PurchaseService:
             """)
 
             query_trans = text("""
-                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id)
-                VALUES (:wid, :vid, 'purchase_in', :qty, :ref)
+                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, created_by)
+                VALUES (:wid, :vid, 'purchase_in', :qty, :ref, :uid)
             """)
 
             for item in data.items:
@@ -98,7 +98,7 @@ class PurchaseService:
                     "qty": item.quantity, "price": item.unit_price, "sub": item.quantity * item.unit_price
                 })
                 self.db.execute(query_stock, {"wid": data.warehouse_id, "vid": item.product_variant_id, "qty": item.quantity})
-                self.db.execute(query_trans, {"wid": data.warehouse_id, "vid": item.product_variant_id, "qty": item.quantity, "ref": po_id})
+                self.db.execute(query_trans, {"wid": data.warehouse_id, "vid": item.product_variant_id, "qty": item.quantity, "ref": po_id, "uid": user_id})
 
             self.db.commit()
             return {"status": "success", "message": f"Nhập kho thành công PO: {data.po_code}", "po_id": po_id}
@@ -211,7 +211,7 @@ class PurchaseService:
         }
 
     # 5. Cập nhật PO (Đã sửa lỗi tham số 'q' và làm tròn số)
-    def update_po(self, po_id: int, data: PurchaseUpdateRequest):
+    def update_po(self, po_id: int, data: PurchaseUpdateRequest, user_id: int = None):
         try:
             # 0. Lấy thông tin chung
             po_header = self.db.execute(text("SELECT warehouse_id FROM purchase_orders WHERE id = :id"), {"id": po_id}).fetchone()
@@ -242,9 +242,9 @@ class PurchaseService:
                             
                             # Sửa lỗi 'diff' -> 'q' ở đây
                             self.db.execute(text("""
-                                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) 
-                                VALUES (:w, :v, 'purchase_in', :q, :ref, 'Sửa phiếu nhập')
-                            """), {"w": wid_header, "v": vid, "q": qty_diff, "ref": po_id})
+                                INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note, created_by) 
+                                VALUES (:w, :v, 'purchase_in', :q, :ref, 'Sửa phiếu nhập', :uid)
+                            """), {"w": wid_header, "v": vid, "q": qty_diff, "ref": po_id, "uid": user_id})
                 else:
                     # THÊM MỚI
                     if not item.product_variant_id: continue
@@ -253,7 +253,7 @@ class PurchaseService:
                     
                     self.db.execute(text("INSERT INTO purchase_order_items (purchase_order_id, product_variant_id, quantity, unit_price, subtotal) VALUES (:oid, :pid, :qty, :price, :sub)"), {"oid": po_id, "pid": vid, "qty": item.quantity, "price": item.unit_price, "sub": item.quantity * item.unit_price})
                     self.db.execute(text("INSERT INTO inventory_stocks (warehouse_id, product_variant_id, quantity_on_hand) VALUES (:w, :v, :q) ON DUPLICATE KEY UPDATE quantity_on_hand = quantity_on_hand + :q"), {"w": wid_header, "v": vid, "q": item.quantity})
-                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Thêm mới vào phiếu')"), {"w": wid_header, "v": vid, "q": item.quantity, "ref": po_id})
+                    self.db.execute(text("INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note, created_by) VALUES (:w, :v, 'purchase_in', :q, :ref, 'Thêm mới vào phiếu', :uid)"), {"w": wid_header, "v": vid, "q": item.quantity, "ref": po_id, "uid": user_id})
 
             # B. Cập nhật Header
             self.db.execute(text("UPDATE purchase_orders SET po_code=:c, supplier_id=:s, order_date=:d, total_amount=:t WHERE id=:id"), {"c": data.po_code, "s": data.supplier_id, "d": data.order_date, "t": total_amount, "id": po_id})
@@ -286,8 +286,45 @@ class PurchaseService:
             self.db.rollback()
             raise e
 
+    # Dòng phiếu nhập bị xóa vẫn phải trả về cho API tích hợp (da_xoa = true) -> ghi lại trước khi xóa.
+    def _ensure_deletion_log_table(self):
+        # Lưu ý: DDL trong MySQL tự commit -> chỉ gọi ở đầu hàm, trước mọi thao tác ghi.
+        self.db.execute(text("""
+            CREATE TABLE IF NOT EXISTS purchase_order_item_deletions (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                purchase_order_item_id INT NOT NULL,
+                purchase_order_id INT NOT NULL,
+                po_code VARCHAR(50) NULL,
+                order_date DATE NULL,
+                po_status VARCHAR(20) NULL,
+                warehouse_id INT NULL,
+                supplier_name VARCHAR(255) NULL,
+                product_variant_id INT NOT NULL,
+                quantity DECIMAL(20, 4) NULL,
+                unit_price DECIMAL(15, 2) NULL,
+                deleted_by INT NULL,
+                deleted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_poid_deleted_at (deleted_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        self.db.commit()
+
+    def _log_deleted_items(self, where_sql: str, params: dict, user_id: int = None):
+        self.db.execute(text(f"""
+            INSERT INTO purchase_order_item_deletions
+                (purchase_order_item_id, purchase_order_id, po_code, order_date, po_status, warehouse_id,
+                 supplier_name, product_variant_id, quantity, unit_price, deleted_by)
+            SELECT poi.id, po.id, po.po_code, po.order_date, po.status, po.warehouse_id,
+                   s.name, poi.product_variant_id, poi.quantity, poi.unit_price, :uid
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON po.id = poi.purchase_order_id
+            LEFT JOIN suppliers s ON s.id = po.supplier_id
+            WHERE {where_sql}
+        """), {**params, "uid": user_id})
+
     # 6. Xóa Phiếu Nhập & Hoàn tác kho
-    def delete_purchase_order(self, po_id: int):
+    def delete_purchase_order(self, po_id: int, user_id: int = None):
+        self._ensure_deletion_log_table()
         try:
             # 1. Lấy thông tin PO để biết kho nào
             po = self.db.execute(text("SELECT warehouse_id FROM purchase_orders WHERE id = :id"), {"id": po_id}).fetchone()
@@ -325,11 +362,12 @@ class PurchaseService:
 
                 # Ghi log hoàn tác
                 self.db.execute(text("""
-                    INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note)
-                    VALUES (:wid, :vid, 'purchase_in', :qty, :ref, 'Xóa phiếu nhập (Hoàn tác)')
-                """), {"wid": wid, "vid": vid, "qty": -qty, "ref": po_id})
+                    INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note, created_by)
+                    VALUES (:wid, :vid, 'purchase_in', :qty, :ref, 'Xóa phiếu nhập (Hoàn tác)', :uid)
+                """), {"wid": wid, "vid": vid, "qty": -qty, "ref": po_id, "uid": user_id})
 
             # 3. Xóa dữ liệu trong DB
+            self._log_deleted_items("poi.purchase_order_id = :id", {"id": po_id}, user_id)
             self.db.execute(text("DELETE FROM purchase_order_items WHERE purchase_order_id = :id"), {"id": po_id})
             self.db.execute(text("DELETE FROM purchase_orders WHERE id = :id"), {"id": po_id})
             
@@ -338,4 +376,129 @@ class PurchaseService:
 
         except Exception as e:
             self.db.rollback()
-            raise e 
+            raise e
+
+    def delete_purchase_order_item(self, po_id: int, item_id: int, user_id: int = None):
+        """Xóa 1 dòng nguyên liệu khỏi phiếu nhập và hoàn tác tồn kho."""
+        self._ensure_deletion_log_table()
+        try:
+            po = self.db.execute(
+                text("SELECT warehouse_id FROM purchase_orders WHERE id = :id"),
+                {"id": po_id},
+            ).fetchone()
+            if not po:
+                raise Exception("Phiếu nhập không tồn tại")
+            wid = po[0]
+
+            item = self.db.execute(
+                text(
+                    """
+                    SELECT id, product_variant_id, quantity, unit_price
+                    FROM purchase_order_items
+                    WHERE id = :item_id AND purchase_order_id = :po_id
+                    """
+                ),
+                {"item_id": item_id, "po_id": po_id},
+            ).fetchone()
+            if not item:
+                raise Exception("Dòng nguyên liệu không tồn tại trong phiếu này")
+
+            vid = item[1]
+            qty = Decimal(str(item[2] or 0)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+            current_stock_raw = self.db.execute(
+                text(
+                    """
+                    SELECT quantity_on_hand FROM inventory_stocks
+                    WHERE warehouse_id = :w AND product_variant_id = :v
+                    """
+                ),
+                {"w": wid, "v": vid},
+            ).scalar()
+            current_stock = Decimal(str(current_stock_raw or 0)).quantize(
+                Decimal("0.0001"),
+                rounding=ROUND_HALF_UP,
+            )
+            if current_stock < qty:
+                raise Exception(
+                    f"Không thể xóa dòng! Tồn kho hiện chỉ còn {current_stock}, "
+                    f"nhưng dòng này đã nhập {qty} (hàng có thể đã xuất đi)."
+                )
+
+            self.db.execute(
+                text(
+                    """
+                    UPDATE inventory_stocks
+                    SET quantity_on_hand = quantity_on_hand - :qty
+                    WHERE warehouse_id = :wid AND product_variant_id = :vid
+                    """
+                ),
+                {"qty": qty, "wid": wid, "vid": vid},
+            )
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO inventory_transactions
+                        (warehouse_id, product_variant_id, transaction_type, quantity, reference_id, note, created_by)
+                    VALUES (:wid, :vid, 'purchase_in', :qty, :ref, 'Xóa dòng phiếu nhập (Hoàn tác)', :uid)
+                    """
+                ),
+                {"wid": wid, "vid": vid, "qty": -qty, "ref": po_id, "uid": user_id},
+            )
+            self._log_deleted_items("poi.id = :id", {"id": item_id}, user_id)
+            self.db.execute(
+                text("DELETE FROM purchase_order_items WHERE id = :id"),
+                {"id": item_id},
+            )
+
+            # Cập nhật tổng tiền phiếu
+            new_total = self.db.execute(
+                text(
+                    """
+                    SELECT COALESCE(SUM(subtotal), 0)
+                    FROM purchase_order_items
+                    WHERE purchase_order_id = :po_id
+                    """
+                ),
+                {"po_id": po_id},
+            ).scalar()
+            self.db.execute(
+                text("UPDATE purchase_orders SET total_amount = :t WHERE id = :id"),
+                {"t": float(new_total or 0), "id": po_id},
+            )
+
+            # Tính lại giá vốn WAC cho SKU vừa xóa
+            history = self.db.execute(
+                text(
+                    """
+                    SELECT SUM(quantity), SUM(subtotal)
+                    FROM purchase_order_items
+                    WHERE product_variant_id = :pid
+                    """
+                ),
+                {"pid": vid},
+            ).fetchone()
+            total_qty_history = float(history[0] or 0)
+            total_val_history = float(history[1] or 0)
+            if total_qty_history > 0:
+                new_wac = total_val_history / total_qty_history
+                self.db.execute(
+                    text("UPDATE product_variants SET cost_price = :cost WHERE id = :id"),
+                    {"cost": new_wac, "id": vid},
+                )
+            else:
+                self.db.execute(
+                    text("UPDATE product_variants SET cost_price = 0 WHERE id = :id"),
+                    {"id": vid},
+                )
+
+            self.db.commit()
+            return {
+                "status": "success",
+                "message": "Đã xóa dòng nguyên liệu và hoàn tác kho thành công.",
+                "total_amount": float(new_total or 0),
+            }
+        except Exception as e:
+            self.db.rollback()
+            raise e
+ 

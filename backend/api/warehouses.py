@@ -45,7 +45,7 @@ def list_warehouses(db: Session = Depends(get_db), user: dict = Depends(get_curr
 def transfer_stock(request: TransferCreateRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     service = WarehouseService(db)
     try:
-        return service.create_transfer(request)
+        return service.create_transfer(request, user_id=user.get("id"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=humanize_error(e))
 

@@ -124,7 +124,8 @@ const CentralDashboard = () => {
         },
     ];
 
-    const totalInventoryValue = data.total_inventory.reduce((sum, item) => sum + item.total_value, 0);
+    // Backend tính riêng tồn tại kho tổng; total_inventory là dữ liệu toàn chuỗi.
+    const totalAssetValue = Number(data.total_asset_value ?? 0);
 
     const handleExportExcel = () => {
         // Vì API trả về File nhị phân (Binary), cách đơn giản nhất là mở URL trên trình duyệt
@@ -156,7 +157,7 @@ const CentralDashboard = () => {
     };
 
     return (
-        <div style={{ background: '#f0f2f5', minHeight: '100vh', padding: 24 }}>
+        <div style={{ background: 'var(--wms-beige-150)', minHeight: '100vh', padding: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <Title level={2} style={{ margin: 0 }}>
                     <ShopOutlined /> {data.info.name} <Tag color="blue">{data.info.brand}</Tag>
@@ -185,7 +186,7 @@ const CentralDashboard = () => {
                 <Col span={6}>
                     <Card bordered={false} style={{borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)'}}>
                         {canViewCost ? (
-                            <Statistic title="Tổng Giá Trị Tài Sản" value={totalInventoryValue} precision={0} valueStyle={{ color: '#3f8600' }} prefix={<GoldOutlined />} formatter={(val) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)} />
+                            <Statistic title="Tổng Giá Trị Tài Sản" value={totalAssetValue} precision={0} valueStyle={{ color: '#3f8600' }} prefix={<GoldOutlined />} formatter={(val) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val)} />
                         ) : (
                             <Statistic title="Tổng Giá Trị Tài Sản" value="***" prefix={<GoldOutlined />} valueStyle={{ color: '#999' }} />
                         )}

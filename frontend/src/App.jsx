@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
-import { Layout, Menu, theme, Avatar, Space, Typography, Spin, Button, Tag } from 'antd';
+import { Layout, Menu, Avatar, Space, Typography, Spin, Button, Tag } from 'antd';
 import { 
   DatabaseOutlined, SkinOutlined, ShoppingCartOutlined, ShopOutlined,
   UserOutlined, MenuUnfoldOutlined, MenuFoldOutlined,
@@ -62,8 +62,6 @@ const App = () => {
   const [loadingMenu, setLoadingMenu] = useState(true);
   const canViewReports = canViewModule(user, 'reports');
   const inventoryCheckEnabled = String(import.meta.env.VITE_INVENTORY_CHECK_ENABLED || 'false').toLowerCase() === 'true';
-
-  const { token: { colorBgContainer } } = theme.useToken();
 
   // Hàm Đăng xuất
   const handleLogout = () => {
@@ -144,24 +142,26 @@ const App = () => {
 
   return (
     <Router>
-      <Layout style={{ minHeight: '100vh' }}>
-        <Sider trigger={null} collapsible collapsed={collapsed} width={260} style={{ overflow: 'auto', height: '100vh', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100, boxShadow: '2px 0 8px rgba(0,0,0,0.15)' }}>
-          <div style={{ height: 64, margin: 16, background: 'rgba(255, 255, 255, 0.1)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {collapsed ? <SkinOutlined style={{color: 'white', fontSize: 24}}/> : <Title level={4} style={{ color: 'white', margin: 0, letterSpacing: 1 }}>FASHION WMS</Title>}
+      <Layout className="wms-shell">
+        <Sider className="wms-sider" trigger={null} collapsible collapsed={collapsed} width={260} style={{ overflow: 'auto', height: '100vh', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100 }}>
+          <div className="wms-brand">
+            <Title level={4} style={{ margin: 0, letterSpacing: 0.5 }}>
+              {collapsed ? 'G' : 'GENMEC WMS'}
+            </Title>
           </div>
 
           {loadingMenu ? <div style={{textAlign: 'center', marginTop: 20}}><Spin /></div> : 
-            <Menu theme="dark" mode="inline" defaultOpenKeys={canViewReports ? ['dashboard'] : []} items={menuItems} style={{ fontSize: 15, fontWeight: 500 }} />
+            <Menu className="wms-menu" theme="dark" mode="inline" defaultOpenKeys={canViewReports ? ['dashboard'] : []} items={menuItems} style={{ fontSize: 15, fontWeight: 500 }} />
           }
         </Sider>
 
-        <Layout style={{ marginLeft: collapsed ? 80 : 260, transition: 'all 0.2s' }}>
-          <Header style={{ padding: '0 24px', background: colorBgContainer, display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 99, boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
+        <Layout className="wms-main" style={{ marginLeft: collapsed ? 80 : 260, transition: 'all 0.2s' }}>
+          <Header className="wms-header">
             <div style={{ display: 'flex', alignItems: 'center' }}>
                 {React.createElement(collapsed ? MenuUnfoldOutlined : MenuFoldOutlined, {
-                  className: 'trigger',
+                  className: 'wms-trigger',
                   onClick: () => setCollapsed(!collapsed),
-                  style: { fontSize: 18, cursor: 'pointer', marginRight: 24 }
+                  style: { fontSize: 18, cursor: 'pointer' }
                 })}
                 <Title level={5} style={{ margin: 0 }}>Hệ thống Quản lý Chuỗi Cung Ứng</Title>
             </div>
@@ -171,13 +171,13 @@ const App = () => {
                    <Text strong style={{display: 'block'}}>{user.name || 'User'}</Text>
                    <Tag color={user.role === 'admin' ? 'red' : 'blue'} style={{margin: 0, fontSize: 10}}>{(user.role || 'staff').toUpperCase()}</Tag>
                </div>
-               <Avatar style={{ backgroundColor: user.role === 'admin' ? '#f56a00' : '#1677ff' }} icon={<UserOutlined />} />
+               <Avatar className="wms-avatar" icon={<UserOutlined />} />
                <Button type="text" icon={<LogoutOutlined />} onClick={handleLogout} danger title="Đăng xuất" />
             </Space>
           </Header>
 
-          <Content style={{ margin: '24px 16px', overflow: 'initial' }}>
-            <div style={{ padding: 24, minHeight: '80vh' }}>
+          <Content className="wms-content">
+            <div className="wms-content-inner">
               <React.Suspense fallback={<div style={{ textAlign: 'center', padding: 48 }}><Spin size="large" /></div>}>
                 <Routes>
                   <Route path="/login" element={<Navigate to="/" replace />} />

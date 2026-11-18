@@ -82,6 +82,12 @@ class QuickProductionRequest(BaseModel):
 class ReceiveGoodsRequest(BaseModel):
     items: List[ReceiveGoodsItemRequest]
 
+# Chỉnh sửa tay cột "Đã trả" (sửa nhập thừa/nhầm) - bắt buộc có lý do, luôn ghi log
+class AdjustFinishedRequest(BaseModel):
+    new_quantity: int
+    reason: str
+    inventory_code: Optional[str] = None  # Mã kiểm tồn để ghi điều chỉnh kế toán (nếu có)
+
 class ProgressItem(BaseModel):
     name: str
     done: bool

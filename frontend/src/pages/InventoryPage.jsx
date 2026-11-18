@@ -21,7 +21,7 @@ const InventoryPage = () => {
     const [activeTabKey, setActiveTabKey] = useState('retail');
     
     // Edit State
-    const [editingItem, setEditingItem] = useState(null); 
+    const [editingItem, setEditingItem] = useState(null);
 
     // Stock Detail State
     const [stockDetail, setStockDetail] = useState(null);
@@ -84,14 +84,32 @@ const InventoryPage = () => {
         setEditingItem(record); 
         form.setFieldsValue({
             sku: record.sku,
-            // Nếu tên có định dạng "Tên Chung - Màu", ta tách ra để hiển thị cho đẹp (nếu muốn)
-            // Nhưng đơn giản nhất là cứ hiển thị full name để sửa
-            name: record.variant_name, 
+            name: record.category_name || record.variant_name,
+            variant_name: record.variant_name,
             unit: record.base_unit || record.category_name || 'Cái',
             cost_price: record.cost_price,
             note: record.note
         });
         setIsModalOpen(true);
+    };
+
+    const handleDeleteMaterial = (record) => {
+        Modal.confirm({
+            title: 'Xóa vật tư?',
+            content: `Bạn chắc chắn muốn xóa "${record.variant_name}"? Chỉ xóa được khi vật tư không còn tồn kho và không còn được dùng trong đơn/nhóm/phiếu kho.`,
+            okText: 'Xóa',
+            okType: 'danger',
+            cancelText: 'Hủy',
+            onOk: async () => {
+                try {
+                    await productApi.delete(record.id);
+                    message.success('Đã xóa vật tư!');
+                    fetchData(activeTabKey === 'groups' ? 'all' : getMaterialScopeFromTab(activeTabKey));
+                } catch (error) {
+                    message.error("Lỗi: " + (error.response?.data?.detail || "Không thể xóa vật tư"));
+                }
+            },
+        });
     };
 
     // --- XEM CHI TIẾT TỒN KHO (tổng hệ thống + theo từng kho) ---
@@ -190,9 +208,9 @@ const InventoryPage = () => {
         { title: 'Mã SKU', dataIndex: 'sku', render: t => <Tag color="geekblue">{t}</Tag> },
         
         // Hiển thị Tên + Màu (Nếu có)
-        { title: 'Tên Vật Tư', dataIndex: 'variant_name', render: (t, r) => 
+        { title: 'Tên Vật Tư', dataIndex: 'variant_name', render: (t, r) =>
             <span>
-                <a onClick={() => openStockDetail(r)}><b>{t}</b></a> 
+                <a onClick={() => openStockDetail(r)}><b>{t}</b></a>
                 {r.color && <Tag color="magenta" style={{marginLeft: 8}}>{r.color}</Tag>}
             </span> 
         },
@@ -208,7 +226,17 @@ const InventoryPage = () => {
                 : <Tag color="default">***</Tag>),
         },
         { title: 'Tồn kho', dataIndex: 'quantity_on_hand', align: 'center', render: q => <Tag color={q > 0 ? 'success' : 'error'}>{q > 0 ? q : 'Hết'}</Tag> },
-        { title: '', key: 'action', width: 50, render: (_, record) => <Button type="text" icon={<EditOutlined />} onClick={() => openEditModal(record)} style={{color: '#1677ff'}} /> }
+        {
+            title: '',
+            key: 'action',
+            width: 90,
+            render: (_, record) => (
+                <Space size={4}>
+                    <Button type="text" icon={<EditOutlined />} onClick={() => openEditModal(record)} style={{color: '#1677ff'}} />
+                    <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDeleteMaterial(record)} />
+                </Space>
+            )
+        }
     ];
 
     const groupColumns = [
@@ -268,7 +296,7 @@ const InventoryPage = () => {
                     {/* Phần thông tin chung */}
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
                         <Form.Item label="Tên Vật tư chung" name="name" rules={[{ required: true, message: 'Nhập tên chung' }]}>
-                            <Input placeholder="VD: Vải Linen Cao Cấp" disabled={!!editingItem} />
+                            <Input placeholder="VD: Vải Linen Cao Cấp" />
                         </Form.Item>
                         <Form.Item label="Đơn vị tính" name="unit" initialValue="Cái">
                             <Input />
@@ -280,6 +308,12 @@ const InventoryPage = () => {
                         <>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                                 <Form.Item label="Mã SKU" name="sku"><Input /></Form.Item>
+                                <Form.Item label="Tên hiển thị / biến thể" name="variant_name" rules={[{ required: true, message: 'Nhập tên hiển thị' }]}>
+                                    <Input placeholder="VD: Vải Linen Cao Cấp - Trắng" />
+                                </Form.Item>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                                 
                                 <Tooltip title={canViewEditingItemCost ? 'Giá vốn được tính tự động từ phiếu nhập' : 'Bạn không có quyền xem giá vốn'}>
                                     <Form.Item label="Giá Vốn" name="cost_price">

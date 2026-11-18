@@ -242,6 +242,26 @@ class ProductService:
             if "material_scope" not in current_attributes:
                 current_attributes["material_scope"] = "retail"
 
+            common_name = str(data.name or "").strip()
+            if not common_name:
+                raise Exception("Tên vật tư chung không được để trống")
+
+            duplicate_parent = self.db.execute(
+                text("""
+                    SELECT id
+                    FROM products
+                    WHERE type = 'material'
+                      AND BINARY name = BINARY :name
+                      AND id != :id
+                    LIMIT 1
+                """),
+                {"name": common_name, "id": parent_id},
+            ).fetchone()
+            if duplicate_parent:
+                raise Exception(f"Tên vật tư chung '{common_name}' đã tồn tại, vui lòng chọn tên khác")
+
+            variant_name = str(data.variant_name or "").strip() or common_name
+
             # B. Cập nhật bảng Variants (Con)
             query_var = text("""
                 UPDATE product_variants 
@@ -249,15 +269,15 @@ class ProductService:
                 WHERE id = :id
             """)
             self.db.execute(query_var, {
-                "sku": data.sku, "name": data.name, 
+                "sku": data.sku, "name": variant_name, 
                 "attrs": json.dumps(current_attributes, ensure_ascii=False),
                 "note": data.note, 
                 "id": material_id
             })
 
-            # C. Cập nhật bảng Products (Cha) - Để sửa Đơn vị tính
-            query_prod = text("UPDATE products SET base_unit = :unit WHERE id = :pid")
-            self.db.execute(query_prod, {"unit": data.unit, "pid": parent_id})
+            # C. Cập nhật bảng Products (Cha) - tên chung + đơn vị tính
+            query_prod = text("UPDATE products SET name = :name, base_unit = :unit WHERE id = :pid")
+            self.db.execute(query_prod, {"name": common_name, "unit": data.unit, "pid": parent_id})
 
             self.db.commit()
             return {"status": "success", "message": "Cập nhật thành công!"}
@@ -266,6 +286,100 @@ class ProductService:
             self.db.rollback()
             if "Duplicate entry" in str(e):
                 raise Exception(f"Mã SKU '{data.sku}' đã tồn tại ở sản phẩm khác!")
+            raise e
+
+    def delete_material(self, material_id: int):
+        try:
+            current = self.db.execute(
+                text("""
+                    SELECT v.id, v.product_id, v.sku, v.variant_name, p.name
+                    FROM product_variants v
+                    JOIN products p ON p.id = v.product_id
+                    WHERE v.id = :id AND p.type = 'material'
+                """),
+                {"id": material_id},
+            ).fetchone()
+            if not current:
+                raise Exception("Vật tư không tồn tại")
+
+            stock_qty = self.db.execute(
+                text("SELECT COALESCE(SUM(quantity_on_hand), 0) FROM inventory_stocks WHERE product_variant_id = :id"),
+                {"id": material_id},
+            ).scalar() or 0
+            if float(stock_qty or 0) != 0:
+                raise Exception(f"Không thể xóa: vật tư vẫn còn tồn kho {stock_qty}.")
+
+            active_orders = self.db.execute(
+                text("""
+                    SELECT DISTINCT po.code
+                    FROM bom_materials bm
+                    JOIN bom b ON b.id = bm.bom_id
+                    JOIN production_orders po ON po.product_variant_id = b.product_variant_id
+                    WHERE bm.material_variant_id = :id
+                      AND po.status != 'cancelled'
+                    UNION
+                    SELECT DISTINCT po.code
+                    FROM production_material_reservations pmr
+                    JOIN production_orders po ON po.id = pmr.production_order_id
+                    WHERE pmr.material_variant_id = :id
+                      AND po.status != 'cancelled'
+                """),
+                {"id": material_id},
+            ).fetchall()
+            if active_orders:
+                codes = ", ".join(str(r[0]) for r in active_orders[:10])
+                suffix = "..." if len(active_orders) > 10 else ""
+                raise Exception(f"Không thể xóa: vật tư đang được dùng trong đơn sản xuất {codes}{suffix}.")
+
+            group_rows = self.db.execute(
+                text("""
+                    SELECT mg.code
+                    FROM material_group_details mgd
+                    JOIN material_groups mg ON mg.id = mgd.group_id
+                    WHERE mgd.material_variant_id = :id
+                    LIMIT 5
+                """),
+                {"id": material_id},
+            ).fetchall()
+            if group_rows:
+                codes = ", ".join(str(r[0]) for r in group_rows)
+                raise Exception(f"Không thể xóa: vật tư đang nằm trong nhóm vật tư {codes}.")
+
+            purchase_count = self.db.execute(
+                text("SELECT COUNT(*) FROM purchase_order_items WHERE product_variant_id = :id"),
+                {"id": material_id},
+            ).scalar() or 0
+            transaction_count = self.db.execute(
+                text("SELECT COUNT(*) FROM inventory_transactions WHERE product_variant_id = :id"),
+                {"id": material_id},
+            ).scalar() or 0
+            adjustment_count = self.db.execute(
+                text("SELECT COUNT(*) FROM inventory_adjustment_items WHERE product_variant_id = :id"),
+                {"id": material_id},
+            ).scalar() or 0
+            sales_count = self.db.execute(
+                text("SELECT COUNT(*) FROM sales_order_items WHERE product_variant_id = :id"),
+                {"id": material_id},
+            ).scalar() or 0
+            if purchase_count or transaction_count or adjustment_count or sales_count:
+                raise Exception("Không thể xóa: vật tư đã có phát sinh nhập/xuất/điều chỉnh kho.")
+
+            # Dọn các dòng tồn kho = 0 rồi xóa variant. Nếu product cha không còn variant nào thì xóa luôn product cha.
+            parent_id = current[1]
+            self.db.execute(text("DELETE FROM inventory_stocks WHERE product_variant_id = :id"), {"id": material_id})
+            self.db.execute(text("DELETE FROM product_variants WHERE id = :id"), {"id": material_id})
+
+            remaining_variants = self.db.execute(
+                text("SELECT COUNT(*) FROM product_variants WHERE product_id = :pid"),
+                {"pid": parent_id},
+            ).scalar() or 0
+            if int(remaining_variants) == 0:
+                self.db.execute(text("DELETE FROM products WHERE id = :pid"), {"pid": parent_id})
+
+            self.db.commit()
+            return {"status": "success", "message": "Đã xóa vật tư khỏi hệ thống."}
+        except Exception as e:
+            self.db.rollback()
             raise e
 
     # 6b. Chi tiết tồn kho của 1 vật tư: tổng toàn hệ thống + tồn theo từng kho

@@ -128,7 +128,7 @@ class WarehouseService:
     
 
     # 5. Tạo phiếu điều chuyển kho (ĐÃ FIX LỖI SỐ LẺ)
-    def create_transfer(self, data: TransferCreateRequest):
+    def create_transfer(self, data: TransferCreateRequest, user_id: int = None):
         try:
             if data.from_warehouse_id == data.to_warehouse_id:
                 raise Exception("Kho đi và Kho đến không được trùng nhau")
@@ -164,14 +164,15 @@ class WarehouseService:
                 # Ghi log Trừ
                 self.db.execute(
                     text("""
-                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note)
-                        VALUES (:wid, :vid, 'transfer_out', :qty, :note)
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note, created_by)
+                        VALUES (:wid, :vid, 'transfer_out', :qty, :note, :uid)
                     """),
                     {
                         "wid": data.from_warehouse_id,
                         "vid": vid,
                         "qty": -req_qty,
                         "note": f"{transfer_tag} Điều chuyển thủ công",
+                        "uid": user_id,
                     },
                 )
 
@@ -182,14 +183,15 @@ class WarehouseService:
                 # Ghi log Cộng
                 self.db.execute(
                     text("""
-                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note)
-                        VALUES (:wid, :vid, 'transfer_in', :qty, :note)
+                        INSERT INTO inventory_transactions (warehouse_id, product_variant_id, transaction_type, quantity, note, created_by)
+                        VALUES (:wid, :vid, 'transfer_in', :qty, :note, :uid)
                     """),
                     {
                         "wid": data.to_warehouse_id,
                         "vid": vid,
                         "qty": req_qty,
                         "note": f"{transfer_tag} Điều chuyển thủ công",
+                        "uid": user_id,
                     },
                 )
 

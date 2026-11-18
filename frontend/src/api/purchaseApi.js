@@ -9,6 +9,7 @@ const purchaseApi = {
     getDetail: (id) => axiosClient.get(`/purchases/${id}`),
     update: (id, data) => axiosClient.put(`/purchases/${id}`, data),
     delete: (id) => axiosClient.delete(`/purchases/${id}`),
+    deleteItem: (poId, itemId) => axiosClient.delete(`/purchases/${poId}/items/${itemId}`),
 };
 
 export default purchaseApi;

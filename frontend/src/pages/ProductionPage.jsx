@@ -88,10 +88,14 @@ const ProductionPage = () => {
     const [orderSizes, setOrderSizes] = useState([]); 
     const [printData, setPrintData] = useState(null);
     const [historyData, setHistoryData] = useState([]);
+    const [adjustLogs, setAdjustLogs] = useState([]);
+    const [adjustTarget, setAdjustTarget] = useState(null); // Dòng size đang chỉnh tay cột "Đã trả"
+    const [adjustSaving, setAdjustSaving] = useState(false);
     const [fileList, setFileList] = useState([]);
 
     const [orderForm] = Form.useForm();
     const [editForm] = Form.useForm();
+    const [adjustForm] = Form.useForm();
     const selectedOwnerCentralId = Form.useWatch('owner_central_id', orderForm);
     const selectedProductionWarehouseId = Form.useWatch('warehouse_id', orderForm);
 
@@ -1068,6 +1072,12 @@ const ProductionPage = () => {
                 }));
             if (itemsToReceive.length === 0) return message.warning("Chưa nhập số lượng trả hàng!");
 
+            const overPlanned = orderSizes.filter(s => Number(s.receiving || 0) > 0 && Number(s.finished || 0) + Number(s.receiving) > Number(s.planned || 0));
+            if (overPlanned.length > 0) {
+                const detail = overPlanned.map(s => `${s.size}: ${s.finished} + ${s.receiving} > ${s.planned}`).join('\n');
+                if (!window.confirm(`Số nhập vượt kế hoạch:\n${detail}\n\nVẫn nhập?`)) return;
+            }
+
             const filledCodes = [...new Set(itemsToReceive.map(x => (x.inventory_code || '').trim()).filter(Boolean))];
             const hasBlank = itemsToReceive.some(x => !x.inventory_code);
             if (hasBlank) {
@@ -1095,7 +1105,53 @@ const ProductionPage = () => {
             message.error("Lỗi: " + (error.response?.data?.detail || error.message || 'unknown'));
         }
     };
-    const handleViewHistory = async (id) => { try { const res = await productionApi.getReceiveHistory(id); setHistoryData(res.data); setIsHistoryModalOpen(true); } catch (error) { message.error("Lỗi tải lịch sử"); } };
+    const handleViewHistory = async (id) => {
+        try {
+            const [res, adjustRes] = await Promise.all([
+                productionApi.getReceiveHistory(id),
+                productionApi.getFinishedAdjustLogs(id),
+            ]);
+            setHistoryData(res.data);
+            setAdjustLogs(adjustRes.data || []);
+            setIsHistoryModalOpen(true);
+        } catch (error) {
+            message.error("Lỗi tải lịch sử");
+        }
+    };
+    const openAdjustFinished = (row) => {
+        setAdjustTarget(row);
+        adjustForm.setFieldsValue({ new_quantity: Number(row.finished || 0), reason: '', inventory_code: '' });
+    };
+    const handleAdjustFinished = async () => {
+        if (!adjustTarget || !currentOrder) return;
+        let values;
+        try {
+            values = await adjustForm.validateFields();
+        } catch {
+            return;
+        }
+        const newQty = Number(values.new_quantity);
+        if (newQty === Number(adjustTarget.finished || 0)) {
+            message.warning('Số mới giống số hiện tại');
+            return;
+        }
+        setAdjustSaving(true);
+        try {
+            const res = await productionApi.adjustFinished(currentOrder.id, adjustTarget.id, {
+                new_quantity: newQty,
+                reason: values.reason.trim(),
+                inventory_code: (values.inventory_code || '').trim() || null,
+            });
+            message.success(res.data?.message || 'Đã chỉnh số đã trả');
+            setOrderSizes(prev => prev.map(s => (s.id === adjustTarget.id ? { ...s, finished: newQty } : s)));
+            setAdjustTarget(null);
+            reloadOrders();
+        } catch (error) {
+            message.error("Lỗi: " + (error.response?.data?.detail || error.message || 'unknown'));
+        } finally {
+            setAdjustSaving(false);
+        }
+    };
     const handlePrintOrder = async (record) => {
         try {
             const res = await productionApi.getPrintData(record.id);
@@ -2109,7 +2165,26 @@ const ProductionPage = () => {
                             render: (t) => <span style={{ color: '#888', fontSize: 12 }}>{t}</span>,
                         },
                         { title: 'Kế hoạch', dataIndex: 'planned', align: 'center', width: 80 },
-                        { title: 'Đã trả', dataIndex: 'finished', align: 'center', width: 80, render: t => <span style={{color: 'blue'}}>{t}</span> },
+                        {
+                            title: 'Đã trả',
+                            dataIndex: 'finished',
+                            align: 'center',
+                            width: 110,
+                            render: (t, r) => (
+                                <Space size={4}>
+                                    <span style={{ color: 'blue' }}>{t}</span>
+                                    {canManageProduction && (
+                                        <Button
+                                            type="text"
+                                            size="small"
+                                            icon={<EditOutlined />}
+                                            title="Sửa số đã trả (nhập nhầm/thừa) - có lưu lịch sử"
+                                            onClick={() => openAdjustFinished(r)}
+                                        />
+                                    )}
+                                </Space>
+                            ),
+                        },
                         {
                             title: 'Nhập Đợt Này',
                             width: 180,
@@ -2149,7 +2224,92 @@ const ProductionPage = () => {
                     ]}
                 />
             </Modal>
-            <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null}><Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} /></Modal>
+            <Modal
+                title={`✏️ Sửa số Đã trả - ${adjustTarget?.size || ''}`}
+                open={!!adjustTarget}
+                onCancel={() => setAdjustTarget(null)}
+                onOk={handleAdjustFinished}
+                okText="Lưu chỉnh sửa"
+                confirmLoading={adjustSaving}
+                destroyOnClose
+            >
+                <Typography.Paragraph type="warning" style={{ marginBottom: 12 }}>
+                    Chỉ dùng khi nhập thừa / ấn nhầm. Tồn kho thành phẩm sẽ được cộng/trừ theo chênh lệch.
+                    Mọi lần sửa đều được lưu lại (người sửa, thời gian, số cũ → số mới, lý do).
+                </Typography.Paragraph>
+                <div style={{ marginBottom: 12 }}>
+                    Kế hoạch: <b>{adjustTarget?.planned}</b> · Đã trả hiện tại: <b style={{ color: 'blue' }}>{adjustTarget?.finished}</b>
+                </div>
+                <Form form={adjustForm} layout="vertical">
+                    <Form.Item
+                        label="Số đã trả đúng"
+                        name="new_quantity"
+                        rules={[{ required: true, message: 'Nhập số đã trả' }]}
+                    >
+                        <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item
+                        label="Lý do chỉnh sửa"
+                        name="reason"
+                        rules={[
+                            { required: true, whitespace: true, message: 'Bắt buộc nhập lý do' },
+                            { min: 5, message: 'Lý do tối thiểu 5 ký tự' },
+                        ]}
+                    >
+                        <Input.TextArea rows={3} placeholder="VD: Ấn nhầm nhập 50 thay vì 5 ở đợt ngày 10/10" />
+                    </Form.Item>
+                    <Form.Item
+                        label="Mã kiểm tồn (không bắt buộc)"
+                        name="inventory_code"
+                        extra="Nếu đợt nhập sai đã ghi kèm mã kiểm tồn, nhập lại mã đó để điều chỉnh luôn số kế toán."
+                    >
+                        <Input placeholder="Mã kiểm tồn" />
+                    </Form.Item>
+                </Form>
+            </Modal>
+            <Modal title="📜 Lịch Sử Nhập Hàng" open={isHistoryModalOpen} onCancel={() => setIsHistoryModalOpen(false)} footer={null} width={900}>
+                <Tabs
+                    items={[
+                        {
+                            key: 'receive',
+                            label: 'Các đợt nhập',
+                            children: (
+                                <Table dataSource={historyData} pagination={{ pageSize: 5 }} rowKey={(r, i) => i} size="small" columns={[{ title: 'Thời gian', dataIndex: 'date', width: 140 }, { title: 'Size', dataIndex: 'size', width: 80, align: 'center', render: t => <b>{t}</b> }, { title: 'Ghi chú', dataIndex: 'note', render: t => <span style={{fontSize: 12, color: '#888'}}>{t}</span> }, { title: 'Số lượng trả', dataIndex: 'quantity', align: 'center', render: q => <Tag color="green">+{q}</Tag> }, {title: 'Còn thiếu', dataIndex: 'remaining', align: 'center', render: r => <b style={{color: r > 0 ? 'red' : 'gray'}}>{r}</b> }]} />
+                            ),
+                        },
+                        {
+                            key: 'adjust',
+                            label: `Sửa tay "Đã trả" (${adjustLogs.length})`,
+                            children: (
+                                <Table
+                                    dataSource={adjustLogs}
+                                    pagination={{ pageSize: 5 }}
+                                    rowKey="id"
+                                    size="small"
+                                    columns={[
+                                        { title: 'Thời gian', dataIndex: 'date', width: 140 },
+                                        { title: 'Người sửa', dataIndex: 'actor', width: 140, render: t => <b>{t}</b> },
+                                        { title: 'Size', dataIndex: 'size', width: 90, align: 'center' },
+                                        {
+                                            title: 'Cũ → Mới',
+                                            align: 'center',
+                                            width: 120,
+                                            render: (_, r) => (
+                                                <span>
+                                                    {r.old_quantity} → <b>{r.new_quantity}</b>{' '}
+                                                    <Tag color={r.delta < 0 ? 'red' : 'green'}>{r.delta > 0 ? `+${r.delta}` : r.delta}</Tag>
+                                                </span>
+                                            ),
+                                        },
+                                        { title: 'Lý do', dataIndex: 'reason' },
+                                        { title: 'Mã kiểm tồn', dataIndex: 'inventory_code', width: 110 },
+                                    ]}
+                                />
+                            ),
+                        },
+                    ]}
+                />
+            </Modal>
 {/* --- MODAL XEM TRƯỚC IN ẤN (3 BẢNG RIÊNG BIỆT) --- */}
             <Modal
                 open={isPrintModalOpen}
