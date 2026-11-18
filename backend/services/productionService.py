@@ -934,6 +934,85 @@ class ProductionService:
             "limit": limit
         }
 
+    # 6b. Danh sách đơn SX có dùng 1 vật tư (vải/NPL) - chỉ tính lượng của đúng vật tư đó.
+    # - draft/waiting_material: lượng dự kiến = định mức BOM x SL kế hoạch (chưa trừ tồn) -> "Vải tồn"
+    # - in_progress: lượng đã xuất theo reservation -> "Vải đã trừ tồn"
+    # - completed: lượng theo reservation -> "Hoàn thành"
+    def get_orders_by_material(
+        self,
+        material_id: int,
+        allowed_warehouse_ids: Optional[List[int]] = None,
+        allowed_central_ids: Optional[List[int]] = None,
+    ):
+        conditions = ["po.status IN ('draft', 'waiting_material', 'in_progress', 'completed')"]
+        params = {"mid": material_id}
+
+        if allowed_warehouse_ids is not None:
+            if len(allowed_warehouse_ids) == 0:
+                return []
+            conditions.append(f"po.warehouse_id IN ({','.join(str(int(x)) for x in allowed_warehouse_ids)})")
+        if allowed_central_ids is not None:
+            if len(allowed_central_ids) == 0:
+                conditions.append("po.owner_central_id IS NULL")
+            else:
+                cids = ",".join(str(int(x)) for x in allowed_central_ids)
+                conditions.append(f"(po.owner_central_id IS NULL OR po.owner_central_id IN ({cids}))")
+
+        where_clause = " AND ".join(conditions)
+        # Một số DB chưa chạy migration thêm production_orders.created_at -> dùng start_date (ngày nhập khi tạo đơn)
+        has_created_at = self.db.execute(text("""
+            SELECT COUNT(1) FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = 'production_orders' AND column_name = 'created_at'
+        """)).scalar()
+        created_expr = "COALESCE(po.created_at, po.start_date)" if has_created_at else "po.start_date"
+        rows = self.db.execute(text(f"""
+            SELECT po.id, po.code, pv.variant_name, {created_expr} AS created_at,
+                   po.status, w.name AS warehouse_name, q.qty
+            FROM (
+                SELECT pmr.production_order_id AS oid, SUM(pmr.quantity_reserved) AS qty
+                FROM production_material_reservations pmr
+                JOIN production_orders po2 ON po2.id = pmr.production_order_id
+                WHERE pmr.material_variant_id = :mid AND po2.status IN ('in_progress', 'completed')
+                GROUP BY pmr.production_order_id
+                UNION ALL
+                SELECT po3.id AS oid, SUM(bm.quantity_needed) * po3.quantity_planned AS qty
+                FROM production_orders po3
+                JOIN bom b ON b.product_variant_id = po3.product_variant_id
+                JOIN bom_materials bm ON bm.bom_id = b.id
+                WHERE bm.material_variant_id = :mid AND po3.status IN ('draft', 'waiting_material')
+                GROUP BY po3.id, po3.quantity_planned
+            ) q
+            JOIN production_orders po ON po.id = q.oid
+            JOIN product_variants pv ON pv.id = po.product_variant_id
+            JOIN warehouses w ON w.id = po.warehouse_id
+            WHERE {where_clause}
+            ORDER BY {created_expr} DESC, po.id DESC
+        """), params).fetchall()
+
+        status_labels = {
+            "draft": "Vải tồn",
+            "waiting_material": "Vải tồn",
+            "in_progress": "Vải đã trừ tồn",
+            "completed": "Hoàn thành",
+        }
+        result = []
+        for r in rows:
+            qty = round(self._material_qty_float(r[6]), 2)
+            if qty <= 0:
+                continue
+            created = r[3]
+            result.append({
+                "order_id": r[0],
+                "code": r[1],
+                "product_name": r[2],
+                "created_at": created.isoformat() if created else None,
+                "status": r[4],
+                "material_status": status_labels.get(r[4], r[4]),
+                "warehouse_name": r[5],
+                "quantity": qty,
+            })
+        return result
+
     def export_orders_excel(
         self,
         start_date_from: Optional[date] = None,

@@ -2,10 +2,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope, get_allowed_warehouse_ids
+from drivers.dependencies import get_current_user, require_module_access, assert_warehouse_scope, get_allowed_warehouse_ids, get_allowed_central_ids
 from drivers.db_client import get_db
 from drivers.error_messages import humanize_error
 from services.productService import ProductService
+from services.productionService import ProductionService
 from entities.product import MaterialCreateRequest, MaterialGroupCreateRequest, ProductVariantResponse, MaterialUpdateRequest
 
 router = APIRouter()
@@ -52,6 +53,19 @@ def get_material_stock_detail(material_id: int, db: Session = Depends(get_db), u
         return service.get_material_stock_detail(material_id, allowed_ids=get_allowed_warehouse_ids(user, db))
     except Exception as e:
         raise HTTPException(status_code=404, detail=humanize_error(e))
+
+# 4c. API xem các đơn sản xuất có dùng 1 NVL (chỉ lượng của đúng NVL đó)
+@router.get("/materials/{material_id}/orders")
+def get_material_orders(material_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    service = ProductionService(db)
+    try:
+        return service.get_orders_by_material(
+            material_id,
+            allowed_warehouse_ids=get_allowed_warehouse_ids(user, db),
+            allowed_central_ids=get_allowed_central_ids(user, db),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=humanize_error(e))
 
 # 5. API cập nhật NVL
 @router.put("/materials/{material_id}")

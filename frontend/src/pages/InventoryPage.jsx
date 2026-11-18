@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Card, Tag, Button, Modal, Form, Input, InputNumber, message, Tabs, Space, Select, Divider, Tooltip, Descriptions, Statistic } from 'antd';
-import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined, BgColorsOutlined } from '@ant-design/icons';
+import { PlusOutlined, AppstoreOutlined, GroupOutlined, DeleteOutlined, SearchOutlined, EditOutlined, BgColorsOutlined, FileTextOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import productApi from '../api/productApi';
 import dayjs from 'dayjs';
 import { getStoredUser, canViewMaterialCost, canViewMaterialCostForAnyBrand } from '../utils/permissions';
@@ -26,6 +26,10 @@ const InventoryPage = () => {
     // Stock Detail State
     const [stockDetail, setStockDetail] = useState(null);
     const [stockDetailLoading, setStockDetailLoading] = useState(false);
+    // Đơn hàng có dùng vật tư đang xem (null = chưa tải)
+    const [materialOrders, setMaterialOrders] = useState(null);
+    const [materialOrdersLoading, setMaterialOrdersLoading] = useState(false);
+    const [showMaterialOrders, setShowMaterialOrders] = useState(false);
 
     const [form] = Form.useForm();
     const [groupForm] = Form.useForm();
@@ -92,6 +96,8 @@ const InventoryPage = () => {
 
     // --- XEM CHI TIẾT TỒN KHO (tổng hệ thống + theo từng kho) ---
     const openStockDetail = async (record) => {
+        setMaterialOrders(null);
+        setShowMaterialOrders(false);
         setStockDetail({ ...record, warehouses: [], total_quantity: record.quantity_on_hand, other_quantity: 0 });
         setStockDetailLoading(true);
         try {
@@ -102,6 +108,32 @@ const InventoryPage = () => {
         }
         setStockDetailLoading(false);
     };
+
+    // --- BẤM NÚT "ĐƠN HÀNG": hiện các đơn SX có dùng vật tư đang xem ---
+    const toggleMaterialOrders = async () => {
+        if (showMaterialOrders) {
+            setShowMaterialOrders(false);
+            return;
+        }
+        setShowMaterialOrders(true);
+        if (materialOrders !== null || !stockDetail) return;
+        setMaterialOrdersLoading(true);
+        try {
+            const res = await productApi.getOrders(stockDetail.id);
+            setMaterialOrders(res.data || []);
+        } catch (error) {
+            message.error("Lỗi: " + (error.response?.data?.detail || "Không tải được danh sách đơn hàng"));
+        }
+        setMaterialOrdersLoading(false);
+    };
+
+    const closeStockDetail = () => {
+        setStockDetail(null);
+        setMaterialOrders(null);
+        setShowMaterialOrders(false);
+    };
+
+    const MATERIAL_ORDER_STATUS_COLORS = { draft: 'gold', waiting_material: 'gold', in_progress: 'processing', completed: 'success' };
 
     // --- XỬ LÝ LƯU (TẠO HOẶC SỬA) ---
     const handleSaveMaterial = async (values) => {
@@ -304,7 +336,7 @@ const InventoryPage = () => {
             </Modal>
             
             {/* --- MODAL CHI TIẾT TỒN KHO VẬT TƯ --- */}
-            <Modal title="Thông tin vật tư" open={!!stockDetail} onCancel={() => setStockDetail(null)} footer={null} width={760}>
+            <Modal title="Thông tin vật tư" open={!!stockDetail} onCancel={closeStockDetail} footer={null} width={860}>
                 {stockDetail && (
                     <>
                         <Descriptions size="small" column={2} bordered>
@@ -341,6 +373,40 @@ const InventoryPage = () => {
                             <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
                                 * Còn {stockDetail.other_quantity} {stockDetail.base_unit || 'Cái'} nằm ở các kho bạn không có quyền xem.
                             </div>
+                        )}
+
+                        <Divider style={{ margin: '16px 0 12px' }} />
+                        <Button
+                            icon={<FileTextOutlined />}
+                            type={showMaterialOrders ? 'primary' : 'default'}
+                            onClick={toggleMaterialOrders}
+                        >
+                            Đơn hàng{materialOrders !== null ? ` (${materialOrders.length})` : ''}
+                            {showMaterialOrders ? <UpOutlined style={{ fontSize: 10 }} /> : <DownOutlined style={{ fontSize: 10 }} />}
+                        </Button>
+
+                        {showMaterialOrders && (
+                            <Table
+                                style={{ marginTop: 12 }}
+                                size="small"
+                                rowKey="order_id"
+                                loading={materialOrdersLoading}
+                                dataSource={materialOrders || []}
+                                pagination={(materialOrders || []).length > 10 ? { pageSize: 10, size: 'small' } : false}
+                                locale={{ emptyText: 'Chưa có đơn hàng nào dùng vật tư này' }}
+                                columns={[
+                                    { title: 'Mã đơn', dataIndex: 'code', width: 170, render: t => <b>{t}</b> },
+                                    { title: 'Tên đơn', dataIndex: 'product_name', render: (t, r) => (
+                                        <div>
+                                            <div>{t}</div>
+                                            {r.warehouse_name && <div style={{ fontSize: 12, color: '#888' }}>{r.warehouse_name}</div>}
+                                        </div>
+                                    ) },
+                                    { title: 'Ngày tạo đơn', dataIndex: 'created_at', width: 120, render: t => t ? dayjs(t).format('DD/MM/YYYY') : '-' },
+                                    { title: 'Trạng thái vải', dataIndex: 'material_status', width: 140, render: (t, r) => <Tag color={MATERIAL_ORDER_STATUS_COLORS[r.status] || 'default'}>{t}</Tag> },
+                                    { title: 'Số lượng vải', dataIndex: 'quantity', align: 'right', width: 120, render: q => <b>{q} {stockDetail.base_unit || 'Cái'}</b> },
+                                ]}
+                            />
                         )}
                     </>
                 )}

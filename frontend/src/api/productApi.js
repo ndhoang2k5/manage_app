@@ -15,6 +15,7 @@ const productApi = {
     },
     update: (id, data) => axiosClient.put(`/materials/${id}`, data),
     getStockDetail: (id) => axiosClient.get(`/materials/${id}/stock`),
+    getOrders: (id) => axiosClient.get(`/materials/${id}/orders`),
     getByWarehouse: (id, includeWarehouseId) =>
         axiosClient.get(`/materials/warehouse/${id}`, {
             params: includeWarehouseId ? { include_warehouse_id: includeWarehouseId } : undefined,
