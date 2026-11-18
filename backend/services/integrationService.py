@@ -19,6 +19,8 @@ from typing import Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from services.productionService import ProductionService
+
 VN_TZ = timezone(timedelta(hours=7))
 FABRIC_UNITS = {"kg", "kkg", "m", "mét", "met", "yard", "yd"}
 MODEL_CODE_RE = re.compile(r"^([A-Za-z]{2}\d{3})\d{0,2}$")
@@ -1231,6 +1233,56 @@ class IntegrationService:
                 "cap_nhat_luc": to_iso(last_at),
             })
         rows.sort(key=lambda x: ((x["ma_vat_tu"] or "").upper(), x["kho"] or "", x["id_vat_tu"]))
+        return rows
+
+    def get_material_orders(
+        self,
+        material_id: Optional[int] = None,
+        material_sku: Optional[str] = None,
+        material_kind: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        Vật tư nằm ở đơn (lệnh SX) nào, bao nhiêu: mỗi dòng = 1 vật tư trong 1 đơn, giống popup "Đơn hàng"
+        trong Kho Vật Tư. Đơn nháp: lượng dự kiến theo định mức (chưa trừ tồn); đơn đã chạy/hoàn thành:
+        lượng đã xuất kho. Đơn đã hủy không trả về. Luôn trả toàn bộ (web không lưu thời điểm đổi trạng thái).
+        """
+        conditions = []
+        if self.brand_ids is not None:
+            if not self.brand_ids:
+                return []
+            conditions.append(f"COALESCE(ow.brand_id, w.brand_id) IN ({_ids_csv(self.brand_ids)})")
+        lines = ProductionService(self.db).material_order_rows(material_id, conditions)
+        materials = self._load_materials({r["material_id"] for r in lines})
+        kind_label = classify_material_filter(material_kind)
+        sku_filter = (material_sku or "").strip().lower()
+
+        rows = []
+        for r in lines:
+            m = materials.get(r["material_id"], {})
+            kind = classify_material(m.get("unit"), m.get("group"))
+            if kind_label and kind != kind_label:
+                continue
+            if sku_filter and (m.get("sku") or "").lower() != sku_filter:
+                continue
+            rows.append({
+                "id_vat_tu": r["material_id"],
+                "ma_vat_tu": m.get("sku"),
+                "ten_vat_tu": m.get("name"),
+                "nhom_vat_tu": m.get("group"),
+                "mau_hoa_tiet": m.get("color"),
+                "loai_vat_tu": kind,
+                "dvt": m.get("unit"),
+                "id_don": r["order_id"],
+                "ma_don": (r["code"] or "").strip(),
+                "ten_don": (r["product_name"] or "").strip(),
+                "ngay_tao_don": _iso_date(r["created_at"]),
+                "trang_thai_vai": r["material_status"],
+                "da_tru_ton": r["status"] in RESERVATION_STATUSES,
+                "so_luong": _f(r["quantity"], 4),
+                "xuong": r["warehouse_name"],
+                "nhan_hang": r["brand_name"],
+            })
+        rows.sort(key=lambda x: ((x["ma_vat_tu"] or "").upper(), x["id_vat_tu"], x["id_don"]))
         return rows
 
     def get_fabric_stock(self, updated_since: Optional[datetime] = None, fabric_only: bool = True) -> List[Dict]:

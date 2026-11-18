@@ -934,19 +934,91 @@ class ProductionService:
             "limit": limit
         }
 
-    # 6b. Danh sách đơn SX có dùng 1 vật tư (vải/NPL) - chỉ tính lượng của đúng vật tư đó.
-    # - draft/waiting_material: lượng dự kiến = định mức BOM x SL kế hoạch (chưa trừ tồn) -> "Vải tồn"
+    # 6b. Vật tư theo đơn SX - nguồn chung cho popup "Đơn hàng" và API /vat-tu-theo-don.
+    # Mỗi dòng = 1 vật tư trong 1 đơn, chỉ lượng của đúng vật tư đó:
+    # - draft/waiting_material: định mức BOM x SL kế hoạch (chưa trừ tồn) -> "Vải tồn"
     # - in_progress: lượng đã xuất theo reservation -> "Vải đã trừ tồn"
     # - completed: lượng theo reservation -> "Hoàn thành"
+    # Đơn đã hủy không được trả về.
+    MATERIAL_ORDER_STATUS_LABELS = {
+        "draft": "Vải tồn",
+        "waiting_material": "Vải tồn",
+        "in_progress": "Vải đã trừ tồn",
+        "completed": "Hoàn thành",
+    }
+
+    def _order_created_expr(self) -> str:
+        # Một số DB chưa chạy migration thêm production_orders.created_at -> dùng start_date (ngày nhập khi tạo đơn)
+        has_created_at = self.db.execute(text("""
+            SELECT COUNT(1) FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = 'production_orders' AND column_name = 'created_at'
+        """)).scalar()
+        return "COALESCE(po.created_at, po.start_date)" if has_created_at else "po.start_date"
+
+    def material_order_rows(self, material_id: Optional[int] = None, conditions: Optional[List[str]] = None) -> List[Dict]:
+        """material_id = None: mọi vật tư. conditions: điều kiện SQL thêm trên po / w (xưởng) / ow (kho tổng)."""
+        params = {}
+        res_filter = bom_filter = ""
+        if material_id is not None:
+            params["mid"] = int(material_id)
+            res_filter = "AND pmr.material_variant_id = :mid"
+            bom_filter = "AND bm.material_variant_id = :mid"
+        where = ["po.status IN ('draft', 'waiting_material', 'in_progress', 'completed')"] + list(conditions or [])
+        created_expr = self._order_created_expr()
+        rows = self.db.execute(text(f"""
+            SELECT q.mid, po.id, po.code, pv.variant_name, {created_expr} AS created_at,
+                   po.status, w.name, b.name, q.qty
+            FROM (
+                SELECT pmr.material_variant_id AS mid, pmr.production_order_id AS oid,
+                       SUM(pmr.quantity_reserved) AS qty
+                FROM production_material_reservations pmr
+                JOIN production_orders po2 ON po2.id = pmr.production_order_id
+                WHERE po2.status IN ('in_progress', 'completed') {res_filter}
+                GROUP BY pmr.material_variant_id, pmr.production_order_id
+                UNION ALL
+                SELECT bm.material_variant_id AS mid, po3.id AS oid,
+                       SUM(bm.quantity_needed) * po3.quantity_planned AS qty
+                FROM production_orders po3
+                JOIN bom bo ON bo.product_variant_id = po3.product_variant_id
+                JOIN bom_materials bm ON bm.bom_id = bo.id
+                WHERE po3.status IN ('draft', 'waiting_material') {bom_filter}
+                GROUP BY bm.material_variant_id, po3.id, po3.quantity_planned
+            ) q
+            JOIN production_orders po ON po.id = q.oid
+            JOIN product_variants pv ON pv.id = po.product_variant_id
+            JOIN warehouses w ON w.id = po.warehouse_id
+            LEFT JOIN warehouses ow ON ow.id = po.owner_central_id
+            LEFT JOIN brands b ON b.id = COALESCE(ow.brand_id, w.brand_id)
+            WHERE {" AND ".join(where)}
+            ORDER BY {created_expr} DESC, po.id DESC, q.mid
+        """), params).fetchall()
+
+        result = []
+        for r in rows:
+            qty = round(self._material_qty_float(r[8]), 2)
+            if qty <= 0:
+                continue
+            result.append({
+                "material_id": int(r[0]),
+                "order_id": int(r[1]),
+                "code": r[2],
+                "product_name": r[3],
+                "created_at": r[4],
+                "status": r[5],
+                "material_status": self.MATERIAL_ORDER_STATUS_LABELS.get(r[5], r[5]),
+                "warehouse_name": r[6],
+                "brand_name": r[7],
+                "quantity": qty,
+            })
+        return result
+
     def get_orders_by_material(
         self,
         material_id: int,
         allowed_warehouse_ids: Optional[List[int]] = None,
         allowed_central_ids: Optional[List[int]] = None,
     ):
-        conditions = ["po.status IN ('draft', 'waiting_material', 'in_progress', 'completed')"]
-        params = {"mid": material_id}
-
+        conditions = []
         if allowed_warehouse_ids is not None:
             if len(allowed_warehouse_ids) == 0:
                 return []
@@ -958,60 +1030,19 @@ class ProductionService:
                 cids = ",".join(str(int(x)) for x in allowed_central_ids)
                 conditions.append(f"(po.owner_central_id IS NULL OR po.owner_central_id IN ({cids}))")
 
-        where_clause = " AND ".join(conditions)
-        # Một số DB chưa chạy migration thêm production_orders.created_at -> dùng start_date (ngày nhập khi tạo đơn)
-        has_created_at = self.db.execute(text("""
-            SELECT COUNT(1) FROM information_schema.columns
-            WHERE table_schema = DATABASE() AND table_name = 'production_orders' AND column_name = 'created_at'
-        """)).scalar()
-        created_expr = "COALESCE(po.created_at, po.start_date)" if has_created_at else "po.start_date"
-        rows = self.db.execute(text(f"""
-            SELECT po.id, po.code, pv.variant_name, {created_expr} AS created_at,
-                   po.status, w.name AS warehouse_name, q.qty
-            FROM (
-                SELECT pmr.production_order_id AS oid, SUM(pmr.quantity_reserved) AS qty
-                FROM production_material_reservations pmr
-                JOIN production_orders po2 ON po2.id = pmr.production_order_id
-                WHERE pmr.material_variant_id = :mid AND po2.status IN ('in_progress', 'completed')
-                GROUP BY pmr.production_order_id
-                UNION ALL
-                SELECT po3.id AS oid, SUM(bm.quantity_needed) * po3.quantity_planned AS qty
-                FROM production_orders po3
-                JOIN bom b ON b.product_variant_id = po3.product_variant_id
-                JOIN bom_materials bm ON bm.bom_id = b.id
-                WHERE bm.material_variant_id = :mid AND po3.status IN ('draft', 'waiting_material')
-                GROUP BY po3.id, po3.quantity_planned
-            ) q
-            JOIN production_orders po ON po.id = q.oid
-            JOIN product_variants pv ON pv.id = po.product_variant_id
-            JOIN warehouses w ON w.id = po.warehouse_id
-            WHERE {where_clause}
-            ORDER BY {created_expr} DESC, po.id DESC
-        """), params).fetchall()
-
-        status_labels = {
-            "draft": "Vải tồn",
-            "waiting_material": "Vải tồn",
-            "in_progress": "Vải đã trừ tồn",
-            "completed": "Hoàn thành",
-        }
-        result = []
-        for r in rows:
-            qty = round(self._material_qty_float(r[6]), 2)
-            if qty <= 0:
-                continue
-            created = r[3]
-            result.append({
-                "order_id": r[0],
-                "code": r[1],
-                "product_name": r[2],
-                "created_at": created.isoformat() if created else None,
-                "status": r[4],
-                "material_status": status_labels.get(r[4], r[4]),
-                "warehouse_name": r[5],
-                "quantity": qty,
-            })
-        return result
+        return [
+            {
+                "order_id": r["order_id"],
+                "code": r["code"],
+                "product_name": r["product_name"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "status": r["status"],
+                "material_status": r["material_status"],
+                "warehouse_name": r["warehouse_name"],
+                "quantity": r["quantity"],
+            }
+            for r in self.material_order_rows(material_id, conditions)
+        ]
 
     def export_orders_excel(
         self,

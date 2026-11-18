@@ -143,6 +143,26 @@ def integration_material_stock(
     return paginate(rows, params["page"], params["page_size"])
 
 
+@router.get("/vat-tu-theo-don")
+def integration_material_orders(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    updated_since: Optional[str] = Query(None, include_in_schema=False),
+    id_vat_tu: Optional[int] = Query(None, ge=1, description="Chỉ lấy 1 vật tư theo id"),
+    ma_vat_tu: Optional[str] = Query(None, description="Chỉ lấy vật tư có mã SKU này (không phân biệt hoa thường)"),
+    loai_vat_tu: Optional[str] = Query(None, pattern=MATERIAL_KIND_PATTERN, description="vai | npl; bỏ trống: mọi vật tư"),
+    db: Session = Depends(get_db),
+    key: dict = Depends(require_read_api_key),
+):
+    if updated_since:
+        raise HTTPException(
+            status_code=400,
+            detail="/vat-tu-theo-don không hỗ trợ updated_since: luôn trả toàn bộ, hãy tải lại cả bảng mỗi lần gọi",
+        )
+    rows = IntegrationService(db, key["brand_ids"]).get_material_orders(id_vat_tu, ma_vat_tu, loai_vat_tu)
+    return paginate(rows, page, page_size)
+
+
 # --- Quản lý khóa API (admin) ---
 class ApiKeyCreateRequest(BaseModel):
     name: str
