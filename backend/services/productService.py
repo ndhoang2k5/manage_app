@@ -349,8 +349,20 @@ class ProductService:
                 text("SELECT COUNT(*) FROM purchase_order_items WHERE product_variant_id = :id"),
                 {"id": material_id},
             ).scalar() or 0
+            # Lịch sử kho chỉ gồm nhập rồi hoàn tác (vd. phiếu nhập đã bị xóa -> dòng âm "Hoàn tác"),
+            # cộng lại = 0 theo từng phiếu + kho -> coi như chưa phát sinh, cho xóa và dọn luôn các dòng này.
+            # Còn bất kỳ giao dịch loại khác hoặc phiếu nào chưa hoàn tác hết -> vẫn chặn.
             transaction_count = self.db.execute(
-                text("SELECT COUNT(*) FROM inventory_transactions WHERE product_variant_id = :id"),
+                text("""
+                    SELECT COUNT(*) FROM (
+                        SELECT reference_id, warehouse_id
+                        FROM inventory_transactions
+                        WHERE product_variant_id = :id
+                        GROUP BY reference_id, warehouse_id
+                        HAVING SUM(transaction_type <> 'purchase_in') > 0
+                            OR ABS(SUM(quantity)) > 0.0000001
+                    ) t
+                """),
                 {"id": material_id},
             ).scalar() or 0
             adjustment_count = self.db.execute(
@@ -366,6 +378,7 @@ class ProductService:
 
             # Dọn các dòng tồn kho = 0 rồi xóa variant. Nếu product cha không còn variant nào thì xóa luôn product cha.
             parent_id = current[1]
+            self.db.execute(text("DELETE FROM inventory_transactions WHERE product_variant_id = :id"), {"id": material_id})
             self.db.execute(text("DELETE FROM inventory_stocks WHERE product_variant_id = :id"), {"id": material_id})
             self.db.execute(text("DELETE FROM product_variants WHERE id = :id"), {"id": material_id})
 
