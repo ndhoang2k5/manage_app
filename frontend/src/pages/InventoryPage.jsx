@@ -437,7 +437,7 @@ const InventoryPage = () => {
                                         </div>
                                     ) },
                                     { title: 'Ngày tạo đơn', dataIndex: 'created_at', width: 120, render: t => t ? dayjs(t).format('DD/MM/YYYY') : '-' },
-                                    { title: 'Trạng thái vải', dataIndex: 'material_status', width: 140, render: (t, r) => <Tag color={MATERIAL_ORDER_STATUS_COLORS[r.status] || 'default'}>{t}</Tag> },
+                                    { title: 'Trạng thái vải', dataIndex: 'material_status', width: 140, render: (t, r) => <Tag color={r.deducted === false && r.status !== 'draft' && r.status !== 'waiting_material' ? 'warning' : (MATERIAL_ORDER_STATUS_COLORS[r.status] || 'default')}>{t}</Tag> },
                                     { title: 'Số lượng vải', dataIndex: 'quantity', align: 'right', width: 120, render: q => <b>{q}</b> },
                                 ]}
                             />

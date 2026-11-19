@@ -939,6 +939,9 @@ class ProductionService:
     # - draft/waiting_material: định mức BOM x SL kế hoạch (chưa trừ tồn) -> "Vải tồn"
     # - in_progress: lượng đã xuất theo reservation -> "Vải đã trừ tồn"
     # - completed: lượng theo reservation -> "Hoàn thành"
+    # - in_progress/completed nhưng vật tư có trong BOM mà không có reservation
+    #   (thêm vào BOM sau khi đơn đã chạy): lượng theo BOM -> "Chưa trừ tồn"
+    # Vật tư nằm trong đơn thì luôn hiện, kể cả định mức / lượng giữ = 0.
     # Đơn đã hủy không được trả về.
     MATERIAL_ORDER_STATUS_LABELS = {
         "draft": "Vải tồn",
@@ -946,6 +949,7 @@ class ProductionService:
         "in_progress": "Vải đã trừ tồn",
         "completed": "Hoàn thành",
     }
+    MATERIAL_ORDER_NOT_DEDUCTED_LABEL = "Chưa trừ tồn"
 
     def _order_created_expr(self) -> str:
         # Một số DB chưa chạy migration thêm production_orders.created_at -> dùng start_date (ngày nhập khi tạo đơn)
@@ -967,22 +971,35 @@ class ProductionService:
         created_expr = self._order_created_expr()
         rows = self.db.execute(text(f"""
             SELECT q.mid, po.id, po.code, pv.variant_name, {created_expr} AS created_at,
-                   po.status, w.name, b.name, q.qty
+                   po.status, w.name, b.name, q.qty, q.deducted
             FROM (
                 SELECT pmr.material_variant_id AS mid, pmr.production_order_id AS oid,
-                       SUM(pmr.quantity_reserved) AS qty
+                       SUM(pmr.quantity_reserved) AS qty, 1 AS deducted
                 FROM production_material_reservations pmr
                 JOIN production_orders po2 ON po2.id = pmr.production_order_id
                 WHERE po2.status IN ('in_progress', 'completed') {res_filter}
                 GROUP BY pmr.material_variant_id, pmr.production_order_id
                 UNION ALL
                 SELECT bm.material_variant_id AS mid, po3.id AS oid,
-                       SUM(bm.quantity_needed) * po3.quantity_planned AS qty
+                       SUM(bm.quantity_needed) * COALESCE(po3.quantity_planned, 0) AS qty, 0 AS deducted
                 FROM production_orders po3
                 JOIN bom bo ON bo.product_variant_id = po3.product_variant_id
                 JOIN bom_materials bm ON bm.bom_id = bo.id
                 WHERE po3.status IN ('draft', 'waiting_material') {bom_filter}
                 GROUP BY bm.material_variant_id, po3.id, po3.quantity_planned
+                UNION ALL
+                SELECT bm.material_variant_id AS mid, po4.id AS oid,
+                       SUM(bm.quantity_needed) * COALESCE(po4.quantity_planned, 0) AS qty, 0 AS deducted
+                FROM production_orders po4
+                JOIN bom bo ON bo.product_variant_id = po4.product_variant_id
+                JOIN bom_materials bm ON bm.bom_id = bo.id
+                WHERE po4.status IN ('in_progress', 'completed') {bom_filter}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM production_material_reservations pmr4
+                      WHERE pmr4.production_order_id = po4.id
+                        AND pmr4.material_variant_id = bm.material_variant_id
+                  )
+                GROUP BY bm.material_variant_id, po4.id, po4.quantity_planned
             ) q
             JOIN production_orders po ON po.id = q.oid
             JOIN product_variants pv ON pv.id = po.product_variant_id
@@ -995,9 +1012,12 @@ class ProductionService:
 
         result = []
         for r in rows:
-            qty = round(self._material_qty_float(r[8]), 2)
-            if qty <= 0:
-                continue
+            qty = max(round(self._material_qty_float(r[8]), 2), 0.0)
+            deducted = bool(r[9])
+            if not deducted and r[5] in ("in_progress", "completed"):
+                material_status = self.MATERIAL_ORDER_NOT_DEDUCTED_LABEL
+            else:
+                material_status = self.MATERIAL_ORDER_STATUS_LABELS.get(r[5], r[5])
             result.append({
                 "material_id": int(r[0]),
                 "order_id": int(r[1]),
@@ -1005,7 +1025,8 @@ class ProductionService:
                 "product_name": r[3],
                 "created_at": r[4],
                 "status": r[5],
-                "material_status": self.MATERIAL_ORDER_STATUS_LABELS.get(r[5], r[5]),
+                "material_status": material_status,
+                "deducted": deducted,
                 "warehouse_name": r[6],
                 "brand_name": r[7],
                 "quantity": qty,
@@ -1038,6 +1059,7 @@ class ProductionService:
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
                 "status": r["status"],
                 "material_status": r["material_status"],
+                "deducted": r["deducted"],
                 "warehouse_name": r["warehouse_name"],
                 "quantity": r["quantity"],
             }

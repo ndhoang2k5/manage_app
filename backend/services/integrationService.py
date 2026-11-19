@@ -1277,7 +1277,7 @@ class IntegrationService:
                 "ten_don": (r["product_name"] or "").strip(),
                 "ngay_tao_don": _iso_date(r["created_at"]),
                 "trang_thai_vai": r["material_status"],
-                "da_tru_ton": r["status"] in RESERVATION_STATUSES,
+                "da_tru_ton": r["deducted"],
                 "so_luong": _f(r["quantity"], 4),
                 "xuong": r["warehouse_name"],
                 "nhan_hang": r["brand_name"],
